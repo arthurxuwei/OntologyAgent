@@ -55,6 +55,42 @@ class ExecutorClientTests(unittest.TestCase):
                 value_eth="0.001",
             )
 
+    def test_x402_fetch_posts_to_new_x402_endpoint(self) -> None:
+        seen = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen["path"] = request.url.path
+            seen["json"] = request.content.decode()
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "result": {
+                        "upstream": {"status": 200, "payload": {"ok": True}},
+                        "payment": {
+                            "requiredVersion": 2,
+                            "selected": {"network": "eip155:84532"},
+                            "response": {"transaction": "0xsettled"},
+                        },
+                    },
+                    "meta": {"requestId": "test"},
+                },
+            )
+
+        client = ExecutorClient(
+            base_url="http://executor-ts:3000",
+            timeout_seconds=5,
+            transport=httpx.MockTransport(handler),
+        )
+
+        result = client.x402_fetch(
+            url="http://brain-py:8000/x402/demo-resource",
+            method="GET",
+        )
+
+        self.assertEqual(seen["path"], "/x402/fetch")
+        self.assertEqual(result["payment"]["requiredVersion"], 2)
+
 
 if __name__ == "__main__":
     unittest.main()

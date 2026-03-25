@@ -1,12 +1,15 @@
 export type PolicyAction =
   | "transfer-sign"
   | "execution-submit"
-  | "user-operation-submit";
+  | "user-operation-submit"
+  | "x402-fetch";
 
 export type PolicySnapshot = {
   dayKey: string;
   spentTodayWei: string;
   dailyLimitWei: string;
+  spentTodayUsdcAtomic: string;
+  dailyLimitUsdcAtomic: string;
 };
 
 export type PolicyDecision = {
@@ -23,7 +26,7 @@ export type TransferSignCommand = {
 
 export type UpstreamRequest = {
   url: string;
-  method: string;
+  method?: string;
   headers?: Record<string, string>;
   body?: unknown;
 };
@@ -83,6 +86,52 @@ export type PaymentAttempt = {
   settlement: SettlementResult;
 };
 
+export type X402FetchCommand = UpstreamRequest;
+
+export type X402RequirementSummary = {
+  scheme: string;
+  network: string;
+  asset: string;
+  amount: string;
+  payTo: string;
+  maxTimeoutSeconds: number;
+  extra: Record<string, unknown>;
+};
+
+export type X402SettleSummary = {
+  success: boolean;
+  transaction: string;
+  network: string;
+  payer?: string;
+  errorReason?: string;
+  errorMessage?: string;
+  extensions?: Record<string, unknown>;
+};
+
+export type X402PolicyDecision = {
+  action: "x402-fetch";
+  normalizedTo: string;
+  network: string;
+  asset: string;
+  amountAtomic: string;
+  allowed: true;
+};
+
+export type X402FetchResult = {
+  upstream: {
+    status: number;
+    contentType: string;
+    payload: unknown;
+  };
+  payment: null | {
+    requiredVersion: number;
+    selected: X402RequirementSummary;
+    response: X402SettleSummary;
+  };
+  decision: X402PolicyDecision | null;
+  policy: PolicySnapshot;
+};
+
 export type UserOperationResult = {
   userOperation: {
     target: string;
@@ -105,4 +154,10 @@ export type HealthResult = {
     mockChain: boolean;
   };
   policy: PolicySnapshot;
+  x402: {
+    facilitatorUrl: string;
+    network: string;
+    asset: string;
+    buyerSignerConfigured: boolean;
+  };
 };

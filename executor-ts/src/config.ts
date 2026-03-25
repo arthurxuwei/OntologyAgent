@@ -1,4 +1,4 @@
-import { parseEther } from "ethers";
+import { parseEther, parseUnits } from "ethers";
 
 export type AppConfig = {
   service: {
@@ -21,10 +21,22 @@ export type AppConfig = {
   execution: {
     bundlerRpcUrl?: string;
   };
+  x402: {
+    facilitatorUrl: string;
+    network: string;
+    buyerPrivateKey?: string;
+    usdcAssetAddress: string;
+    usdcDecimals: number;
+    usdcSingleCapAtomic: bigint;
+    usdcDailyCapAtomic: bigint;
+  };
 };
 
-const DEFAULT_TESTNET_RPC_URL = "https://ethereum-sepolia-rpc.publicnode.com";
-const DEFAULT_TESTNET_CHAIN_ID = 11155111;
+const DEFAULT_TESTNET_RPC_URL = "https://base-sepolia-rpc.publicnode.com";
+const DEFAULT_TESTNET_CHAIN_ID = 84532;
+const DEFAULT_X402_NETWORK = "eip155:84532";
+const DEFAULT_BASE_SEPOLIA_USDC = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
+const X402_USDC_DECIMALS = 6;
 
 function parseEthEnv(
   env: NodeJS.ProcessEnv,
@@ -36,6 +48,20 @@ function parseEthEnv(
     return parseEther(rawValue);
   } catch {
     throw new Error(`${envName} must be a valid ETH amount string`);
+  }
+}
+
+function parseUnitsEnv(
+  env: NodeJS.ProcessEnv,
+  envName: string,
+  defaultValue: string,
+  decimals: number,
+): bigint {
+  const rawValue = env[envName] ?? defaultValue;
+  try {
+    return parseUnits(rawValue, decimals);
+  } catch {
+    throw new Error(`${envName} must be a valid decimal amount string`);
   }
 }
 
@@ -86,6 +112,15 @@ function parseBooleanEnv(
   throw new Error(`${envName} must be a boolean`);
 }
 
+function pickOptionalEnv(...values: Array<string | undefined>): string | undefined {
+  for (const value of values) {
+    if (value !== undefined && value.trim() !== "") {
+      return value;
+    }
+  }
+  return undefined;
+}
+
 export const HARDCODED_WHITELIST = [
   "0x000000000000000000000000000000000000dEaD",
   "0x1111111111111111111111111111111111111111",
@@ -115,6 +150,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     },
     execution: {
       bundlerRpcUrl: env.BUNDLER_RPC_URL,
+    },
+    x402: {
+      facilitatorUrl: env.X402_FACILITATOR_URL ?? "https://x402.org/facilitator",
+      network: env.X402_NETWORK ?? DEFAULT_X402_NETWORK,
+      buyerPrivateKey: pickOptionalEnv(env.X402_BUYER_PRIVATE_KEY, env.PRIVATE_KEY),
+      usdcAssetAddress: env.X402_USDC_ASSET_ADDRESS ?? DEFAULT_BASE_SEPOLIA_USDC,
+      usdcDecimals: X402_USDC_DECIMALS,
+      usdcSingleCapAtomic: parseUnitsEnv(env, "X402_USDC_SINGLE_CAP", "1.0", X402_USDC_DECIMALS),
+      usdcDailyCapAtomic: parseUnitsEnv(env, "X402_USDC_DAILY_CAP", "2.0", X402_USDC_DECIMALS),
     },
   };
 }

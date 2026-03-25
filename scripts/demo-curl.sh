@@ -30,20 +30,27 @@ require_env() {
 }
 
 export EXECUTOR_MOCK_CHAIN="${EXECUTOR_MOCK_CHAIN:-false}"
-export RPC_URL="${RPC_URL:-https://ethereum-sepolia-rpc.publicnode.com}"
-export CHAIN_ID="${CHAIN_ID:-11155111}"
+export RPC_URL="${RPC_URL:-https://base-sepolia-rpc.publicnode.com}"
+export CHAIN_ID="${CHAIN_ID:-84532}"
 export DAILY_LIMIT="${DAILY_LIMIT:-2.0}"
 export SINGLE_TX_CAP="${SINGLE_TX_CAP:-1.0}"
+export X402_NETWORK="${X402_NETWORK:-eip155:84532}"
+export X402_PRICE="${X402_PRICE:-\$0.01}"
+export X402_FACILITATOR_URL="${X402_FACILITATOR_URL:-https://x402.org/facilitator}"
 
 if [[ "${EXECUTOR_MOCK_CHAIN}" == "true" ]]; then
   echo "===> Starting demo stack in mock-chain mode"
+  export PRIVATE_KEY="${PRIVATE_KEY:-0x59c6995e998f97a5a0044966f0945382d8f6d5b40f5f0c6d9c0a0f6f6b6b6b6b}"
   export DEMO_SIGN_TRANSFER_TO="${DEMO_SIGN_TRANSFER_TO:-0x000000000000000000000000000000000000dEaD}"
   export DEMO_X402_PAYMENT_TO="${DEMO_X402_PAYMENT_TO:-0x1111111111111111111111111111111111111111}"
+  export X402_PAY_TO="${X402_PAY_TO:-${DEMO_X402_PAYMENT_TO}}"
+  export X402_FACILITATOR_URL="http://brain-py:8000/x402/mock-facilitator"
 else
   echo "===> Starting demo stack on live testnet"
   require_env "PRIVATE_KEY"
   require_env "DEMO_SIGN_TRANSFER_TO"
   require_env "DEMO_X402_PAYMENT_TO"
+  export X402_PAY_TO="${X402_PAY_TO:-${DEMO_X402_PAYMENT_TO}}"
 fi
 
 if [[ -n "${WHITELISTED_RECIPIENTS:-}" ]]; then
@@ -68,21 +75,12 @@ curl -sS -X POST "http://localhost:3000/transfers/sign" \
 echo
 
 echo
-echo "===> 2) Demo /paid-requests/execute (x402 auto-pay retry)"
-curl -sS -X POST "http://localhost:8000/paid-requests/execute" \
+echo "===> 2) Demo /x402/fetch"
+curl -sS -X POST "http://localhost:3000/x402/fetch" \
   -H "content-type: application/json" \
   -d "{
-    \"apiUrl\": \"http://brain-py:8000/mock-x402\",
-    \"apiMethod\": \"POST\",
-    \"apiBody\": {
-      \"tokenIn\": \"ETH\",
-      \"tokenOut\": \"USDC\"
-    },
-    \"payment\": {
-      \"to\": \"${DEMO_X402_PAYMENT_TO}\",
-      \"amountEth\": \"0.001\",
-      \"maxRetries\": 1
-    }
+    \"url\": \"http://brain-py:8000/x402/demo-resource\",
+    \"method\": \"GET\"
   }"
 echo
 
@@ -101,3 +99,5 @@ echo
 echo "===> Done"
 echo "RPC_URL=${RPC_URL}"
 echo "CHAIN_ID=${CHAIN_ID}"
+echo "X402_NETWORK=${X402_NETWORK}"
+echo "X402_FACILITATOR_URL=${X402_FACILITATOR_URL}"

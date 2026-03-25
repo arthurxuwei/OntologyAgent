@@ -1,16 +1,24 @@
+from __future__ import annotations
+
+import json
 import os
 from functools import lru_cache
-from typing import Any, Literal
+from typing import Any, Literal, Optional
 
-import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from langchain_core.tools import StructuredTool
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl
+
 from executor_client import ExecutorClient, ExecutorClientError
-from paid_request_flow import PaidRequestFlowError, request_with_payment_retry
+from x402_seller import (
+    BASE_SEPOLIA_NETWORK,
+    X402SellerConfig,
+    X402SellerError,
+    X402SellerService,
+)
 
 app = FastAPI(title="OntologyAgent brain-py")
 
@@ -29,22 +37,6 @@ class SignTransferIntent(BaseModel):
     )
 
 
-class PaymentIntent(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-
-    to: str = Field(description="x402 收款地址")
-    amountEth: str = Field(
-        description="支付金额（ETH 字符串）",
-        pattern=r"^\d+(\.\d+)?$",
-    )
-    maxRetries: int | None = Field(
-        default=None,
-        ge=0,
-        le=3,
-        description="x402 重试次数（0-3）",
-    )
-
-
 class SwapTxIntent(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
@@ -54,7 +46,7 @@ class SwapTxIntent(BaseModel):
         description="附带 ETH 数量（字符串）",
         pattern=r"^\d+(\.\d+)?$",
     )
-    data: str | None = Field(default=None, description="可选 calldata（0x...）")
+    data: Optional[str] = Field(default=None, description="可选 calldata（0x...）")
 
 
 class UserOperationIntent(BaseModel):
@@ -68,19 +60,18 @@ class UserOperationIntent(BaseModel):
     raw: dict[str, Any] = Field(description="完整 UserOperation 原始字段")
 
 
-class ExecutePaymentFlowIntent(BaseModel):
+class X402FetchIntent(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    apiUrl: HttpUrl = Field(description="上游 API URL")
+    apiUrl: HttpUrl = Field(description="x402 上游 API URL")
     apiMethod: Literal["GET", "POST", "PUT", "PATCH", "DELETE"] = Field(
-        default="POST",
+        default="GET",
         description="请求方法",
     )
-    apiHeaders: dict[str, str] | None = Field(default=None, description="可选请求头")
-    apiBody: Any | None = Field(default=None, description="可选请求体")
-    payment: PaymentIntent = Field(description="x402 支付参数")
-    swapTx: SwapTxIntent | None = Field(default=None, description="可选 swap 交易参数")
-    userOperation: UserOperationIntent | None = Field(
+    apiHeaders: Optional[dict[str, str]] = Field(default=None, description="可选请求头")
+    apiBody: Optional[Any] = Field(default=None, description="可选请求体")
+    swapTx: Optional[SwapTxIntent] = Field(default=None, description="可选后续链上交易参数")
+    userOperation: Optional[UserOperationIntent] = Field(
         default=None,
         description="可选 ERC-4337 UserOperation",
     )
@@ -100,6 +91,23 @@ def get_executor_client() -> ExecutorClient:
     )
 
 
+@lru_cache(maxsize=1)
+def get_x402_seller_service() -> X402SellerService:
+    pay_to = os.getenv("X402_PAY_TO")
+    if not pay_to:
+        raise RuntimeError("X402_PAY_TO is not configured")
+
+    return X402SellerService(
+        X402SellerConfig(
+            pay_to=pay_to,
+            facilitator_url=os.getenv("X402_FACILITATOR_URL", "https://x402.org/facilitator"),
+            price=os.getenv("X402_PRICE", "$0.01"),
+            network=os.getenv("X402_NETWORK", BASE_SEPOLIA_NETWORK),
+            timeout_seconds=REQUEST_TIMEOUT_SECONDS,
+        )
+    )
+
+
 def sign_transfer_tool(to: str, amountEth: str) -> dict[str, Any]:
     intent = SignTransferIntent(to=to, amountEth=amountEth)
     return get_executor_client().sign_transfer(
@@ -110,48 +118,27 @@ def sign_transfer_tool(to: str, amountEth: str) -> dict[str, Any]:
 
 def execute_swap_tool(
     apiUrl: str,
-    payment: dict[str, Any],
-    apiMethod: str = "POST",
-    apiHeaders: dict[str, str] | None = None,
-    apiBody: Any | None = None,
-    swapTx: dict[str, Any] | None = None,
-    userOperation: dict[str, Any] | None = None,
+    apiMethod: str = "GET",
+    apiHeaders: Optional[dict[str, str]] = None,
+    apiBody: Optional[Any] = None,
+    swapTx: Optional[dict[str, Any]] = None,
+    userOperation: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
-    intent = ExecutePaymentFlowIntent(
+    intent = X402FetchIntent(
         apiUrl=apiUrl,
         apiMethod=apiMethod,
         apiHeaders=apiHeaders,
         apiBody=apiBody,
-        payment=payment,
         swapTx=swapTx,
         userOperation=userOperation,
     )
     client = get_executor_client()
-    payments: list[dict[str, Any]] = []
-    max_retries = 1 if intent.payment.maxRetries is None else intent.payment.maxRetries
 
-    def send_payment(attempt: int) -> str:
-        payment_execution = client.submit_execution(
-            to=intent.payment.to,
-            value_eth=intent.payment.amountEth,
-        )
-        payments.append(
-            {
-                "attempt": attempt,
-                "transaction": payment_execution["execution"],
-                "settlement": payment_execution["settlement"],
-            }
-        )
-        return str(payment_execution["execution"]["txHash"])
-
-    payment_result = request_with_payment_retry(
+    payment_result = client.x402_fetch(
         url=str(intent.apiUrl),
         method=intent.apiMethod,
         headers=intent.apiHeaders,
         body=intent.apiBody,
-        max_retries=max_retries,
-        timeout_seconds=REQUEST_TIMEOUT_SECONDS,
-        send_payment=send_payment,
     )
 
     execution_result = None
@@ -171,10 +158,7 @@ def execute_swap_tool(
         )
 
     return {
-        "payment": {
-            "upstream": payment_result["upstream"],
-            "payments": payments,
-        },
+        "payment": payment_result,
         "execution": execution_result,
         "userOperation": user_operation_result,
     }
@@ -190,11 +174,11 @@ def build_tools() -> list[StructuredTool]:
     execute_swap = StructuredTool.from_function(
         name="execute_swap",
         description=(
-            "执行带 x402 自动支付重试的请求，并可选提交链上交易或 ERC-4337 "
+            "访问 x402 收费资源，并可选在付费成功后提交链上交易或 ERC-4337 "
             "UserOperation。"
         ),
         func=execute_swap_tool,
-        args_schema=ExecutePaymentFlowIntent,
+        args_schema=X402FetchIntent,
     )
     return [sign_transfer, execute_swap]
 
@@ -230,50 +214,93 @@ def _normalize_message_content(content: Any) -> str:
 
 
 @app.get("/health")
-def health() -> dict[str, str]:
-    return {"service": "OntologyAgent-brain-py", "status": "ok"}
-
-
-@app.post("/mock-x402")
-def mock_x402(request: Request):
-    payment_tx_hash = request.headers.get("x-payment-tx-hash")
-    if not payment_tx_hash:
-        return JSONResponse(
-            status_code=402,
-            content={
-                "error": "payment_required",
-                "message": "send on-chain payment then retry",
-            },
-        )
-
+def health() -> dict[str, Any]:
     return {
-        "ok": True,
-        "accepted_payment_tx_hash": payment_tx_hash,
-        "quote": {"tokenIn": "ETH", "tokenOut": "USDC", "price": "demo"},
+        "service": "OntologyAgent-brain-py",
+        "status": "ok",
+        "x402Network": os.getenv("X402_NETWORK", BASE_SEPOLIA_NETWORK),
+        "x402PayToConfigured": bool(os.getenv("X402_PAY_TO")),
     }
 
 
-@app.post("/paid-requests/execute")
-def execute_paid_request(request: ExecutePaymentFlowIntent) -> dict[str, Any]:
+@app.get("/x402/demo-resource")
+async def x402_demo_resource(request: Request):
     try:
-        return {
+        seller = get_x402_seller_service()
+    except RuntimeError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+
+    try:
+        authorization = await seller.authorize_or_challenge(request)
+    except X402SellerError as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+
+    if isinstance(authorization, JSONResponse):
+        return authorization
+
+    return seller.build_success_response(
+        {
             "ok": True,
-            "result": execute_swap_tool(
-                apiUrl=str(request.apiUrl),
-                apiMethod=request.apiMethod,
-                apiHeaders=request.apiHeaders,
-                apiBody=request.apiBody,
-                payment=request.payment.model_dump(mode="json", exclude_none=True),
-                swapTx=request.swapTx.model_dump(mode="json")
-                if request.swapTx is not None
-                else None,
-                userOperation=request.userOperation.model_dump(mode="json")
-                if request.userOperation is not None
-                else None,
-            ),
+            "resource": "demo-x402-resource",
+            "network": os.getenv("X402_NETWORK", BASE_SEPOLIA_NETWORK),
+            "quote": {
+                "tokenIn": "ETH",
+                "tokenOut": "USDC",
+                "price": os.getenv("X402_PRICE", "$0.01"),
+            },
+        },
+        authorization,
+    )
+
+
+@app.post("/x402/mock-facilitator/verify")
+async def mock_x402_facilitator_verify(request: Request) -> dict[str, Any]:
+    body = await request.json()
+    payment_payload = body.get("paymentPayload")
+    payment_requirements = body.get("paymentRequirements")
+
+    if not isinstance(payment_payload, dict) or not isinstance(payment_requirements, dict):
+        raise HTTPException(status_code=400, detail="missing paymentPayload or paymentRequirements")
+
+    accepted = payment_payload.get("accepted", {})
+    if accepted.get("network") != payment_requirements.get("network"):
+        return {
+            "isValid": False,
+            "invalidReason": "NETWORK_MISMATCH",
+            "invalidMessage": "payment network does not match requirements",
         }
-    except (ExecutorClientError, PaidRequestFlowError, httpx.HTTPError, ValueError) as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
+
+    payer = (
+        payment_payload.get("payload", {})
+        .get("authorization", {})
+        .get("from")
+    )
+    return {
+        "isValid": True,
+        "payer": payer,
+    }
+
+
+@app.post("/x402/mock-facilitator/settle")
+async def mock_x402_facilitator_settle(request: Request) -> dict[str, Any]:
+    body = await request.json()
+    payment_payload = body.get("paymentPayload")
+    payment_requirements = body.get("paymentRequirements")
+
+    if not isinstance(payment_payload, dict) or not isinstance(payment_requirements, dict):
+        raise HTTPException(status_code=400, detail="missing paymentPayload or paymentRequirements")
+
+    payer = (
+        payment_payload.get("payload", {})
+        .get("authorization", {})
+        .get("from")
+    )
+    return {
+        "success": True,
+        "transaction": f"0xmock_x402_settlement_{abs(hash(json_dump_sorted(body))) % 10**12:x}",
+        "network": payment_requirements.get("network", BASE_SEPOLIA_NETWORK),
+        "payer": payer,
+    }
 
 
 @app.post("/agent/run")
@@ -307,3 +334,7 @@ def run_agent(request: AgentRunRequest) -> dict[str, Any]:
         "input": request.input,
         "output": output,
     }
+
+
+def json_dump_sorted(value: Any) -> str:
+    return json.dumps(value, sort_keys=True)

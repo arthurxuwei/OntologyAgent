@@ -9,8 +9,12 @@
     "test": "node --import tsx --test test/**/*.test.ts"
   },
   "dependencies": {
+    "@x402/core": "^2.8.0",
+    "@x402/evm": "^2.8.0",
+    "@x402/fetch": "^2.8.0",
     "ethers": "^6.15.0",
     "fastify": "^5.6.0",
+    "viem": "^2.47.6",
     "zod": "^4.1.11"
   },
   "devDependencies": {

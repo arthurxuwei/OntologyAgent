@@ -2,8 +2,8 @@
 
 项目包含两个主要目录：
 
-- `brain-py`：Python 业务逻辑（FastAPI）
-- `executor-ts`：TypeScript 链上执行器（Fastify + ethers）
+- `brain-py`：Python 业务逻辑（FastAPI），负责 Agent 和 x402 seller 资源
+- `executor-ts`：TypeScript 链上执行器（Fastify），负责链执行和 x402 buyer flow
 
 ## 同时启动（Docker Compose）
 
@@ -25,9 +25,9 @@ docker compose up -d
 
 - `brain-py` 健康检查：`http://localhost:8000/health`
 - `brain-py` Agent 接口：`POST /agent/run`
-- `brain-py` 付费请求编排接口：`POST /paid-requests/execute`
+- `brain-py` x402 seller 演示资源：`GET /x402/demo-resource`
 - `executor-ts` 健康检查：`http://localhost:3000/health`
-- `executor-ts` 接口：`POST /transfers/sign`、`POST /executions/submit`、`POST /user-operations/submit`
+- `executor-ts` 接口：`POST /transfers/sign`、`POST /executions/submit`、`POST /user-operations/submit`、`POST /x402/fetch`
 
 ## 一键 curl 演示
 
@@ -42,30 +42,45 @@ docker compose up -d
 - 启动 `docker compose`
 - 等待 `brain-py` 与 `executor-ts` 就绪
 - 调用 `POST /transfers/sign`
-- 调用 `POST /paid-requests/execute`，演示 `402 -> 自动链上支付 -> 重试成功`
+- 调用 `POST /x402/fetch`，演示标准 x402 `402 -> PAYMENT-SIGNATURE -> PAYMENT-RESPONSE`
 - 调用 `POST /executions/submit`
 
-默认直连 Sepolia 测试链，并要求你显式提供测试私钥与收款地址。建议先准备少量测试 ETH，再执行：
+默认直连 Base Sepolia，并将 x402 默认网络设置为 `eip155:84532`。
 
-```bash
-PRIVATE_KEY=0x... \
-DEMO_SIGN_TRANSFER_TO=0x... \
-DEMO_X402_PAYMENT_TO=0x... \
-./scripts/demo-curl.sh
-```
-
-如需切回 mock 模式：
+如需本地 mock 验证：
 
 ```bash
 EXECUTOR_MOCK_CHAIN=true ./scripts/demo-curl.sh
 ```
 
+如需未来做 live 验证，至少要准备：
+
+```bash
+PRIVATE_KEY=0x... \
+DEMO_SIGN_TRANSFER_TO=0x... \
+DEMO_X402_PAYMENT_TO=0x... \
+X402_PAY_TO=0x... \
+./scripts/demo-curl.sh
+```
+
+## 默认链与协议
+
+- 默认 RPC：`https://base-sepolia-rpc.publicnode.com`
+- 默认链 ID：`84532`
+- 默认 x402 网络：`eip155:84532`
+- 默认 facilitator：`https://x402.org/facilitator`
+- 默认 x402 资产：Base Sepolia USDC
+- seller/buyer 使用标准头：
+  - `PAYMENT-REQUIRED`
+  - `PAYMENT-SIGNATURE`
+  - `PAYMENT-RESPONSE`
+
 ## 可选环境变量
 
 - `EXECUTOR_PORT`：执行器端口（默认 `3000`）
-- `PRIVATE_KEY`：执行器签名私钥（必须配置才能签名/发交易）
-- `RPC_URL`：链 RPC 地址（默认 `https://ethereum-sepolia-rpc.publicnode.com`）
-- `CHAIN_ID`：期望连接的链 ID（默认 `11155111`，即 Sepolia）
+- `PRIVATE_KEY`：执行器签名私钥；普通链执行和 x402 buyer 默认都可复用它
+- `RPC_URL`：链 RPC 地址（默认 `https://base-sepolia-rpc.publicnode.com`）
+- `CHAIN_ID`：期望连接的链 ID（默认 `84532`，即 Base Sepolia）
 - `DAILY_LIMIT`：每日可签名总额度（ETH，默认 `2.0`）
 - `SINGLE_TX_CAP`：单笔交易额度（ETH，默认 `1.0`，且受硬编码上限约束）
 - `WHITELISTED_RECIPIENTS`：额外白名单地址，逗号分隔
@@ -76,8 +91,15 @@ EXECUTOR_MOCK_CHAIN=true ./scripts/demo-curl.sh
 - `EXECUTOR_TIMEOUT_SECONDS`：`brain-py` 调用 `executor-ts` 的超时时间秒数（默认 `20`）
 - `OPENAI_API_KEY`：`brain-py` LangChain Agent 使用的模型密钥
 - `BRAIN_AGENT_MODEL`：`brain-py` Agent 模型名（默认 `gpt-4o-mini`）
+- `X402_FACILITATOR_URL`：x402 facilitator 地址（默认 `https://x402.org/facilitator`）
+- `X402_NETWORK`：x402 CAIP-2 网络标识（默认 `eip155:84532`）
+- `X402_PAY_TO`：`brain-py` seller 收款地址
+- `X402_PRICE`：seller 演示资源价格（默认 `0.01`，也支持 `$0.01`）
+- `X402_BUYER_PRIVATE_KEY`：x402 buyer 专用私钥；为空时回退到 `PRIVATE_KEY`
+- `X402_USDC_SINGLE_CAP`：x402 单笔 USDC 上限（默认 `1.0`）
+- `X402_USDC_DAILY_CAP`：x402 每日 USDC 上限（默认 `2.0`）
 - `DEMO_SIGN_TRANSFER_TO`：演示脚本里 `/transfers/sign` 与 `/executions/submit` 使用的测试链地址
-- `DEMO_X402_PAYMENT_TO`：演示脚本里 x402 支付使用的测试链地址
+- `DEMO_X402_PAYMENT_TO`：演示脚本里 x402 收款地址默认值
 
 ## `POST /transfers/sign`
 
@@ -91,30 +113,6 @@ EXECUTOR_MOCK_CHAIN=true ./scripts/demo-curl.sh
 ```
 
 返回签名后的原始交易、tx hash，以及策略引擎快照。
-
-当 `EXECUTOR_MOCK_CHAIN=false` 时，会先校验当前 RPC 的 `chainId` 是否与 `CHAIN_ID` 一致，避免误连到主网。
-
-## `POST /paid-requests/execute`（brain-py）
-
-执行一次带 x402 自动支付重试的上游 API 请求，并由 `brain-py` 负责判断与编排支付流程：
-
-```json
-{
-  "apiUrl": "https://example.com/swap/quote",
-  "apiMethod": "POST",
-  "apiBody": {
-    "tokenIn": "ETH",
-    "tokenOut": "USDC"
-  },
-  "payment": {
-    "to": "0x1111111111111111111111111111111111111111",
-    "amountEth": "0.001",
-    "maxRetries": 1
-  }
-}
-```
-
-> 演示脚本里，`apiUrl` 指向 `brain-py` 的 `POST /mock-x402`，用于稳定复现 `402` 支付重试流程。
 
 ## `POST /executions/submit`
 
@@ -152,17 +150,47 @@ EXECUTOR_MOCK_CHAIN=true ./scripts/demo-curl.sh
 }
 ```
 
-## `POST /agent/run`（brain-py）
+## `POST /x402/fetch`
 
-`brain-py` 内置了 LangGraph Agent，并通过 `StructuredTool` 调用 `executor-ts` 的 `/transfers/sign`、`/executions/submit` 与 `/user-operations/submit`；x402 付费请求编排由 `brain-py` 自身完成。  
-系统提示词固定为：
+通过官方 x402 buyer flow 访问付费资源：
 
-> 你是一个金融助理，只能通过调用 TS 执行器接口来移动资金。
+```json
+{
+  "url": "http://brain-py:8000/x402/demo-resource",
+  "method": "GET"
+}
+```
+
+返回：
+
+- 上游最终状态码和响应体
+- 选中的 `accepts` requirement 摘要
+- 解析后的 `PAYMENT-RESPONSE`
+- x402 USDC 策略快照
+
+## `GET /x402/demo-resource`
+
+这是 `brain-py` 内置的标准 x402 seller 演示资源。
+
+- 首次访问会返回 `402 Payment Required`
+- 响应头里包含 `PAYMENT-REQUIRED`
+- buyer 成功重试后，返回业务 JSON，并带 `PAYMENT-RESPONSE`
+
+在 `EXECUTOR_MOCK_CHAIN=true` 的本地演示场景下，脚本会自动把 facilitator 切到 `brain-py` 内置的 mock facilitator，便于非 live 回归。
+
+## `POST /agent/run`
+
+`brain-py` 内置了 LangGraph Agent，并通过 `StructuredTool` 调用：
+
+- `executor-ts /transfers/sign`
+- `executor-ts /x402/fetch`
+- `executor-ts /executions/submit`
+- `executor-ts /user-operations/submit`
 
 请求示例：
 
 ```json
 {
-  "input": "给 0x000000000000000000000000000000000000dEaD 签名转账 0.01 ETH"
+  "input": "访问 x402 demo 资源，然后根据返回结果决定是否继续执行链上动作"
 }
 ```

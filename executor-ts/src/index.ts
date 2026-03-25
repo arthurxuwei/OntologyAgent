@@ -14,6 +14,8 @@ async function start() {
         expectedChainId: config.network.expectedChainId,
         mockChain: config.network.mockChain,
         dailyLimitWei: config.policy.dailyLimitWei.toString(),
+        x402Network: config.x402.network,
+        x402FacilitatorUrl: config.x402.facilitatorUrl,
       },
       "executor-ts started",
     );

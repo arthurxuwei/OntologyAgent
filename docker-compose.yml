@@ -7,6 +7,13 @@ services:
     container_name: brain-py
     ports:
       - "8000:8000"
+    environment:
+      EXECUTOR_BASE_URL: ${EXECUTOR_BASE_URL:-http://executor-ts:3000}
+      EXECUTOR_TIMEOUT_SECONDS: ${EXECUTOR_TIMEOUT_SECONDS:-20}
+      X402_PAY_TO: ${X402_PAY_TO:-}
+      X402_PRICE: ${X402_PRICE:-0.01}
+      X402_NETWORK: ${X402_NETWORK:-eip155:84532}
+      X402_FACILITATOR_URL: ${X402_FACILITATOR_URL:-https://x402.org/facilitator}
     restart: unless-stopped
 
   executor-ts:
@@ -18,12 +25,17 @@ services:
     environment:
       EXECUTOR_PORT: ${EXECUTOR_PORT:-3000}
       PRIVATE_KEY: ${PRIVATE_KEY:-}
-      RPC_URL: ${RPC_URL:-https://ethereum-sepolia-rpc.publicnode.com}
-      CHAIN_ID: ${CHAIN_ID:-11155111}
+      RPC_URL: ${RPC_URL:-https://base-sepolia-rpc.publicnode.com}
+      CHAIN_ID: ${CHAIN_ID:-84532}
       DAILY_LIMIT: ${DAILY_LIMIT:-2.0}
       SINGLE_TX_CAP: ${SINGLE_TX_CAP:-1.0}
       WHITELISTED_RECIPIENTS: ${WHITELISTED_RECIPIENTS:-}
       EXECUTOR_MOCK_CHAIN: ${EXECUTOR_MOCK_CHAIN:-false}
       BUNDLER_RPC_URL: ${BUNDLER_RPC_URL:-}
       ENTRY_POINT_ADDRESS: ${ENTRY_POINT_ADDRESS:-0x0576a174D229E3cFA37253523E645A78A0C91B57}
+      X402_FACILITATOR_URL: ${X402_FACILITATOR_URL:-https://x402.org/facilitator}
+      X402_NETWORK: ${X402_NETWORK:-eip155:84532}
+      X402_BUYER_PRIVATE_KEY: ${X402_BUYER_PRIVATE_KEY:-}
+      X402_USDC_SINGLE_CAP: ${X402_USDC_SINGLE_CAP:-1.0}
+      X402_USDC_DAILY_CAP: ${X402_USDC_DAILY_CAP:-2.0}
     restart: unless-stopped

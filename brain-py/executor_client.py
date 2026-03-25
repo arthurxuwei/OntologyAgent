@@ -64,6 +64,28 @@ class ExecutorClient:
             },
         )
 
+    def x402_fetch(
+        self,
+        *,
+        url: str,
+        method: str = "GET",
+        headers: dict[str, str] | None = None,
+        body: Any | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "url": url,
+            "method": method,
+        }
+        if headers is not None:
+            payload["headers"] = headers
+        if body is not None:
+            payload["body"] = body
+
+        return self._post(
+            "/x402/fetch",
+            payload,
+        )
+
     def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         url = f"{self.base_url}{path}"
         with httpx.Client(timeout=self.timeout_seconds, transport=self.transport) as client:

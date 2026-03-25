@@ -3,3 +3,5 @@
 **/.env
 **/*.env
 **/.venv/
+**/node_modules/
+deep-research-report.md

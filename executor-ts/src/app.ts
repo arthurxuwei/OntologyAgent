@@ -8,6 +8,7 @@ import { errorResponse, successResponse } from "./domain/results.js";
 import type {
   ExecutionCommand,
   TransferSignCommand,
+  X402FetchCommand,
   UserOperationCommand,
 } from "./domain/types.js";
 import { BundlerClient } from "./erc4337.js";
@@ -16,6 +17,7 @@ import { ExecutionService } from "./services/execution-service.js";
 import { SettlementService } from "./services/settlement-service.js";
 import { SignTransferService } from "./services/sign-transfer-service.js";
 import { UserOperationService } from "./services/user-operation-service.js";
+import { X402FetchService } from "./services/x402-fetch-service.js";
 
 const transferSignSchema = z.object({
   to: z.string(),
@@ -34,11 +36,23 @@ const userOperationSchema = z.object({
   raw: z.record(z.string(), z.unknown()),
 });
 
-export function buildApp(config: AppConfig = loadConfig()): FastifyInstance {
+const x402FetchSchema = z.object({
+  url: z.string().url(),
+  method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]).optional().default("GET"),
+  headers: z.record(z.string(), z.string()).optional(),
+  body: z.unknown().optional(),
+});
+
+export function buildApp(
+  config: AppConfig = loadConfig(),
+  overrides?: {
+    x402FetchService?: X402FetchService;
+  },
+): FastifyInstance {
   const app = Fastify({ logger: true });
 
   const sender = createTransactionSender(config);
-  const policyGuard = new PolicyGuard(config.policy);
+  const policyGuard = new PolicyGuard(config.policy, config.x402);
   const settlementService = new SettlementService();
   const signTransferService = new SignTransferService(sender, policyGuard, settlementService);
   const executionService = new ExecutionService(sender, policyGuard, settlementService);
@@ -47,6 +61,8 @@ export function buildApp(config: AppConfig = loadConfig()): FastifyInstance {
     policyGuard,
     settlementService,
   );
+  const x402FetchService =
+    overrides?.x402FetchService ?? new X402FetchService(config, policyGuard);
 
   app.get("/health", async (request, reply) => {
     try {
@@ -57,6 +73,12 @@ export function buildApp(config: AppConfig = loadConfig()): FastifyInstance {
           status: "ok" as const,
           chain,
           policy: policyGuard.snapshot(),
+          x402: {
+            facilitatorUrl: config.x402.facilitatorUrl,
+            network: config.x402.network,
+            asset: config.x402.usdcAssetAddress,
+            buyerSignerConfigured: Boolean(config.x402.buyerPrivateKey),
+          },
         }),
       );
     } catch (error) {
@@ -91,6 +113,16 @@ export function buildApp(config: AppConfig = loadConfig()): FastifyInstance {
       return reply.send(successResponse(String(request.id), result));
     } catch (error) {
       return sendError(reply, request.id, error, request.log, "/user-operations/submit");
+    }
+  });
+
+  app.post("/x402/fetch", async (request, reply) => {
+    try {
+      const command = x402FetchSchema.parse(request.body) as X402FetchCommand;
+      const result = await x402FetchService.execute(command);
+      return reply.send(successResponse(String(request.id), result));
+    } catch (error) {
+      return sendError(reply, request.id, error, request.log, "/x402/fetch");
     }
   });
 
