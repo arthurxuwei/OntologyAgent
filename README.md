@@ -13,9 +13,18 @@
 docker compose up --build
 ```
 
+首次构建完成后，日常启动可直接用：
+
+```bash
+docker compose up -d
+```
+
+仅当 `brain-py/requirements.txt` 或 `executor-ts/package-lock.json` 变化时，再执行 `docker compose up --build -d`。
+
 启动后：
 
 - `brain-py` 健康检查：`http://localhost:8000/health`
+- `brain-py` Agent 接口：`POST /agent/run`
 - `executor-ts` 健康检查：`http://localhost:3000/health`
 - `executor-ts` 接口：`POST /sign-transfer`、`POST /execute-swap`
 
@@ -53,6 +62,10 @@ EXECUTOR_MOCK_CHAIN=false PRIVATE_KEY=0x... ./scripts/demo-curl.sh
 - `EXECUTOR_MOCK_CHAIN`：是否使用模拟链执行（默认 `false`，脚本演示时会设为 `true`）
 - `BUNDLER_RPC_URL`：ERC-4337 Bundler RPC（可选）
 - `ENTRY_POINT_ADDRESS`：ERC-4337 EntryPoint（默认 `0x0576...1B57`）
+- `EXECUTOR_BASE_URL`：`brain-py` 调用 `executor-ts` 的基地址（默认 `http://executor-ts:3000`）
+- `EXECUTOR_TIMEOUT_SECONDS`：`brain-py` 调用 `executor-ts` 的超时时间秒数（默认 `20`）
+- `OPENAI_API_KEY`：`brain-py` LangChain Agent 使用的模型密钥
+- `BRAIN_AGENT_MODEL`：`brain-py` Agent 模型名（默认 `gpt-4o-mini`）
 
 ## `POST /sign-transfer`
 
@@ -117,5 +130,20 @@ EXECUTOR_MOCK_CHAIN=false PRIVATE_KEY=0x... ./scripts/demo-curl.sh
       "signature": "0x..."
     }
   }
+}
+```
+
+## `POST /agent/run`（brain-py）
+
+`brain-py` 内置了 LangGraph Agent，并通过 `StructuredTool` 调用 `executor-ts` 的 `/sign-transfer` 与 `/execute-swap`。  
+系统提示词固定为：
+
+> 你是一个金融助理，只能通过调用 TS 执行器接口来移动资金。
+
+请求示例：
+
+```json
+{
+  "input": "给 0x000000000000000000000000000000000000dEaD 签名转账 0.01 ETH"
 }
 ```
