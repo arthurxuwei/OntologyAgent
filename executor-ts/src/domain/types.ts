@@ -1,0 +1,108 @@
+export type PolicyAction =
+  | "transfer-sign"
+  | "execution-submit"
+  | "user-operation-submit";
+
+export type PolicySnapshot = {
+  dayKey: string;
+  spentTodayWei: string;
+  dailyLimitWei: string;
+};
+
+export type PolicyDecision = {
+  action: PolicyAction;
+  normalizedTo: string;
+  amountWei: string;
+  allowed: true;
+};
+
+export type TransferSignCommand = {
+  to: string;
+  amountEth: string;
+};
+
+export type UpstreamRequest = {
+  url: string;
+  method: string;
+  headers?: Record<string, string>;
+  body?: unknown;
+};
+
+export type ExecutionCommand = {
+  to: string;
+  valueEth?: string;
+  data?: string;
+};
+
+export type UserOperationCommand = {
+  target: string;
+  maxCostEth: string;
+  raw: Record<string, unknown>;
+};
+
+export type SignedTransfer = {
+  from: string;
+  to: string;
+  amountWei: string;
+  txHash: string;
+  signedTx: string;
+  mode: "mock" | "network";
+};
+
+export type SubmittedTransaction = {
+  from: string;
+  to: string;
+  amountWei: string;
+  txHash: string;
+  mode: "mock" | "network";
+};
+
+export type SettlementResult = {
+  kind: "signed" | "submitted" | "user-operation";
+  identifier: string;
+  mode: "mock" | "network";
+};
+
+export type SignTransferResult = {
+  transfer: SignedTransfer;
+  settlement: SettlementResult;
+  decision: PolicyDecision;
+  policy: PolicySnapshot;
+};
+
+export type ExecutionResult = {
+  execution: SubmittedTransaction;
+  settlement: SettlementResult;
+  decision: PolicyDecision;
+  policy: PolicySnapshot;
+};
+
+export type PaymentAttempt = {
+  attempt: number;
+  transaction: SubmittedTransaction;
+  settlement: SettlementResult;
+};
+
+export type UserOperationResult = {
+  userOperation: {
+    target: string;
+    maxCostWei: string;
+    userOpHash: string;
+  };
+  settlement: SettlementResult;
+  decision: PolicyDecision;
+  policy: PolicySnapshot;
+};
+
+export type HealthResult = {
+  service: string;
+  status: "ok";
+  chain: {
+    blockNumber: number;
+    rpcUrl: string;
+    chainId: number | null;
+    expectedChainId: number;
+    mockChain: boolean;
+  };
+  policy: PolicySnapshot;
+};

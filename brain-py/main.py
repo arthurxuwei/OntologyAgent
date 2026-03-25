@@ -9,6 +9,8 @@ from langchain_core.tools import StructuredTool
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl
+from executor_client import ExecutorClient, ExecutorClientError
+from paid_request_flow import PaidRequestFlowError, request_with_payment_retry
 
 app = FastAPI(title="OntologyAgent brain-py")
 
@@ -66,7 +68,7 @@ class UserOperationIntent(BaseModel):
     raw: dict[str, Any] = Field(description="完整 UserOperation 原始字段")
 
 
-class ExecuteSwapIntent(BaseModel):
+class ExecutePaymentFlowIntent(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     apiUrl: HttpUrl = Field(description="上游 API URL")
@@ -90,23 +92,20 @@ class AgentRunRequest(BaseModel):
     input: str = Field(min_length=1, description="用户自然语言指令")
 
 
-def _post_executor(path: str, payload: dict[str, Any]) -> dict[str, Any]:
-    url = f"{EXECUTOR_BASE_URL}{path}"
-    with httpx.Client(timeout=REQUEST_TIMEOUT_SECONDS) as client:
-        response = client.post(url, json=payload)
-
-    if response.status_code >= 400:
-        raise ValueError(
-            f"executor-ts request failed: path={path}, "
-            f"status={response.status_code}, body={response.text}"
-        )
-
-    return response.json()
+@lru_cache(maxsize=1)
+def get_executor_client() -> ExecutorClient:
+    return ExecutorClient(
+        base_url=EXECUTOR_BASE_URL,
+        timeout_seconds=REQUEST_TIMEOUT_SECONDS,
+    )
 
 
 def sign_transfer_tool(to: str, amountEth: str) -> dict[str, Any]:
     intent = SignTransferIntent(to=to, amountEth=amountEth)
-    return _post_executor("/sign-transfer", intent.model_dump())
+    return get_executor_client().sign_transfer(
+        to=intent.to,
+        amount_eth=intent.amountEth,
+    )
 
 
 def execute_swap_tool(
@@ -118,7 +117,7 @@ def execute_swap_tool(
     swapTx: dict[str, Any] | None = None,
     userOperation: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    intent = ExecuteSwapIntent(
+    intent = ExecutePaymentFlowIntent(
         apiUrl=apiUrl,
         apiMethod=apiMethod,
         apiHeaders=apiHeaders,
@@ -127,7 +126,58 @@ def execute_swap_tool(
         swapTx=swapTx,
         userOperation=userOperation,
     )
-    return _post_executor("/execute-swap", intent.model_dump(mode="json"))
+    client = get_executor_client()
+    payments: list[dict[str, Any]] = []
+    max_retries = 1 if intent.payment.maxRetries is None else intent.payment.maxRetries
+
+    def send_payment(attempt: int) -> str:
+        payment_execution = client.submit_execution(
+            to=intent.payment.to,
+            value_eth=intent.payment.amountEth,
+        )
+        payments.append(
+            {
+                "attempt": attempt,
+                "transaction": payment_execution["execution"],
+                "settlement": payment_execution["settlement"],
+            }
+        )
+        return str(payment_execution["execution"]["txHash"])
+
+    payment_result = request_with_payment_retry(
+        url=str(intent.apiUrl),
+        method=intent.apiMethod,
+        headers=intent.apiHeaders,
+        body=intent.apiBody,
+        max_retries=max_retries,
+        timeout_seconds=REQUEST_TIMEOUT_SECONDS,
+        send_payment=send_payment,
+    )
+
+    execution_result = None
+    if intent.swapTx is not None:
+        execution_result = client.submit_execution(
+            to=intent.swapTx.to,
+            value_eth=intent.swapTx.valueEth,
+            data=intent.swapTx.data,
+        )
+
+    user_operation_result = None
+    if intent.userOperation is not None:
+        user_operation_result = client.submit_user_operation(
+            target=intent.userOperation.target,
+            max_cost_eth=intent.userOperation.maxCostEth,
+            raw=intent.userOperation.raw,
+        )
+
+    return {
+        "payment": {
+            "upstream": payment_result["upstream"],
+            "payments": payments,
+        },
+        "execution": execution_result,
+        "userOperation": user_operation_result,
+    }
 
 
 def build_tools() -> list[StructuredTool]:
@@ -140,11 +190,11 @@ def build_tools() -> list[StructuredTool]:
     execute_swap = StructuredTool.from_function(
         name="execute_swap",
         description=(
-            "执行带 x402 自动支付重试的请求，并可选提交链上 swap 或 ERC-4337 "
+            "执行带 x402 自动支付重试的请求，并可选提交链上交易或 ERC-4337 "
             "UserOperation。"
         ),
         func=execute_swap_tool,
-        args_schema=ExecuteSwapIntent,
+        args_schema=ExecutePaymentFlowIntent,
     )
     return [sign_transfer, execute_swap]
 
@@ -201,6 +251,29 @@ def mock_x402(request: Request):
         "accepted_payment_tx_hash": payment_tx_hash,
         "quote": {"tokenIn": "ETH", "tokenOut": "USDC", "price": "demo"},
     }
+
+
+@app.post("/paid-requests/execute")
+def execute_paid_request(request: ExecutePaymentFlowIntent) -> dict[str, Any]:
+    try:
+        return {
+            "ok": True,
+            "result": execute_swap_tool(
+                apiUrl=str(request.apiUrl),
+                apiMethod=request.apiMethod,
+                apiHeaders=request.apiHeaders,
+                apiBody=request.apiBody,
+                payment=request.payment.model_dump(mode="json", exclude_none=True),
+                swapTx=request.swapTx.model_dump(mode="json")
+                if request.swapTx is not None
+                else None,
+                userOperation=request.userOperation.model_dump(mode="json")
+                if request.userOperation is not None
+                else None,
+            ),
+        }
+    except (ExecutorClientError, PaidRequestFlowError, httpx.HTTPError, ValueError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
 
 @app.post("/agent/run")

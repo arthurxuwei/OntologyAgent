@@ -25,8 +25,9 @@ docker compose up -d
 
 - `brain-py` 健康检查：`http://localhost:8000/health`
 - `brain-py` Agent 接口：`POST /agent/run`
+- `brain-py` 付费请求编排接口：`POST /paid-requests/execute`
 - `executor-ts` 健康检查：`http://localhost:3000/health`
-- `executor-ts` 接口：`POST /sign-transfer`、`POST /execute-swap`
+- `executor-ts` 接口：`POST /transfers/sign`、`POST /executions/submit`、`POST /user-operations/submit`
 
 ## 一键 curl 演示
 
@@ -40,8 +41,9 @@ docker compose up -d
 
 - 启动 `docker compose`
 - 等待 `brain-py` 与 `executor-ts` 就绪
-- 调用 `POST /sign-transfer`
-- 调用 `POST /execute-swap`，演示 `402 -> 自动链上支付 -> 重试成功`
+- 调用 `POST /transfers/sign`
+- 调用 `POST /paid-requests/execute`，演示 `402 -> 自动链上支付 -> 重试成功`
+- 调用 `POST /executions/submit`
 
 默认直连 Sepolia 测试链，并要求你显式提供测试私钥与收款地址。建议先准备少量测试 ETH，再执行：
 
@@ -67,7 +69,6 @@ EXECUTOR_MOCK_CHAIN=true ./scripts/demo-curl.sh
 - `DAILY_LIMIT`：每日可签名总额度（ETH，默认 `2.0`）
 - `SINGLE_TX_CAP`：单笔交易额度（ETH，默认 `1.0`，且受硬编码上限约束）
 - `WHITELISTED_RECIPIENTS`：额外白名单地址，逗号分隔
-- `X402_MAX_RETRIES`：x402 自动支付重试次数（默认 `1`）
 - `EXECUTOR_MOCK_CHAIN`：是否使用模拟链执行（默认 `false`）
 - `BUNDLER_RPC_URL`：ERC-4337 Bundler RPC（可选）
 - `ENTRY_POINT_ADDRESS`：ERC-4337 EntryPoint（默认 `0x0576...1B57`）
@@ -75,10 +76,10 @@ EXECUTOR_MOCK_CHAIN=true ./scripts/demo-curl.sh
 - `EXECUTOR_TIMEOUT_SECONDS`：`brain-py` 调用 `executor-ts` 的超时时间秒数（默认 `20`）
 - `OPENAI_API_KEY`：`brain-py` LangChain Agent 使用的模型密钥
 - `BRAIN_AGENT_MODEL`：`brain-py` Agent 模型名（默认 `gpt-4o-mini`）
-- `DEMO_SIGN_TRANSFER_TO`：演示脚本里 `/sign-transfer` 使用的测试链地址
+- `DEMO_SIGN_TRANSFER_TO`：演示脚本里 `/transfers/sign` 与 `/executions/submit` 使用的测试链地址
 - `DEMO_X402_PAYMENT_TO`：演示脚本里 x402 支付使用的测试链地址
 
-## `POST /sign-transfer`
+## `POST /transfers/sign`
 
 签名原生转账（不广播）：
 
@@ -93,9 +94,9 @@ EXECUTOR_MOCK_CHAIN=true ./scripts/demo-curl.sh
 
 当 `EXECUTOR_MOCK_CHAIN=false` 时，会先校验当前 RPC 的 `chainId` 是否与 `CHAIN_ID` 一致，避免误连到主网。
 
-## `POST /execute-swap`
+## `POST /paid-requests/execute`（brain-py）
 
-执行一次带 x402 自动支付重试的上游 API 请求，并可选择执行链上 swap 交易或提交 ERC-4337 UserOperation：
+执行一次带 x402 自动支付重试的上游 API 请求，并由 `brain-py` 负责判断与编排支付流程：
 
 ```json
 {
@@ -109,46 +110,51 @@ EXECUTOR_MOCK_CHAIN=true ./scripts/demo-curl.sh
     "to": "0x1111111111111111111111111111111111111111",
     "amountEth": "0.001",
     "maxRetries": 1
-  },
-  "swapTx": {
-    "to": "0x000000000000000000000000000000000000dEaD",
-    "valueEth": "0",
-    "data": "0x"
   }
 }
 ```
 
-可选字段 `userOperation` 存在时，会调用 Bundler 的 `eth_sendUserOperation`。
-
 > 演示脚本里，`apiUrl` 指向 `brain-py` 的 `POST /mock-x402`，用于稳定复现 `402` 支付重试流程。
 
-`userOperation` 格式示例：
+## `POST /executions/submit`
+
+提交一笔通用链上交易：
 
 ```json
 {
-  "userOperation": {
-    "target": "0x1111111111111111111111111111111111111111",
-    "maxCostEth": "0.01",
-    "raw": {
-      "sender": "0x...",
-      "nonce": "0x1",
-      "initCode": "0x",
-      "callData": "0x",
-      "callGasLimit": "0x5208",
-      "verificationGasLimit": "0x100000",
-      "preVerificationGas": "0xc350",
-      "maxFeePerGas": "0x59682f00",
-      "maxPriorityFeePerGas": "0x59682f00",
-      "paymasterAndData": "0x",
-      "signature": "0x..."
-    }
+  "to": "0x000000000000000000000000000000000000dEaD",
+  "valueEth": "0",
+  "data": "0x"
+}
+```
+
+## `POST /user-operations/submit`
+
+提交一笔 ERC-4337 UserOperation：
+
+```json
+{
+  "target": "0x1111111111111111111111111111111111111111",
+  "maxCostEth": "0.01",
+  "raw": {
+    "sender": "0x...",
+    "nonce": "0x1",
+    "initCode": "0x",
+    "callData": "0x",
+    "callGasLimit": "0x5208",
+    "verificationGasLimit": "0x100000",
+    "preVerificationGas": "0xc350",
+    "maxFeePerGas": "0x59682f00",
+    "maxPriorityFeePerGas": "0x59682f00",
+    "paymasterAndData": "0x",
+    "signature": "0x..."
   }
 }
 ```
 
 ## `POST /agent/run`（brain-py）
 
-`brain-py` 内置了 LangGraph Agent，并通过 `StructuredTool` 调用 `executor-ts` 的 `/sign-transfer` 与 `/execute-swap`。  
+`brain-py` 内置了 LangGraph Agent，并通过 `StructuredTool` 调用 `executor-ts` 的 `/transfers/sign`、`/executions/submit` 与 `/user-operations/submit`；x402 付费请求编排由 `brain-py` 自身完成。  
 系统提示词固定为：
 
 > 你是一个金融助理，只能通过调用 TS 执行器接口来移动资金。

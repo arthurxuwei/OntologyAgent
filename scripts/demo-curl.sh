@@ -58,8 +58,8 @@ wait_for_url "http://localhost:8000/health" "brain-py"
 wait_for_url "http://localhost:3000/health" "executor-ts"
 
 echo
-echo "===> 1) Demo /sign-transfer"
-curl -sS -X POST "http://localhost:3000/sign-transfer" \
+echo "===> 1) Demo /transfers/sign"
+curl -sS -X POST "http://localhost:3000/transfers/sign" \
   -H "content-type: application/json" \
   -d "{
     \"to\": \"${DEMO_SIGN_TRANSFER_TO}\",
@@ -68,8 +68,8 @@ curl -sS -X POST "http://localhost:3000/sign-transfer" \
 echo
 
 echo
-echo "===> 2) Demo /execute-swap (x402 auto-pay retry)"
-curl -sS -X POST "http://localhost:3000/execute-swap" \
+echo "===> 2) Demo /paid-requests/execute (x402 auto-pay retry)"
+curl -sS -X POST "http://localhost:8000/paid-requests/execute" \
   -H "content-type: application/json" \
   -d "{
     \"apiUrl\": \"http://brain-py:8000/mock-x402\",
@@ -83,6 +83,17 @@ curl -sS -X POST "http://localhost:3000/execute-swap" \
       \"amountEth\": \"0.001\",
       \"maxRetries\": 1
     }
+  }"
+echo
+
+echo
+echo "===> 3) Demo /executions/submit"
+curl -sS -X POST "http://localhost:3000/executions/submit" \
+  -H "content-type: application/json" \
+  -d "{
+    \"to\": \"${DEMO_SIGN_TRANSFER_TO}\",
+    \"valueEth\": \"0.001\",
+    \"data\": \"0x\"
   }"
 echo
 

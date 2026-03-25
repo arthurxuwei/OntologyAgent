@@ -1,10 +1,37 @@
 import { parseEther } from "ethers";
 
+export type AppConfig = {
+  service: {
+    port: number;
+  };
+  network: {
+    rpcUrl: string;
+    expectedChainId: number;
+    mockChain: boolean;
+    entryPointAddress: string;
+  };
+  signer: {
+    privateKey?: string;
+  };
+  policy: {
+    dailyLimitWei: bigint;
+    singleTxCapWei: bigint;
+    whitelist: string[];
+  };
+  execution: {
+    bundlerRpcUrl?: string;
+  };
+};
+
 const DEFAULT_TESTNET_RPC_URL = "https://ethereum-sepolia-rpc.publicnode.com";
 const DEFAULT_TESTNET_CHAIN_ID = 11155111;
 
-function parseEthEnv(envName: string, defaultValue: string): bigint {
-  const rawValue = process.env[envName] ?? defaultValue;
+function parseEthEnv(
+  env: NodeJS.ProcessEnv,
+  envName: string,
+  defaultValue: string,
+): bigint {
+  const rawValue = env[envName] ?? defaultValue;
   try {
     return parseEther(rawValue);
   } catch {
@@ -12,8 +39,12 @@ function parseEthEnv(envName: string, defaultValue: string): bigint {
   }
 }
 
-function parseNumberEnv(envName: string, defaultValue: number): number {
-  const rawValue = process.env[envName];
+function parseNumberEnv(
+  env: NodeJS.ProcessEnv,
+  envName: string,
+  defaultValue: number,
+): number {
+  const rawValue = env[envName];
   if (rawValue === undefined) {
     return defaultValue;
   }
@@ -25,8 +56,8 @@ function parseNumberEnv(envName: string, defaultValue: number): number {
   return parsed;
 }
 
-function parseCsvEnv(envName: string): string[] {
-  const rawValue = process.env[envName];
+function parseCsvEnv(env: NodeJS.ProcessEnv, envName: string): string[] {
+  const rawValue = env[envName];
   if (!rawValue) {
     return [];
   }
@@ -36,8 +67,12 @@ function parseCsvEnv(envName: string): string[] {
     .filter((entry) => entry.length > 0);
 }
 
-function parseBooleanEnv(envName: string, defaultValue: boolean): boolean {
-  const rawValue = process.env[envName];
+function parseBooleanEnv(
+  env: NodeJS.ProcessEnv,
+  envName: string,
+  defaultValue: boolean,
+): boolean {
+  const rawValue = env[envName];
   if (rawValue === undefined) {
     return defaultValue;
   }
@@ -58,18 +93,28 @@ export const HARDCODED_WHITELIST = [
 
 export const HARDCODED_SINGLE_TX_CAP_WEI = parseEther("1.0");
 
-export const config = {
-  servicePort: parseNumberEnv("EXECUTOR_PORT", 3000),
-  rpcUrl: process.env.RPC_URL ?? DEFAULT_TESTNET_RPC_URL,
-  expectedChainId: parseNumberEnv("CHAIN_ID", DEFAULT_TESTNET_CHAIN_ID),
-  privateKey: process.env.PRIVATE_KEY,
-  dailyLimitWei: parseEthEnv("DAILY_LIMIT", "2.0"),
-  singleTxCapWei: parseEthEnv("SINGLE_TX_CAP", "1.0"),
-  envWhitelist: parseCsvEnv("WHITELISTED_RECIPIENTS"),
-  x402DefaultRetries: parseNumberEnv("X402_MAX_RETRIES", 1),
-  bundlerRpcUrl: process.env.BUNDLER_RPC_URL,
-  mockChain: parseBooleanEnv("EXECUTOR_MOCK_CHAIN", false),
-  entryPointAddress:
-    process.env.ENTRY_POINT_ADDRESS ??
-    "0x0576a174D229E3cFA37253523E645A78A0C91B57",
-};
+export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
+  return {
+    service: {
+      port: parseNumberEnv(env, "EXECUTOR_PORT", 3000),
+    },
+    network: {
+      rpcUrl: env.RPC_URL ?? DEFAULT_TESTNET_RPC_URL,
+      expectedChainId: parseNumberEnv(env, "CHAIN_ID", DEFAULT_TESTNET_CHAIN_ID),
+      mockChain: parseBooleanEnv(env, "EXECUTOR_MOCK_CHAIN", false),
+      entryPointAddress:
+        env.ENTRY_POINT_ADDRESS ?? "0x0576a174D229E3cFA37253523E645A78A0C91B57",
+    },
+    signer: {
+      privateKey: env.PRIVATE_KEY,
+    },
+    policy: {
+      dailyLimitWei: parseEthEnv(env, "DAILY_LIMIT", "2.0"),
+      singleTxCapWei: parseEthEnv(env, "SINGLE_TX_CAP", "1.0"),
+      whitelist: [...HARDCODED_WHITELIST, ...parseCsvEnv(env, "WHITELISTED_RECIPIENTS")],
+    },
+    execution: {
+      bundlerRpcUrl: env.BUNDLER_RPC_URL,
+    },
+  };
+}
