@@ -1,0 +1,29 @@
+name: ontologyagent
+
+services:
+  brain-py:
+    build:
+      context: ./brain-py
+    container_name: brain-py
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+  executor-ts:
+    build:
+      context: ./executor-ts
+    container_name: executor-ts
+    ports:
+      - "3000:3000"
+    environment:
+      EXECUTOR_PORT: ${EXECUTOR_PORT:-3000}
+      PRIVATE_KEY: ${PRIVATE_KEY:-}
+      RPC_URL: ${RPC_URL:-https://ethereum-rpc.publicnode.com}
+      DAILY_LIMIT: ${DAILY_LIMIT:-2.0}
+      SINGLE_TX_CAP: ${SINGLE_TX_CAP:-1.0}
+      WHITELISTED_RECIPIENTS: ${WHITELISTED_RECIPIENTS:-}
+      X402_MAX_RETRIES: ${X402_MAX_RETRIES:-1}
+      EXECUTOR_MOCK_CHAIN: ${EXECUTOR_MOCK_CHAIN:-false}
+      BUNDLER_RPC_URL: ${BUNDLER_RPC_URL:-}
+      ENTRY_POINT_ADDRESS: ${ENTRY_POINT_ADDRESS:-0x0576a174D229E3cFA37253523E645A78A0C91B57}
+    restart: unless-stopped
