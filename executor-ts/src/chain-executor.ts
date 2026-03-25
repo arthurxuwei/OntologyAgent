@@ -40,6 +40,7 @@ export class ChainExecutor {
     const wallet = this.requireSigner().connect(this.provider);
     const nonce = await this.provider.getTransactionCount(wallet.address, "pending");
     const network = await this.provider.getNetwork();
+    this.assertExpectedChain(network.chainId);
     const feeData = await this.provider.getFeeData();
 
     const transaction: TransactionRequest = {
@@ -88,6 +89,8 @@ export class ChainExecutor {
     }
 
     const wallet = this.requireSigner().connect(this.provider);
+    const network = await this.provider.getNetwork();
+    this.assertExpectedChain(network.chainId);
     const tx = await wallet.sendTransaction({
       to: normalizedTo,
       value: amountWei,
@@ -105,10 +108,23 @@ export class ChainExecutor {
 
   async getHealth() {
     if (config.mockChain) {
-      return { blockNumber: -1, rpcUrl: "mock-chain" };
+      return {
+        blockNumber: -1,
+        rpcUrl: "mock-chain",
+        chainId: null,
+        expectedChainId: config.expectedChainId,
+        mockChain: true,
+      };
     }
+    const network = await this.provider.getNetwork();
     const blockNumber = await this.provider.getBlockNumber();
-    return { blockNumber, rpcUrl: config.rpcUrl };
+    return {
+      blockNumber,
+      rpcUrl: config.rpcUrl,
+      chainId: Number(network.chainId),
+      expectedChainId: config.expectedChainId,
+      mockChain: false,
+    };
   }
 
   private requireSigner(): Wallet {
@@ -116,6 +132,14 @@ export class ChainExecutor {
       throw new Error("PRIVATE_KEY is required for signing transactions");
     }
     return new Wallet(config.privateKey);
+  }
+
+  private assertExpectedChain(chainId: bigint): void {
+    if (Number(chainId) !== config.expectedChainId) {
+      throw new Error(
+        `RPC chainId mismatch: expected ${config.expectedChainId}, got ${chainId.toString()}`,
+      );
+    }
   }
 }
 

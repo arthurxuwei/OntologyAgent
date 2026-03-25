@@ -43,29 +43,40 @@ docker compose up -d
 - 调用 `POST /sign-transfer`
 - 调用 `POST /execute-swap`，演示 `402 -> 自动链上支付 -> 重试成功`
 
-默认开启 `EXECUTOR_MOCK_CHAIN=true`（不会广播真实链上交易）。  
-如需真实链执行，可设置：
+默认直连 Sepolia 测试链，并要求你显式提供测试私钥与收款地址。建议先准备少量测试 ETH，再执行：
 
 ```bash
-EXECUTOR_MOCK_CHAIN=false PRIVATE_KEY=0x... ./scripts/demo-curl.sh
+PRIVATE_KEY=0x... \
+DEMO_SIGN_TRANSFER_TO=0x... \
+DEMO_X402_PAYMENT_TO=0x... \
+./scripts/demo-curl.sh
+```
+
+如需切回 mock 模式：
+
+```bash
+EXECUTOR_MOCK_CHAIN=true ./scripts/demo-curl.sh
 ```
 
 ## 可选环境变量
 
 - `EXECUTOR_PORT`：执行器端口（默认 `3000`）
 - `PRIVATE_KEY`：执行器签名私钥（必须配置才能签名/发交易）
-- `RPC_URL`：链 RPC 地址（默认 `https://ethereum-rpc.publicnode.com`）
+- `RPC_URL`：链 RPC 地址（默认 `https://ethereum-sepolia-rpc.publicnode.com`）
+- `CHAIN_ID`：期望连接的链 ID（默认 `11155111`，即 Sepolia）
 - `DAILY_LIMIT`：每日可签名总额度（ETH，默认 `2.0`）
 - `SINGLE_TX_CAP`：单笔交易额度（ETH，默认 `1.0`，且受硬编码上限约束）
 - `WHITELISTED_RECIPIENTS`：额外白名单地址，逗号分隔
 - `X402_MAX_RETRIES`：x402 自动支付重试次数（默认 `1`）
-- `EXECUTOR_MOCK_CHAIN`：是否使用模拟链执行（默认 `false`，脚本演示时会设为 `true`）
+- `EXECUTOR_MOCK_CHAIN`：是否使用模拟链执行（默认 `false`）
 - `BUNDLER_RPC_URL`：ERC-4337 Bundler RPC（可选）
 - `ENTRY_POINT_ADDRESS`：ERC-4337 EntryPoint（默认 `0x0576...1B57`）
 - `EXECUTOR_BASE_URL`：`brain-py` 调用 `executor-ts` 的基地址（默认 `http://executor-ts:3000`）
 - `EXECUTOR_TIMEOUT_SECONDS`：`brain-py` 调用 `executor-ts` 的超时时间秒数（默认 `20`）
 - `OPENAI_API_KEY`：`brain-py` LangChain Agent 使用的模型密钥
 - `BRAIN_AGENT_MODEL`：`brain-py` Agent 模型名（默认 `gpt-4o-mini`）
+- `DEMO_SIGN_TRANSFER_TO`：演示脚本里 `/sign-transfer` 使用的测试链地址
+- `DEMO_X402_PAYMENT_TO`：演示脚本里 x402 支付使用的测试链地址
 
 ## `POST /sign-transfer`
 
@@ -79,6 +90,8 @@ EXECUTOR_MOCK_CHAIN=false PRIVATE_KEY=0x... ./scripts/demo-curl.sh
 ```
 
 返回签名后的原始交易、tx hash，以及策略引擎快照。
+
+当 `EXECUTOR_MOCK_CHAIN=false` 时，会先校验当前 RPC 的 `chainId` 是否与 `CHAIN_ID` 一致，避免误连到主网。
 
 ## `POST /execute-swap`
 

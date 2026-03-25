@@ -21,11 +21,37 @@ wait_for_url() {
   return 1
 }
 
-echo "===> Starting demo stack with mock-chain mode"
-export EXECUTOR_MOCK_CHAIN="${EXECUTOR_MOCK_CHAIN:-true}"
-export WHITELISTED_RECIPIENTS="${WHITELISTED_RECIPIENTS:-0x000000000000000000000000000000000000dEaD,0x1111111111111111111111111111111111111111}"
+require_env() {
+  local env_name="$1"
+  if [[ -z "${!env_name:-}" ]]; then
+    echo "❌ Missing required env: ${env_name}"
+    exit 1
+  fi
+}
+
+export EXECUTOR_MOCK_CHAIN="${EXECUTOR_MOCK_CHAIN:-false}"
+export RPC_URL="${RPC_URL:-https://ethereum-sepolia-rpc.publicnode.com}"
+export CHAIN_ID="${CHAIN_ID:-11155111}"
 export DAILY_LIMIT="${DAILY_LIMIT:-2.0}"
 export SINGLE_TX_CAP="${SINGLE_TX_CAP:-1.0}"
+
+if [[ "${EXECUTOR_MOCK_CHAIN}" == "true" ]]; then
+  echo "===> Starting demo stack in mock-chain mode"
+  export DEMO_SIGN_TRANSFER_TO="${DEMO_SIGN_TRANSFER_TO:-0x000000000000000000000000000000000000dEaD}"
+  export DEMO_X402_PAYMENT_TO="${DEMO_X402_PAYMENT_TO:-0x1111111111111111111111111111111111111111}"
+else
+  echo "===> Starting demo stack on live testnet"
+  require_env "PRIVATE_KEY"
+  require_env "DEMO_SIGN_TRANSFER_TO"
+  require_env "DEMO_X402_PAYMENT_TO"
+fi
+
+if [[ -n "${WHITELISTED_RECIPIENTS:-}" ]]; then
+  export WHITELISTED_RECIPIENTS="${WHITELISTED_RECIPIENTS},${DEMO_SIGN_TRANSFER_TO},${DEMO_X402_PAYMENT_TO}"
+else
+  export WHITELISTED_RECIPIENTS="${DEMO_SIGN_TRANSFER_TO},${DEMO_X402_PAYMENT_TO}"
+fi
+
 docker compose up -d --build
 
 wait_for_url "http://localhost:8000/health" "brain-py"
@@ -35,31 +61,32 @@ echo
 echo "===> 1) Demo /sign-transfer"
 curl -sS -X POST "http://localhost:3000/sign-transfer" \
   -H "content-type: application/json" \
-  -d '{
-    "to": "0x000000000000000000000000000000000000dEaD",
-    "amountEth": "0.01"
-  }'
+  -d "{
+    \"to\": \"${DEMO_SIGN_TRANSFER_TO}\",
+    \"amountEth\": \"0.01\"
+  }"
 echo
 
 echo
 echo "===> 2) Demo /execute-swap (x402 auto-pay retry)"
 curl -sS -X POST "http://localhost:3000/execute-swap" \
   -H "content-type: application/json" \
-  -d '{
-    "apiUrl": "http://brain-py:8000/mock-x402",
-    "apiMethod": "POST",
-    "apiBody": {
-      "tokenIn": "ETH",
-      "tokenOut": "USDC"
+  -d "{
+    \"apiUrl\": \"http://brain-py:8000/mock-x402\",
+    \"apiMethod\": \"POST\",
+    \"apiBody\": {
+      \"tokenIn\": \"ETH\",
+      \"tokenOut\": \"USDC\"
     },
-    "payment": {
-      "to": "0x1111111111111111111111111111111111111111",
-      "amountEth": "0.001",
-      "maxRetries": 1
+    \"payment\": {
+      \"to\": \"${DEMO_X402_PAYMENT_TO}\",
+      \"amountEth\": \"0.001\",
+      \"maxRetries\": 1
     }
-  }'
+  }"
 echo
 
 echo
 echo "===> Done"
-echo "Tip: set EXECUTOR_MOCK_CHAIN=false + PRIVATE_KEY=... to use real chain tx."
+echo "RPC_URL=${RPC_URL}"
+echo "CHAIN_ID=${CHAIN_ID}"

@@ -143,6 +143,8 @@ async function start() {
       {
         port: config.servicePort,
         rpcUrl: config.rpcUrl,
+        expectedChainId: config.expectedChainId,
+        mockChain: config.mockChain,
         dailyLimitWei: config.dailyLimitWei.toString(),
       },
       "executor-ts started",

@@ -1,5 +1,8 @@
 import { parseEther } from "ethers";
 
+const DEFAULT_TESTNET_RPC_URL = "https://ethereum-sepolia-rpc.publicnode.com";
+const DEFAULT_TESTNET_CHAIN_ID = 11155111;
+
 function parseEthEnv(envName: string, defaultValue: string): bigint {
   const rawValue = process.env[envName] ?? defaultValue;
   try {
@@ -57,7 +60,8 @@ export const HARDCODED_SINGLE_TX_CAP_WEI = parseEther("1.0");
 
 export const config = {
   servicePort: parseNumberEnv("EXECUTOR_PORT", 3000),
-  rpcUrl: process.env.RPC_URL ?? "https://ethereum-rpc.publicnode.com",
+  rpcUrl: process.env.RPC_URL ?? DEFAULT_TESTNET_RPC_URL,
+  expectedChainId: parseNumberEnv("CHAIN_ID", DEFAULT_TESTNET_CHAIN_ID),
   privateKey: process.env.PRIVATE_KEY,
   dailyLimitWei: parseEthEnv("DAILY_LIMIT", "2.0"),
   singleTxCapWei: parseEthEnv("SINGLE_TX_CAP", "1.0"),
