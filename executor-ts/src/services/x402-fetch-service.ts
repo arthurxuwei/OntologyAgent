@@ -21,7 +21,8 @@ export class X402FetchService {
   }
 
   async execute(command: X402FetchCommand): Promise<X402FetchResult> {
-    const initialResponse = await this.fetchImpl(command.url, this.buildRequestInit(command));
+    const requestInit = this.buildRequestInit(command);
+    const initialResponse = await this.fetchImpl(command.url, requestInit);
     const initialPayload = await parseResponsePayload(initialResponse);
 
     if (initialResponse.status !== 402) {
@@ -49,9 +50,9 @@ export class X402FetchService {
     );
 
     const paidResponse = await this.fetchImpl(command.url, {
-      ...this.buildRequestInit(command),
+      ...requestInit,
       headers: {
-        ...normalizeHeaders(command.headers),
+        ...normalizeHeaders(requestInit.headers),
         ...httpClient.encodePaymentSignatureHeader(paymentPayload),
       },
     });

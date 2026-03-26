@@ -63,6 +63,30 @@ X402_PAY_TO=0x... \
 ./scripts/demo-curl.sh
 ```
 
+## Simplescraper live x402 验证
+
+如果你要对真实外部 x402 服务做 live 验证，可以单独跑：
+
+```bash
+PRIVATE_KEY=0x... \
+./scripts/live-x402-simplescraper.sh
+```
+
+脚本默认会请求：
+
+- `POST https://api.simplescraper.io/v1/extract`
+- 抓取目标 `https://example.com`
+
+默认使用的 Simplescraper x402 收款地址是当前实测返回的：
+
+- `0x6C01bea8570FDFDa471992d68e5C284A69A6B46d`
+
+如需覆盖默认值，可传：
+
+- `SIMPLESCRAPER_ENDPOINT`
+- `SIMPLESCRAPER_TARGET_URL`
+- `SIMPLESCRAPER_PAY_TO`
+
 ## 默认链与协议
 
 - 默认 RPC：`https://base-sepolia-rpc.publicnode.com`

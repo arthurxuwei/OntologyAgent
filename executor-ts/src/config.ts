@@ -121,6 +121,19 @@ function pickOptionalEnv(...values: Array<string | undefined>): string | undefin
   return undefined;
 }
 
+function normalizePrivateKey(value?: string): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  if (trimmed === "") {
+    return undefined;
+  }
+
+  return trimmed.startsWith("0x") ? trimmed : `0x${trimmed}`;
+}
+
 export const HARDCODED_WHITELIST = [
   "0x000000000000000000000000000000000000dEaD",
   "0x1111111111111111111111111111111111111111",
@@ -141,7 +154,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
         env.ENTRY_POINT_ADDRESS ?? "0x0576a174D229E3cFA37253523E645A78A0C91B57",
     },
     signer: {
-      privateKey: env.PRIVATE_KEY,
+      privateKey: normalizePrivateKey(env.PRIVATE_KEY),
     },
     policy: {
       dailyLimitWei: parseEthEnv(env, "DAILY_LIMIT", "2.0"),
@@ -154,7 +167,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     x402: {
       facilitatorUrl: env.X402_FACILITATOR_URL ?? "https://x402.org/facilitator",
       network: env.X402_NETWORK ?? DEFAULT_X402_NETWORK,
-      buyerPrivateKey: pickOptionalEnv(env.X402_BUYER_PRIVATE_KEY, env.PRIVATE_KEY),
+      buyerPrivateKey: normalizePrivateKey(
+        pickOptionalEnv(env.X402_BUYER_PRIVATE_KEY, env.PRIVATE_KEY),
+      ),
       usdcAssetAddress: env.X402_USDC_ASSET_ADDRESS ?? DEFAULT_BASE_SEPOLIA_USDC,
       usdcDecimals: X402_USDC_DECIMALS,
       usdcSingleCapAtomic: parseUnitsEnv(env, "X402_USDC_SINGLE_CAP", "1.0", X402_USDC_DECIMALS),
