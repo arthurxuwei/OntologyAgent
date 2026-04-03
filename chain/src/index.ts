@@ -1,19 +1,19 @@
 import { loadConfig } from "./config.js";
-import { createExecutorMcpApp } from "./mcp/server.js";
+import { createChainMcpApp } from "./mcp/server.js";
 
 async function start() {
   const config = loadConfig();
-  const { app } = createExecutorMcpApp(config);
+  const { app } = createChainMcpApp(config);
 
   app.listen(config.mcp.port, "0.0.0.0", (error?: Error) => {
     if (error) {
-      console.error("executor-ts MCP startup failed", error);
+      console.error("chain MCP startup failed", error);
       process.exit(1);
     }
 
     console.log(
       JSON.stringify({
-        message: "executor-ts MCP server started",
+        message: "chain MCP server started",
         mcpPort: config.mcp.port,
         rpcUrl: config.network.rpcUrl,
         expectedChainId: config.network.expectedChainId,

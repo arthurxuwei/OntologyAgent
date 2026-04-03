@@ -12,7 +12,7 @@ export function normalizeAddress(address: string): string {
 export function assertWhitelistedAddress(address: string, whitelist: Set<string>): void {
   const normalized = normalizeAddress(address).toLowerCase();
   if (!whitelist.has(normalized)) {
-    throw new Error(`Address not allowed by executor whitelist: ${address}`);
+    throw new Error(`Address not allowed by chain whitelist: ${address}`);
   }
 }
 

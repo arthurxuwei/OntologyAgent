@@ -7,7 +7,7 @@ from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
 
-class ExecutorMcpClientError(Exception):
+class ChainMcpClientError(Exception):
     pass
 
 
@@ -15,7 +15,7 @@ ToolCaller = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
 ToolLister = Callable[[], Awaitable[list[str]]]
 
 
-class ExecutorMcpClient:
+class ChainMcpClient:
     def __init__(
         self,
         server_url: str,

@@ -142,14 +142,17 @@ export const HARDCODED_WHITELIST = [
 export const HARDCODED_SINGLE_TX_CAP_WEI = parseEther("1.0");
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
+  const chainMcpPortEnv = env.CHAIN_MCP_PORT ?? env.EXECUTOR_MCP_PORT;
+  const chainMockEnv = env.CHAIN_MOCK ?? env.EXECUTOR_MOCK_CHAIN;
+
   return {
     mcp: {
-      port: parseNumberEnv(env, "EXECUTOR_MCP_PORT", 8091),
+      port: parseNumberEnv({ ...env, CHAIN_MCP_PORT: chainMcpPortEnv }, "CHAIN_MCP_PORT", 8091),
     },
     network: {
       rpcUrl: env.RPC_URL ?? DEFAULT_TESTNET_RPC_URL,
       expectedChainId: parseNumberEnv(env, "CHAIN_ID", DEFAULT_TESTNET_CHAIN_ID),
-      mockChain: parseBooleanEnv(env, "EXECUTOR_MOCK_CHAIN", false),
+      mockChain: parseBooleanEnv({ ...env, CHAIN_MOCK: chainMockEnv }, "CHAIN_MOCK", false),
       entryPointAddress:
         env.ENTRY_POINT_ADDRESS ?? "0x0576a174D229E3cFA37253523E645A78A0C91B57",
     },

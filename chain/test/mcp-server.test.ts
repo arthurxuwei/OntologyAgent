@@ -6,12 +6,12 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 
 import { loadConfig } from "../src/config.js";
-import { createExecutorMcpServer, createExecutorRuntime } from "../src/mcp/tools.js";
+import { createChainMcpServer, createChainRuntime } from "../src/mcp/tools.js";
 import type { X402FetchService } from "../src/services/x402-fetch-service.js";
 
 function createMockConfig() {
   return loadConfig({
-    EXECUTOR_MOCK_CHAIN: "true",
+    CHAIN_MOCK: "true",
     WHITELISTED_RECIPIENTS:
       "0x2222222222222222222222222222222222222222,0x3333333333333333333333333333333333333333",
   });
@@ -23,14 +23,14 @@ async function withClient(
     x402FetchService?: X402FetchService;
   },
 ) {
-  const runtime = createExecutorRuntime(createMockConfig(), overrides);
+  const runtime = createChainRuntime(createMockConfig(), overrides);
   const client = new Client({
-    name: "executor-mcp-test-client",
+    name: "chain-mcp-test-client",
     version: "1.0.0",
   });
-  const transport = new StreamableHTTPClientTransport(new URL("http://executor-ts:8091/mcp"), {
+  const transport = new StreamableHTTPClientTransport(new URL("http://chain-mcp:8091/mcp"), {
     fetch: async (input, init) => {
-      const server = createExecutorMcpServer(runtime);
+      const server = createChainMcpServer(runtime);
       const request = new Request(input, init);
       const webTransport = new WebStandardStreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
@@ -54,7 +54,7 @@ async function withClient(
   }
 }
 
-test("executor MCP exposes the expected tool names", async () => {
+test("chain MCP exposes the expected tool names", async () => {
   await withClient(async (client) => {
     const response = await client.listTools();
     const toolNames = response.tools.map((tool) => tool.name).sort();
@@ -127,7 +127,7 @@ test("chain_x402_fetch returns x402 result through MCP", async () => {
       const response = await client.callTool({
         name: "chain_x402_fetch",
         arguments: {
-          url: "http://brain-py:8000/x402/demo-resource",
+          url: "http://agent:8000/x402/demo-resource",
           method: "GET",
         },
       });

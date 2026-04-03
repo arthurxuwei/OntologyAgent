@@ -12,7 +12,7 @@ import { SignTransferService } from "../services/sign-transfer-service.js";
 import { UserOperationService } from "../services/user-operation-service.js";
 import { X402FetchService } from "../services/x402-fetch-service.js";
 
-type ExecutorRuntime = {
+type ChainRuntime = {
   signTransferService: SignTransferService;
   executionService: ExecutionService;
   userOperationService: UserOperationService;
@@ -69,12 +69,12 @@ async function runTool<Result>(
   }
 }
 
-export function createExecutorRuntime(
+export function createChainRuntime(
   config: AppConfig = loadConfig(),
   overrides?: {
     x402FetchService?: X402FetchService;
   },
-): ExecutorRuntime {
+): ChainRuntime {
   const sender = createTransactionSender(config);
   const policyGuard = new PolicyGuard(config.policy, config.x402);
   const settlementService = new SettlementService();
@@ -92,9 +92,9 @@ export function createExecutorRuntime(
   };
 }
 
-export function createExecutorMcpServer(runtime: ExecutorRuntime): McpServer {
+export function createChainMcpServer(runtime: ChainRuntime): McpServer {
   const server = new McpServer({
-    name: "ontologyagent-executor-ts",
+    name: "ontologyagent-chain",
     version: "1.0.0",
   });
 

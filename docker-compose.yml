@@ -1,15 +1,15 @@
 name: ontologyagent
 
 services:
-  brain-py:
+  agent:
     build:
-      context: ./brain-py
-    container_name: brain-py
+      context: ./agent
+    container_name: agent
     ports:
       - "8000:8000"
     environment:
-      EXECUTOR_MCP_URL: ${EXECUTOR_MCP_URL:-http://executor-ts:8091/mcp/}
-      EXECUTOR_TIMEOUT_SECONDS: ${EXECUTOR_TIMEOUT_SECONDS:-20}
+      CHAIN_MCP_URL: ${CHAIN_MCP_URL:-http://chain-mcp:8091/mcp/}
+      CHAIN_TIMEOUT_SECONDS: ${CHAIN_TIMEOUT_SECONDS:-20}
       FREQTRADE_MCP_URL: ${FREQTRADE_MCP_URL:-http://freqtrade:8090/mcp/}
       X402_PAY_TO: ${X402_PAY_TO:-}
       X402_PRICE: ${X402_PRICE:-0.01}
@@ -17,24 +17,24 @@ services:
       X402_FACILITATOR_URL: ${X402_FACILITATOR_URL:-https://x402.org/facilitator}
     restart: unless-stopped
     depends_on:
-      - executor-ts
+      - chain
       - freqtrade
 
-  executor-ts:
+  chain:
     build:
-      context: ./executor-ts
-    container_name: executor-ts
+      context: ./chain
+    container_name: chain
     ports:
       - "8091:8091"
     environment:
-      EXECUTOR_MCP_PORT: ${EXECUTOR_MCP_PORT:-8091}
+      CHAIN_MCP_PORT: ${CHAIN_MCP_PORT:-8091}
       PRIVATE_KEY: ${PRIVATE_KEY:-}
       RPC_URL: ${RPC_URL:-https://base-sepolia-rpc.publicnode.com}
       CHAIN_ID: ${CHAIN_ID:-84532}
       DAILY_LIMIT: ${DAILY_LIMIT:-2.0}
       SINGLE_TX_CAP: ${SINGLE_TX_CAP:-1.0}
       WHITELISTED_RECIPIENTS: ${WHITELISTED_RECIPIENTS:-}
-      EXECUTOR_MOCK_CHAIN: ${EXECUTOR_MOCK_CHAIN:-false}
+      CHAIN_MOCK: ${CHAIN_MOCK:-false}
       BUNDLER_RPC_URL: ${BUNDLER_RPC_URL:-}
       ENTRY_POINT_ADDRESS: ${ENTRY_POINT_ADDRESS:-0x0576a174D229E3cFA37253523E645A78A0C91B57}
       X402_FACILITATOR_URL: ${X402_FACILITATOR_URL:-https://x402.org/facilitator}
@@ -42,6 +42,10 @@ services:
       X402_BUYER_PRIVATE_KEY: ${X402_BUYER_PRIVATE_KEY:-}
       X402_USDC_SINGLE_CAP: ${X402_USDC_SINGLE_CAP:-1.0}
       X402_USDC_DAILY_CAP: ${X402_USDC_DAILY_CAP:-2.0}
+    networks:
+      default:
+        aliases:
+          - chain-mcp
     restart: unless-stopped
 
   freqtrade:

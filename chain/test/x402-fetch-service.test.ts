@@ -39,7 +39,7 @@ test("X402FetchService performs 402 -> payment-signature -> success flow", async
             "PAYMENT-REQUIRED": encodePaymentRequiredHeader({
               x402Version: 2,
               resource: {
-                url: "http://brain-py:8000/x402/demo-resource",
+                url: "http://agent:8000/x402/demo-resource",
                 description: "Demo resource",
                 mimeType: "application/json",
               },
@@ -82,7 +82,7 @@ test("X402FetchService performs 402 -> payment-signature -> success flow", async
 
   const service = new X402FetchService(config, guard, fetchImpl);
   const result = await service.execute({
-    url: "http://brain-py:8000/x402/demo-resource",
+    url: "http://agent:8000/x402/demo-resource",
     method: "POST",
     body: {
       url: "https://example.com",

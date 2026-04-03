@@ -2,10 +2,10 @@ import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 
 import { loadConfig, type AppConfig } from "../config.js";
-import { createExecutorMcpServer, createExecutorRuntime } from "./tools.js";
+import { createChainMcpServer, createChainRuntime } from "./tools.js";
 import type { X402FetchService } from "../services/x402-fetch-service.js";
 
-type ExecutorMcpApp = {
+type ChainMcpApp = {
   app: ReturnType<typeof createMcpExpressApp>;
 };
 
@@ -20,13 +20,13 @@ function methodNotAllowed(res: any) {
   });
 }
 
-export function createExecutorMcpApp(
+export function createChainMcpApp(
   config: AppConfig = loadConfig(),
   overrides?: {
     x402FetchService?: X402FetchService;
   },
-): ExecutorMcpApp {
-  const runtime = createExecutorRuntime(config, overrides);
+): ChainMcpApp {
+  const runtime = createChainRuntime(config, overrides);
   const app = createMcpExpressApp({ host: "0.0.0.0" });
 
   app.post("/mcp", async (req: any, res: any) => {
@@ -34,7 +34,7 @@ export function createExecutorMcpApp(
       sessionIdGenerator: undefined,
       enableJsonResponse: true,
     });
-    const server = createExecutorMcpServer(runtime);
+    const server = createChainMcpServer(runtime);
     res.on("close", () => {
       void transport.close();
       void server.close();
@@ -44,7 +44,7 @@ export function createExecutorMcpApp(
       await server.connect(transport);
       await transport.handleRequest(req, res, req.body);
     } catch (error) {
-      console.error("Error handling executor MCP request:", error);
+      console.error("Error handling chain MCP request:", error);
       if (!res.headersSent) {
         res.status(500).json({
           jsonrpc: "2.0",

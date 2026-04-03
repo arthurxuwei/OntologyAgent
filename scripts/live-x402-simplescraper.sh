@@ -21,28 +21,28 @@ wait_for_url() {
   return 1
 }
 
-wait_for_executor_mcp() {
+wait_for_chain_mcp() {
   local max_retries="${1:-60}"
 
   for ((i=1; i<=max_retries; i+=1)); do
-    if docker compose exec -T brain-py python - <<'PY' >/dev/null 2>&1
+    if docker compose exec -T agent python - <<'PY' >/dev/null 2>&1
 import asyncio
-from executor_mcp_client import ExecutorMcpClient
+from chain_mcp_client import ChainMcpClient
 
 async def main():
-    tools = await ExecutorMcpClient("http://executor-ts:8091/mcp/").list_tools()
+    tools = await ChainMcpClient("http://chain-mcp:8091/mcp/").list_tools()
     assert "chain_x402_fetch" in tools
 
 asyncio.run(main())
 PY
     then
-      echo "✅ executor-mcp is ready"
+      echo "✅ chain-mcp is ready"
       return 0
     fi
     sleep 1
   done
 
-  echo "❌ executor-mcp failed to become ready"
+  echo "❌ chain-mcp failed to become ready"
   return 1
 }
 
@@ -54,7 +54,7 @@ require_env() {
   fi
 }
 
-export EXECUTOR_MOCK_CHAIN=false
+export CHAIN_MOCK=false
 export RPC_URL="${RPC_URL:-https://base-sepolia-rpc.publicnode.com}"
 export CHAIN_ID="${CHAIN_ID:-84532}"
 export X402_NETWORK="${X402_NETWORK:-eip155:84532}"
@@ -77,8 +77,8 @@ fi
 echo "===> Starting live Base Sepolia stack for Simplescraper x402"
 docker compose up -d --build
 
-wait_for_url "http://localhost:8000/health" "brain-py"
-wait_for_executor_mcp
+wait_for_url "http://localhost:8000/health" "agent"
+wait_for_chain_mcp
 
 echo
 echo "===> Brain health"
@@ -87,13 +87,13 @@ echo
 
 echo
 echo "===> Simplescraper live x402 fetch"
-docker compose exec -T brain-py python - <<PY
+docker compose exec -T agent python - <<PY
 import asyncio
 import json
-from executor_mcp_client import ExecutorMcpClient
+from chain_mcp_client import ChainMcpClient
 
 async def main():
-    result = await ExecutorMcpClient("http://executor-ts:8091/mcp/").call_tool(
+    result = await ChainMcpClient("http://chain-mcp:8091/mcp/").call_tool(
         "chain_x402_fetch",
         {
             "url": "${SIMPLESCRAPER_ENDPOINT}",

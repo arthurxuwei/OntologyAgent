@@ -13,7 +13,7 @@ from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
-from executor_mcp_client import ExecutorMcpClient
+from chain_mcp_client import ChainMcpClient
 from freqtrade_mcp_client import FreqtradeMcpClient, FreqtradeMcpClientError
 from x402_seller import (
     BASE_SEPOLIA_NETWORK,
@@ -22,16 +22,21 @@ from x402_seller import (
     X402SellerService,
 )
 
-app = FastAPI(title="OntologyAgent brain-py")
+app = FastAPI(title="OntologyAgent agent")
 
 SYSTEM_PROMPT = (
-    "你是一个金融助理。链上相关动作只能通过 executor-ts MCP 工具完成；"
+    "你是一个金融助理。链上相关动作只能通过 chain MCP 工具完成；"
     "中心化交易和量化相关动作只能通过 Freqtrade MCP 工具完成。"
     "执行任何会改变链上状态、Freqtrade 运行状态或交易状态的动作前，先清晰总结当前状态、"
     "即将执行的动作和影响对象，然后再调用工具。"
 )
-EXECUTOR_MCP_URL = os.getenv("EXECUTOR_MCP_URL", "http://executor-ts:8091/mcp/")
-REQUEST_TIMEOUT_SECONDS = float(os.getenv("EXECUTOR_TIMEOUT_SECONDS", "20"))
+CHAIN_MCP_URL = os.getenv(
+    "CHAIN_MCP_URL",
+    os.getenv("EXECUTOR_MCP_URL", "http://chain-mcp:8091/mcp/"),
+)
+REQUEST_TIMEOUT_SECONDS = float(
+    os.getenv("CHAIN_TIMEOUT_SECONDS", os.getenv("EXECUTOR_TIMEOUT_SECONDS", "20"))
+)
 FREQTRADE_MCP_URL = os.getenv("FREQTRADE_MCP_URL", "http://freqtrade:8090/mcp/")
 
 
@@ -117,8 +122,8 @@ class ForceExitTradeIntent(BaseModel):
 
 
 @lru_cache(maxsize=1)
-def get_executor_mcp_client() -> ExecutorMcpClient:
-    return ExecutorMcpClient(EXECUTOR_MCP_URL)
+def get_chain_mcp_client() -> ChainMcpClient:
+    return ChainMcpClient(CHAIN_MCP_URL)
 
 
 @lru_cache(maxsize=1)
@@ -149,11 +154,11 @@ def _unwrap_mcp_result(tool_name: str, result: dict[str, Any]) -> dict[str, Any]
     return result
 
 
-async def call_executor_tool(tool_name: str, arguments: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+async def call_chain_tool(tool_name: str, arguments: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     try:
-        result = await get_executor_mcp_client().call_tool(tool_name, arguments or {})
+        result = await get_chain_mcp_client().call_tool(tool_name, arguments or {})
     except Exception as error:
-        raise RuntimeError(f"Executor MCP tool failed: {tool_name}: {error}") from error
+        raise RuntimeError(f"Chain MCP tool failed: {tool_name}: {error}") from error
 
     return {
         "tool": tool_name,
@@ -163,7 +168,7 @@ async def call_executor_tool(tool_name: str, arguments: Optional[dict[str, Any]]
 
 async def chain_sign_transfer_tool(to: str, amountEth: str) -> dict[str, Any]:
     intent = SignTransferIntent(to=to, amountEth=amountEth)
-    return await call_executor_tool(
+    return await call_chain_tool(
         "chain_sign_transfer",
         {
             "to": intent.to,
@@ -184,7 +189,7 @@ async def chain_submit_execution_tool(
     }
     if intent.data is not None:
         payload["data"] = intent.data
-    return await call_executor_tool("chain_submit_execution", payload)
+    return await call_chain_tool("chain_submit_execution", payload)
 
 
 async def chain_submit_user_operation_tool(
@@ -193,7 +198,7 @@ async def chain_submit_user_operation_tool(
     raw: dict[str, Any],
 ) -> dict[str, Any]:
     intent = UserOperationIntent(target=target, maxCostEth=maxCostEth, raw=raw)
-    return await call_executor_tool(
+    return await call_chain_tool(
         "chain_submit_user_operation",
         {
             "target": intent.target,
@@ -223,7 +228,7 @@ async def chain_x402_fetch_tool(
         payload["headers"] = intent.headers
     if intent.body is not None:
         payload["body"] = intent.body
-    return await call_executor_tool("chain_x402_fetch", payload)
+    return await call_chain_tool("chain_x402_fetch", payload)
 
 
 async def call_freqtrade_tool(tool_name: str, arguments: Optional[dict[str, Any]] = None) -> dict[str, Any]:
@@ -309,7 +314,7 @@ async def force_exit_trade_tool(
     return await call_freqtrade_tool("force_exit_trade", payload)
 
 
-EXECUTOR_TOOL_REGISTRY: dict[str, dict[str, Any]] = {
+CHAIN_TOOL_REGISTRY: dict[str, dict[str, Any]] = {
     "chain_sign_transfer": {
         "description": "签名 ETH 转账，但不广播。",
         "args_schema": SignTransferIntent,
@@ -392,14 +397,14 @@ FREQTRADE_TOOL_REGISTRY: dict[str, dict[str, Any]] = {
 }
 
 
-def discover_executor_tools() -> list[StructuredTool]:
+def discover_chain_tools() -> list[StructuredTool]:
     try:
-        available_tools = asyncio.run(get_executor_mcp_client().list_tools())
+        available_tools = asyncio.run(get_chain_mcp_client().list_tools())
     except Exception as error:
-        raise RuntimeError(f"EXECUTOR_MCP_URL is configured but tools could not be discovered: {error}") from error
+        raise RuntimeError(f"CHAIN_MCP_URL is configured but tools could not be discovered: {error}") from error
 
     tools: list[StructuredTool] = []
-    for tool_name, spec in EXECUTOR_TOOL_REGISTRY.items():
+    for tool_name, spec in CHAIN_TOOL_REGISTRY.items():
         if tool_name not in available_tools:
             continue
         tools.append(
@@ -435,7 +440,7 @@ def discover_freqtrade_tools() -> list[StructuredTool]:
 
 
 def build_tools() -> list[StructuredTool]:
-    return [*discover_executor_tools(), *discover_freqtrade_tools()]
+    return [*discover_chain_tools(), *discover_freqtrade_tools()]
 
 
 @lru_cache(maxsize=1)
@@ -470,12 +475,12 @@ def _normalize_message_content(content: Any) -> str:
 
 @app.get("/health")
 def health() -> dict[str, Any]:
-    executor_tools: list[str] = []
-    executor_error: Optional[str] = None
+    chain_tools: list[str] = []
+    chain_error: Optional[str] = None
     try:
-        executor_tools = asyncio.run(get_executor_mcp_client().list_tools())
+        chain_tools = asyncio.run(get_chain_mcp_client().list_tools())
     except Exception as error:
-        executor_error = str(error)
+        chain_error = str(error)
 
     freqtrade_tools: list[str] = []
     freqtrade_error: Optional[str] = None
@@ -485,13 +490,13 @@ def health() -> dict[str, Any]:
         freqtrade_error = str(error)
 
     return {
-        "service": "OntologyAgent-brain-py",
+        "service": "OntologyAgent-agent",
         "status": "ok",
         "x402Network": os.getenv("X402_NETWORK", BASE_SEPOLIA_NETWORK),
         "x402PayToConfigured": bool(os.getenv("X402_PAY_TO")),
-        "executorMcpUrl": EXECUTOR_MCP_URL,
-        "executorTools": executor_tools,
-        "executorError": executor_error,
+        "chainMcpUrl": CHAIN_MCP_URL,
+        "chainTools": chain_tools,
+        "chainError": chain_error,
         "freqtradeMcpUrl": FREQTRADE_MCP_URL,
         "freqtradeTools": freqtrade_tools,
         "freqtradeError": freqtrade_error,

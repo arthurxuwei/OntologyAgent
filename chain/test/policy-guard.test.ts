@@ -6,7 +6,7 @@ import { PolicyGuard } from "../src/policies/policy-guard.js";
 
 test("PolicyGuard allows whitelisted amounts within limits", () => {
   const config = loadConfig({
-    EXECUTOR_MOCK_CHAIN: "true",
+    CHAIN_MOCK: "true",
     WHITELISTED_RECIPIENTS: "0x2222222222222222222222222222222222222222",
   });
   const guard = new PolicyGuard(config.policy, config.x402);
@@ -23,7 +23,7 @@ test("PolicyGuard allows whitelisted amounts within limits", () => {
 
 test("PolicyGuard rejects addresses outside whitelist", () => {
   const config = loadConfig({
-    EXECUTOR_MOCK_CHAIN: "true",
+    CHAIN_MOCK: "true",
   });
   const guard = new PolicyGuard(config.policy, config.x402);
 
@@ -34,13 +34,13 @@ test("PolicyGuard rejects addresses outside whitelist", () => {
         "0x2222222222222222222222222222222222222222",
         1n,
       ),
-    /Address not allowed by executor whitelist/,
+    /Address not allowed by chain whitelist/,
   );
 });
 
 test("PolicyGuard authorizes x402 Base Sepolia USDC within limits", () => {
   const config = loadConfig({
-    EXECUTOR_MOCK_CHAIN: "true",
+    CHAIN_MOCK: "true",
     WHITELISTED_RECIPIENTS: "0x2222222222222222222222222222222222222222",
   });
   const guard = new PolicyGuard(config.policy, config.x402);
@@ -58,7 +58,7 @@ test("PolicyGuard authorizes x402 Base Sepolia USDC within limits", () => {
 
 test("PolicyGuard rejects x402 asset outside configured USDC", () => {
   const config = loadConfig({
-    EXECUTOR_MOCK_CHAIN: "true",
+    CHAIN_MOCK: "true",
     WHITELISTED_RECIPIENTS: "0x2222222222222222222222222222222222222222",
   });
   const guard = new PolicyGuard(config.policy, config.x402);
