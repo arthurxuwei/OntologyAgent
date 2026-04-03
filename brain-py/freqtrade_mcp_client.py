@@ -1,0 +1,89 @@
+from __future__ import annotations
+
+import json
+from typing import Any, Awaitable, Callable, Optional
+
+from mcp import ClientSession
+from mcp.client.streamable_http import streamable_http_client
+
+
+class FreqtradeMcpClientError(Exception):
+    pass
+
+
+ToolCaller = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
+ToolLister = Callable[[], Awaitable[list[str]]]
+
+
+class FreqtradeMcpClient:
+    def __init__(
+        self,
+        server_url: str,
+        *,
+        tool_caller: Optional[ToolCaller] = None,
+        tool_lister: Optional[ToolLister] = None,
+    ) -> None:
+        self.server_url = server_url if server_url.endswith("/") else f"{server_url}/"
+        self._tool_caller = tool_caller
+        self._tool_lister = tool_lister
+
+    async def list_tools(self) -> list[str]:
+        if self._tool_lister is not None:
+            return await self._tool_lister()
+
+        async with streamable_http_client(self.server_url) as (
+            read_stream,
+            write_stream,
+            _,
+        ):
+            async with ClientSession(read_stream, write_stream) as session:
+                await session.initialize()
+                response = await session.list_tools()
+                return [tool.name for tool in response.tools]
+
+    async def call_tool(
+        self,
+        tool_name: str,
+        arguments: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
+        if self._tool_caller is not None:
+            return await self._tool_caller(tool_name, arguments or {})
+
+        async with streamable_http_client(self.server_url) as (
+            read_stream,
+            write_stream,
+            _,
+        ):
+            async with ClientSession(read_stream, write_stream) as session:
+                await session.initialize()
+                response = await session.call_tool(tool_name, arguments or {})
+                return normalize_tool_response(response)
+
+
+def normalize_tool_response(response: Any) -> dict[str, Any]:
+    structured_content = getattr(response, "structuredContent", None)
+    if isinstance(structured_content, dict):
+        return structured_content
+
+    content = getattr(response, "content", None)
+    if not isinstance(content, list):
+        return {"raw": content}
+
+    text_fragments: list[str] = []
+    for item in content:
+        text = getattr(item, "text", None)
+        if isinstance(text, str) and text:
+            text_fragments.append(text)
+
+    if not text_fragments:
+        return {"raw": content}
+
+    combined = "\n".join(text_fragments).strip()
+    try:
+        parsed = json.loads(combined)
+    except json.JSONDecodeError:
+        return {"text": combined}
+
+    if isinstance(parsed, dict):
+        return parsed
+    return {"value": parsed}

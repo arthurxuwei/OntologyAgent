@@ -4,6 +4,7 @@
 
 - `brain-py`：Python 业务逻辑（FastAPI），负责 Agent 和 x402 seller 资源
 - `executor-ts`：TypeScript 链上执行器（Fastify），负责链执行和 x402 buyer flow
+- `freqtrade`：单容器 Freqtrade + MCP skill provider，负责量化策略和 CEX 交易技能
 
 ## 同时启动（Docker Compose）
 
@@ -28,6 +29,8 @@ docker compose up -d
 - `brain-py` x402 seller 演示资源：`GET /x402/demo-resource`
 - `executor-ts` 健康检查：`http://localhost:3000/health`
 - `executor-ts` 接口：`POST /transfers/sign`、`POST /executions/submit`、`POST /user-operations/submit`、`POST /x402/fetch`
+- `freqtrade` REST API：`http://localhost:8080/api/v1`
+- `freqtrade` MCP：`http://localhost:8090/mcp/`
 
 ## 一键 curl 演示
 
@@ -62,6 +65,27 @@ DEMO_X402_PAYMENT_TO=0x... \
 X402_PAY_TO=0x... \
 ./scripts/demo-curl.sh
 ```
+
+## Freqtrade MCP 演示
+
+在根目录执行：
+
+```bash
+./scripts/demo-freqtrade-mcp.sh
+```
+
+这个脚本会：
+
+- 启动 `brain-py`、`executor-ts`、`freqtrade`
+- 检查 `freqtrade` REST API 是否就绪
+- 让 `brain-py` 通过 MCP 发现投资工具
+- 调一次 `get_trading_status`，验证 agent skill provider 接通
+
+当前设计里：
+
+- `brain-py` 是 agent 本体
+- `executor-ts` 只做链上技能
+- `freqtrade` 作为单容器 MCP skill provider 暴露投资工具
 
 ## Simplescraper live x402 验证
 
@@ -124,6 +148,12 @@ PRIVATE_KEY=0x... \
 - `X402_USDC_DAILY_CAP`：x402 每日 USDC 上限（默认 `2.0`）
 - `DEMO_SIGN_TRANSFER_TO`：演示脚本里 `/transfers/sign` 与 `/executions/submit` 使用的测试链地址
 - `DEMO_X402_PAYMENT_TO`：演示脚本里 x402 收款地址默认值
+- `FREQTRADE_MCP_URL`：`brain-py` 访问 Freqtrade MCP 的地址（默认 `http://freqtrade:8090/mcp/`）
+- `FREQTRADE_USERNAME`：Freqtrade REST API 用户名（默认 `freqtrade`）
+- `FREQTRADE_PASSWORD`：Freqtrade REST API 密码（默认 `freqtrade`）
+- `FREQTRADE_TIMEOUT_SECONDS`：Freqtrade API / MCP 调用超时时间（默认 `20`）
+- `FREQTRADE_ALLOW_WRITE_ACTIONS`：是否允许 `start/stop/force_enter/force_exit` 这类写操作（默认 `true`）
+- `FREQTRADE_STRATEGY_NAME`：默认启动策略（默认 `SimpleAgentStrategy`）
 
 ## `POST /transfers/sign`
 
@@ -210,6 +240,18 @@ PRIVATE_KEY=0x... \
 - `executor-ts /x402/fetch`
 - `executor-ts /executions/submit`
 - `executor-ts /user-operations/submit`
+- `freqtrade` MCP tools，例如：
+  - `get_trading_status`
+  - `list_strategies`
+  - `get_open_trades`
+  - `get_closed_trades`
+  - `get_performance_summary`
+  - `start_bot`
+  - `stop_bot`
+  - `pause_trading`
+  - `resume_trading`
+  - `force_enter_trade`
+  - `force_exit_trade`
 
 请求示例：
 

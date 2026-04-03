@@ -10,11 +10,15 @@ services:
     environment:
       EXECUTOR_BASE_URL: ${EXECUTOR_BASE_URL:-http://executor-ts:3000}
       EXECUTOR_TIMEOUT_SECONDS: ${EXECUTOR_TIMEOUT_SECONDS:-20}
+      FREQTRADE_MCP_URL: ${FREQTRADE_MCP_URL:-http://freqtrade:8090/mcp/}
       X402_PAY_TO: ${X402_PAY_TO:-}
       X402_PRICE: ${X402_PRICE:-0.01}
       X402_NETWORK: ${X402_NETWORK:-eip155:84532}
       X402_FACILITATOR_URL: ${X402_FACILITATOR_URL:-https://x402.org/facilitator}
     restart: unless-stopped
+    depends_on:
+      - executor-ts
+      - freqtrade
 
   executor-ts:
     build:
@@ -38,4 +42,27 @@ services:
       X402_BUYER_PRIVATE_KEY: ${X402_BUYER_PRIVATE_KEY:-}
       X402_USDC_SINGLE_CAP: ${X402_USDC_SINGLE_CAP:-1.0}
       X402_USDC_DAILY_CAP: ${X402_USDC_DAILY_CAP:-2.0}
+    restart: unless-stopped
+
+  freqtrade:
+    build:
+      context: ./freqtrade
+    container_name: freqtrade
+    ports:
+      - "8080:8080"
+      - "8090:8090"
+    environment:
+      FREQTRADE_USERNAME: ${FREQTRADE_USERNAME:-freqtrade}
+      FREQTRADE_PASSWORD: ${FREQTRADE_PASSWORD:-freqtrade}
+      FREQTRADE_TIMEOUT_SECONDS: ${FREQTRADE_TIMEOUT_SECONDS:-20}
+      FREQTRADE_ALLOW_WRITE_ACTIONS: ${FREQTRADE_ALLOW_WRITE_ACTIONS:-true}
+      FREQTRADE_API_URL: ${FREQTRADE_API_URL:-http://127.0.0.1:8080/api/v1}
+      FREQTRADE_MCP_PORT: ${FREQTRADE_MCP_PORT:-8090}
+      FREQTRADE_CONFIG_PATH: /app/config/config.json
+      FREQTRADE_STRATEGY_PATH: /app/strategies
+      FREQTRADE_STRATEGY_NAME: ${FREQTRADE_STRATEGY_NAME:-SimpleAgentStrategy}
+    volumes:
+      - ./freqtrade/config:/app/config
+      - ./freqtrade/strategies:/app/strategies
+      - ./freqtrade/data:/app/data
     restart: unless-stopped
