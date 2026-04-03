@@ -1,7 +1,7 @@
 import { parseEther, parseUnits } from "ethers";
 
 export type AppConfig = {
-  service: {
+  mcp: {
     port: number;
   };
   network: {
@@ -143,8 +143,8 @@ export const HARDCODED_SINGLE_TX_CAP_WEI = parseEther("1.0");
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   return {
-    service: {
-      port: parseNumberEnv(env, "EXECUTOR_PORT", 3000),
+    mcp: {
+      port: parseNumberEnv(env, "EXECUTOR_MCP_PORT", 8091),
     },
     network: {
       rpcUrl: env.RPC_URL ?? DEFAULT_TESTNET_RPC_URL,

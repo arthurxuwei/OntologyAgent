@@ -13,7 +13,7 @@ from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
-from executor_client import ExecutorClient, ExecutorClientError
+from executor_mcp_client import ExecutorMcpClient
 from freqtrade_mcp_client import FreqtradeMcpClient, FreqtradeMcpClientError
 from x402_seller import (
     BASE_SEPOLIA_NETWORK,
@@ -25,12 +25,12 @@ from x402_seller import (
 app = FastAPI(title="OntologyAgent brain-py")
 
 SYSTEM_PROMPT = (
-    "你是一个金融助理。链上相关动作只能通过 TS 执行器工具完成；"
+    "你是一个金融助理。链上相关动作只能通过 executor-ts MCP 工具完成；"
     "中心化交易和量化相关动作只能通过 Freqtrade MCP 工具完成。"
-    "执行任何会改变 Freqtrade 运行状态或交易状态的动作前，先清晰总结当前状态、"
+    "执行任何会改变链上状态、Freqtrade 运行状态或交易状态的动作前，先清晰总结当前状态、"
     "即将执行的动作和影响对象，然后再调用工具。"
 )
-EXECUTOR_BASE_URL = os.getenv("EXECUTOR_BASE_URL", "http://executor-ts:3000")
+EXECUTOR_MCP_URL = os.getenv("EXECUTOR_MCP_URL", "http://executor-ts:8091/mcp/")
 REQUEST_TIMEOUT_SECONDS = float(os.getenv("EXECUTOR_TIMEOUT_SECONDS", "20"))
 FREQTRADE_MCP_URL = os.getenv("FREQTRADE_MCP_URL", "http://freqtrade:8090/mcp/")
 
@@ -45,10 +45,10 @@ class SignTransferIntent(BaseModel):
     )
 
 
-class SwapTxIntent(BaseModel):
+class ExecutionIntent(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    to: str = Field(description="swap 目标合约地址")
+    to: str = Field(description="交易目标地址")
     valueEth: str = Field(
         default="0",
         description="附带 ETH 数量（字符串）",
@@ -71,18 +71,13 @@ class UserOperationIntent(BaseModel):
 class X402FetchIntent(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    apiUrl: HttpUrl = Field(description="x402 上游 API URL")
-    apiMethod: Literal["GET", "POST", "PUT", "PATCH", "DELETE"] = Field(
+    url: HttpUrl = Field(description="x402 上游 API URL")
+    method: Literal["GET", "POST", "PUT", "PATCH", "DELETE"] = Field(
         default="GET",
         description="请求方法",
     )
-    apiHeaders: Optional[dict[str, str]] = Field(default=None, description="可选请求头")
-    apiBody: Optional[Any] = Field(default=None, description="可选请求体")
-    swapTx: Optional[SwapTxIntent] = Field(default=None, description="可选后续链上交易参数")
-    userOperation: Optional[UserOperationIntent] = Field(
-        default=None,
-        description="可选 ERC-4337 UserOperation",
-    )
+    headers: Optional[dict[str, str]] = Field(default=None, description="可选请求头")
+    body: Optional[Any] = Field(default=None, description="可选请求体")
 
 
 class AgentRunRequest(BaseModel):
@@ -122,11 +117,8 @@ class ForceExitTradeIntent(BaseModel):
 
 
 @lru_cache(maxsize=1)
-def get_executor_client() -> ExecutorClient:
-    return ExecutorClient(
-        base_url=EXECUTOR_BASE_URL,
-        timeout_seconds=REQUEST_TIMEOUT_SECONDS,
-    )
+def get_executor_mcp_client() -> ExecutorMcpClient:
+    return ExecutorMcpClient(EXECUTOR_MCP_URL)
 
 
 @lru_cache(maxsize=1)
@@ -151,60 +143,87 @@ def get_x402_seller_service() -> X402SellerService:
     )
 
 
-def sign_transfer_tool(to: str, amountEth: str) -> dict[str, Any]:
-    intent = SignTransferIntent(to=to, amountEth=amountEth)
-    return get_executor_client().sign_transfer(
-        to=intent.to,
-        amount_eth=intent.amountEth,
-    )
+def _unwrap_mcp_result(tool_name: str, result: dict[str, Any]) -> dict[str, Any]:
+    if result.get("isError"):
+        raise RuntimeError(f"{tool_name} failed: {result.get('error', result)}")
+    return result
 
 
-def execute_swap_tool(
-    apiUrl: str,
-    apiMethod: str = "GET",
-    apiHeaders: Optional[dict[str, str]] = None,
-    apiBody: Optional[Any] = None,
-    swapTx: Optional[dict[str, Any]] = None,
-    userOperation: Optional[dict[str, Any]] = None,
-) -> dict[str, Any]:
-    intent = X402FetchIntent(
-        apiUrl=apiUrl,
-        apiMethod=apiMethod,
-        apiHeaders=apiHeaders,
-        apiBody=apiBody,
-        swapTx=swapTx,
-        userOperation=userOperation,
-    )
-    client = get_executor_client()
-
-    payment_result = client.x402_fetch(
-        url=str(intent.apiUrl),
-        method=intent.apiMethod,
-        headers=intent.apiHeaders,
-        body=intent.apiBody,
-    )
-
-    execution_result = None
-    if intent.swapTx is not None:
-        execution_result = client.submit_execution(
-            to=intent.swapTx.to,
-            value_eth=intent.swapTx.valueEth,
-            data=intent.swapTx.data,
-        )
-
-    user_operation_result = None
-    if intent.userOperation is not None:
-        user_operation_result = client.submit_user_operation(
-            target=intent.userOperation.target,
-            max_cost_eth=intent.userOperation.maxCostEth,
-            raw=intent.userOperation.raw,
-        )
+async def call_executor_tool(tool_name: str, arguments: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    try:
+        result = await get_executor_mcp_client().call_tool(tool_name, arguments or {})
+    except Exception as error:
+        raise RuntimeError(f"Executor MCP tool failed: {tool_name}: {error}") from error
 
     return {
-        "payment": payment_result,
-        "execution": execution_result,
-        "userOperation": user_operation_result,
+        "tool": tool_name,
+        "result": _unwrap_mcp_result(tool_name, result),
     }
+
+
+async def chain_sign_transfer_tool(to: str, amountEth: str) -> dict[str, Any]:
+    intent = SignTransferIntent(to=to, amountEth=amountEth)
+    return await call_executor_tool(
+        "chain_sign_transfer",
+        {
+            "to": intent.to,
+            "amountEth": intent.amountEth,
+        },
+    )
+
+
+async def chain_submit_execution_tool(
+    to: str,
+    valueEth: str = "0",
+    data: Optional[str] = None,
+) -> dict[str, Any]:
+    intent = ExecutionIntent(to=to, valueEth=valueEth, data=data)
+    payload: dict[str, Any] = {
+        "to": intent.to,
+        "valueEth": intent.valueEth,
+    }
+    if intent.data is not None:
+        payload["data"] = intent.data
+    return await call_executor_tool("chain_submit_execution", payload)
+
+
+async def chain_submit_user_operation_tool(
+    target: str,
+    maxCostEth: str,
+    raw: dict[str, Any],
+) -> dict[str, Any]:
+    intent = UserOperationIntent(target=target, maxCostEth=maxCostEth, raw=raw)
+    return await call_executor_tool(
+        "chain_submit_user_operation",
+        {
+            "target": intent.target,
+            "maxCostEth": intent.maxCostEth,
+            "raw": intent.raw,
+        },
+    )
+
+
+async def chain_x402_fetch_tool(
+    url: str,
+    method: str = "GET",
+    headers: Optional[dict[str, str]] = None,
+    body: Optional[Any] = None,
+) -> dict[str, Any]:
+    intent = X402FetchIntent(
+        url=url,
+        method=method,
+        headers=headers,
+        body=body,
+    )
+    payload: dict[str, Any] = {
+        "url": str(intent.url),
+        "method": intent.method,
+    }
+    if intent.headers is not None:
+        payload["headers"] = intent.headers
+    if intent.body is not None:
+        payload["body"] = intent.body
+    return await call_executor_tool("chain_x402_fetch", payload)
 
 
 async def call_freqtrade_tool(tool_name: str, arguments: Optional[dict[str, Any]] = None) -> dict[str, Any]:
@@ -215,7 +234,7 @@ async def call_freqtrade_tool(tool_name: str, arguments: Optional[dict[str, Any]
 
     return {
         "tool": tool_name,
-        "result": result,
+        "result": _unwrap_mcp_result(tool_name, result),
     }
 
 
@@ -290,6 +309,30 @@ async def force_exit_trade_tool(
     return await call_freqtrade_tool("force_exit_trade", payload)
 
 
+EXECUTOR_TOOL_REGISTRY: dict[str, dict[str, Any]] = {
+    "chain_sign_transfer": {
+        "description": "签名 ETH 转账，但不广播。",
+        "args_schema": SignTransferIntent,
+        "coroutine": chain_sign_transfer_tool,
+    },
+    "chain_submit_execution": {
+        "description": "提交一笔普通链上交易。",
+        "args_schema": ExecutionIntent,
+        "coroutine": chain_submit_execution_tool,
+    },
+    "chain_submit_user_operation": {
+        "description": "提交一笔 ERC-4337 UserOperation。",
+        "args_schema": UserOperationIntent,
+        "coroutine": chain_submit_user_operation_tool,
+    },
+    "chain_x402_fetch": {
+        "description": "执行一次 x402 收费资源访问流程。",
+        "args_schema": X402FetchIntent,
+        "coroutine": chain_x402_fetch_tool,
+    },
+}
+
+
 FREQTRADE_TOOL_REGISTRY: dict[str, dict[str, Any]] = {
     "get_trading_status": {
         "description": "获取 Freqtrade bot 当前交易状态、运行状态和策略摘要。",
@@ -349,6 +392,27 @@ FREQTRADE_TOOL_REGISTRY: dict[str, dict[str, Any]] = {
 }
 
 
+def discover_executor_tools() -> list[StructuredTool]:
+    try:
+        available_tools = asyncio.run(get_executor_mcp_client().list_tools())
+    except Exception as error:
+        raise RuntimeError(f"EXECUTOR_MCP_URL is configured but tools could not be discovered: {error}") from error
+
+    tools: list[StructuredTool] = []
+    for tool_name, spec in EXECUTOR_TOOL_REGISTRY.items():
+        if tool_name not in available_tools:
+            continue
+        tools.append(
+            StructuredTool.from_function(
+                name=tool_name,
+                description=spec["description"],
+                args_schema=spec["args_schema"],
+                coroutine=spec["coroutine"],
+            )
+        )
+    return tools
+
+
 def discover_freqtrade_tools() -> list[StructuredTool]:
     try:
         available_tools = asyncio.run(get_freqtrade_mcp_client().list_tools())
@@ -371,22 +435,7 @@ def discover_freqtrade_tools() -> list[StructuredTool]:
 
 
 def build_tools() -> list[StructuredTool]:
-    sign_transfer = StructuredTool.from_function(
-        name="sign_transfer",
-        description="签名 ETH 转账（不广播），仅用于资金移动相关需求。",
-        func=sign_transfer_tool,
-        args_schema=SignTransferIntent,
-    )
-    execute_swap = StructuredTool.from_function(
-        name="execute_swap",
-        description=(
-            "访问 x402 收费资源，并可选在付费成功后提交链上交易或 ERC-4337 "
-            "UserOperation。"
-        ),
-        func=execute_swap_tool,
-        args_schema=X402FetchIntent,
-    )
-    return [sign_transfer, execute_swap, *discover_freqtrade_tools()]
+    return [*discover_executor_tools(), *discover_freqtrade_tools()]
 
 
 @lru_cache(maxsize=1)
@@ -421,6 +470,13 @@ def _normalize_message_content(content: Any) -> str:
 
 @app.get("/health")
 def health() -> dict[str, Any]:
+    executor_tools: list[str] = []
+    executor_error: Optional[str] = None
+    try:
+        executor_tools = asyncio.run(get_executor_mcp_client().list_tools())
+    except Exception as error:
+        executor_error = str(error)
+
     freqtrade_tools: list[str] = []
     freqtrade_error: Optional[str] = None
     try:
@@ -433,6 +489,9 @@ def health() -> dict[str, Any]:
         "status": "ok",
         "x402Network": os.getenv("X402_NETWORK", BASE_SEPOLIA_NETWORK),
         "x402PayToConfigured": bool(os.getenv("X402_PAY_TO")),
+        "executorMcpUrl": EXECUTOR_MCP_URL,
+        "executorTools": executor_tools,
+        "executorError": executor_error,
         "freqtradeMcpUrl": FREQTRADE_MCP_URL,
         "freqtradeTools": freqtrade_tools,
         "freqtradeError": freqtrade_error,

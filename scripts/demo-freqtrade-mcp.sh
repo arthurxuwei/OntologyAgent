@@ -30,6 +30,31 @@ wait_for_url() {
   return 1
 }
 
+wait_for_executor_mcp() {
+  local max_retries="${1:-60}"
+
+  for ((i=1; i<=max_retries; i+=1)); do
+    if docker compose exec -T brain-py python - <<'PY' >/dev/null 2>&1
+import asyncio
+from executor_mcp_client import ExecutorMcpClient
+
+async def main():
+    tools = await ExecutorMcpClient("http://executor-ts:8091/mcp/").list_tools()
+    assert "chain_sign_transfer" in tools
+
+asyncio.run(main())
+PY
+    then
+      echo "✅ executor-mcp is ready"
+      return 0
+    fi
+    sleep 1
+  done
+
+  echo "❌ executor-mcp failed to become ready"
+  return 1
+}
+
 export FREQTRADE_USERNAME="${FREQTRADE_USERNAME:-freqtrade}"
 export FREQTRADE_PASSWORD="${FREQTRADE_PASSWORD:-freqtrade}"
 export FREQTRADE_ALLOW_WRITE_ACTIONS="${FREQTRADE_ALLOW_WRITE_ACTIONS:-true}"
@@ -37,7 +62,7 @@ export FREQTRADE_ALLOW_WRITE_ACTIONS="${FREQTRADE_ALLOW_WRITE_ACTIONS:-true}"
 docker compose up -d --build
 
 wait_for_url "http://localhost:8000/health" "brain-py"
-wait_for_url "http://localhost:3000/health" "executor-ts"
+wait_for_executor_mcp
 wait_for_url "http://localhost:8080/api/v1/ping" "freqtrade-api" "${FREQTRADE_USERNAME}" "${FREQTRADE_PASSWORD}"
 
 echo

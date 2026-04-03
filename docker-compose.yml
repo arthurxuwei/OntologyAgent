@@ -8,7 +8,7 @@ services:
     ports:
       - "8000:8000"
     environment:
-      EXECUTOR_BASE_URL: ${EXECUTOR_BASE_URL:-http://executor-ts:3000}
+      EXECUTOR_MCP_URL: ${EXECUTOR_MCP_URL:-http://executor-ts:8091/mcp/}
       EXECUTOR_TIMEOUT_SECONDS: ${EXECUTOR_TIMEOUT_SECONDS:-20}
       FREQTRADE_MCP_URL: ${FREQTRADE_MCP_URL:-http://freqtrade:8090/mcp/}
       X402_PAY_TO: ${X402_PAY_TO:-}
@@ -25,9 +25,9 @@ services:
       context: ./executor-ts
     container_name: executor-ts
     ports:
-      - "3000:3000"
+      - "8091:8091"
     environment:
-      EXECUTOR_PORT: ${EXECUTOR_PORT:-3000}
+      EXECUTOR_MCP_PORT: ${EXECUTOR_MCP_PORT:-8091}
       PRIVATE_KEY: ${PRIVATE_KEY:-}
       RPC_URL: ${RPC_URL:-https://base-sepolia-rpc.publicnode.com}
       CHAIN_ID: ${CHAIN_ID:-84532}

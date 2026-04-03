@@ -7,7 +7,7 @@ from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
 
-class FreqtradeMcpClientError(Exception):
+class ExecutorMcpClientError(Exception):
     pass
 
 
@@ -15,7 +15,7 @@ ToolCaller = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
 ToolLister = Callable[[], Awaitable[list[str]]]
 
 
-class FreqtradeMcpClient:
+class ExecutorMcpClient:
     def __init__(
         self,
         server_url: str,

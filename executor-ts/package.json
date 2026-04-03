@@ -9,11 +9,12 @@
     "test": "node --import tsx --test test/**/*.test.ts"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@x402/core": "^2.8.0",
     "@x402/evm": "^2.8.0",
     "@x402/fetch": "^2.8.0",
     "ethers": "^6.15.0",
-    "fastify": "^5.6.0",
+    "express": "^5.2.1",
     "viem": "^2.47.6",
     "zod": "^4.1.11"
   },

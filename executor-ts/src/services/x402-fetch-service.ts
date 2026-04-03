@@ -146,8 +146,20 @@ export class X402FetchService {
   }
 }
 
-function normalizeHeaders(headers?: Record<string, string>): Record<string, string> {
-  return { ...(headers ?? {}) };
+function normalizeHeaders(headers?: HeadersInit): Record<string, string> {
+  if (headers === undefined) {
+    return {};
+  }
+
+  if (headers instanceof Headers) {
+    return Object.fromEntries(headers.entries());
+  }
+
+  if (Array.isArray(headers)) {
+    return Object.fromEntries(headers);
+  }
+
+  return { ...headers };
 }
 
 async function parseResponsePayload(response: Response): Promise<{

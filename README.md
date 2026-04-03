@@ -1,246 +1,45 @@
 # OntologyAgent
 
-项目包含两个主要目录：
+当前仓库由三条能力线组成：
 
-- `brain-py`：Python 业务逻辑（FastAPI），负责 Agent 和 x402 seller 资源
-- `executor-ts`：TypeScript 链上执行器（Fastify），负责链执行和 x402 buyer flow
+- `brain-py`：Python Agent 本体，负责 tool orchestration、x402 seller 资源和 `/agent/run`
+- `executor-ts`：TypeScript 链上 MCP skill provider，负责钱包、执行、UserOperation 和 x402 buyer flow
 - `freqtrade`：单容器 Freqtrade + MCP skill provider，负责量化策略和 CEX 交易技能
 
-## 同时启动（Docker Compose）
+## 同时启动
 
 在仓库根目录执行：
 
 ```bash
-docker compose up --build
+docker compose up -d --build
 ```
 
-首次构建完成后，日常启动可直接用：
-
-```bash
-docker compose up -d
-```
-
-仅当 `brain-py/requirements.txt` 或 `executor-ts/package-lock.json` 变化时，再执行 `docker compose up --build -d`。
-
-启动后：
+启动后默认可用的入口：
 
 - `brain-py` 健康检查：`http://localhost:8000/health`
 - `brain-py` Agent 接口：`POST /agent/run`
 - `brain-py` x402 seller 演示资源：`GET /x402/demo-resource`
-- `executor-ts` 健康检查：`http://localhost:3000/health`
-- `executor-ts` 接口：`POST /transfers/sign`、`POST /executions/submit`、`POST /user-operations/submit`、`POST /x402/fetch`
+- `executor-ts` MCP：`http://localhost:8091/mcp/`
 - `freqtrade` REST API：`http://localhost:8080/api/v1`
 - `freqtrade` MCP：`http://localhost:8090/mcp/`
 
-## 一键 curl 演示
-
-在根目录执行：
-
-```bash
-./scripts/demo-curl.sh
-```
-
-脚本会自动：
-
-- 启动 `docker compose`
-- 等待 `brain-py` 与 `executor-ts` 就绪
-- 调用 `POST /transfers/sign`
-- 调用 `POST /x402/fetch`，演示标准 x402 `402 -> PAYMENT-SIGNATURE -> PAYMENT-RESPONSE`
-- 调用 `POST /executions/submit`
-
-默认直连 Base Sepolia，并将 x402 默认网络设置为 `eip155:84532`。
-
-如需本地 mock 验证：
-
-```bash
-EXECUTOR_MOCK_CHAIN=true ./scripts/demo-curl.sh
-```
-
-如需未来做 live 验证，至少要准备：
-
-```bash
-PRIVATE_KEY=0x... \
-DEMO_SIGN_TRANSFER_TO=0x... \
-DEMO_X402_PAYMENT_TO=0x... \
-X402_PAY_TO=0x... \
-./scripts/demo-curl.sh
-```
-
-## Freqtrade MCP 演示
-
-在根目录执行：
-
-```bash
-./scripts/demo-freqtrade-mcp.sh
-```
-
-这个脚本会：
-
-- 启动 `brain-py`、`executor-ts`、`freqtrade`
-- 检查 `freqtrade` REST API 是否就绪
-- 让 `brain-py` 通过 MCP 发现投资工具
-- 调一次 `get_trading_status`，验证 agent skill provider 接通
+## MCP 架构
 
 当前设计里：
 
 - `brain-py` 是 agent 本体
-- `executor-ts` 只做链上技能
-- `freqtrade` 作为单容器 MCP skill provider 暴露投资工具
+- 链上动作只能通过 `executor-ts` MCP tools 完成
+- 中心化交易和量化动作只能通过 `freqtrade` MCP tools 完成
+- `executor-ts` 不再提供 Fastify HTTP 业务接口
 
-## Simplescraper live x402 验证
+`brain-py` 启动后会同时发现两组内部工具：
 
-如果你要对真实外部 x402 服务做 live 验证，可以单独跑：
-
-```bash
-PRIVATE_KEY=0x... \
-./scripts/live-x402-simplescraper.sh
-```
-
-脚本默认会请求：
-
-- `POST https://api.simplescraper.io/v1/extract`
-- 抓取目标 `https://example.com`
-
-默认使用的 Simplescraper x402 收款地址是当前实测返回的：
-
-- `0x6C01bea8570FDFDa471992d68e5C284A69A6B46d`
-
-如需覆盖默认值，可传：
-
-- `SIMPLESCRAPER_ENDPOINT`
-- `SIMPLESCRAPER_TARGET_URL`
-- `SIMPLESCRAPER_PAY_TO`
-
-## 默认链与协议
-
-- 默认 RPC：`https://base-sepolia-rpc.publicnode.com`
-- 默认链 ID：`84532`
-- 默认 x402 网络：`eip155:84532`
-- 默认 facilitator：`https://x402.org/facilitator`
-- 默认 x402 资产：Base Sepolia USDC
-- seller/buyer 使用标准头：
-  - `PAYMENT-REQUIRED`
-  - `PAYMENT-SIGNATURE`
-  - `PAYMENT-RESPONSE`
-
-## 可选环境变量
-
-- `EXECUTOR_PORT`：执行器端口（默认 `3000`）
-- `PRIVATE_KEY`：执行器签名私钥；普通链执行和 x402 buyer 默认都可复用它
-- `RPC_URL`：链 RPC 地址（默认 `https://base-sepolia-rpc.publicnode.com`）
-- `CHAIN_ID`：期望连接的链 ID（默认 `84532`，即 Base Sepolia）
-- `DAILY_LIMIT`：每日可签名总额度（ETH，默认 `2.0`）
-- `SINGLE_TX_CAP`：单笔交易额度（ETH，默认 `1.0`，且受硬编码上限约束）
-- `WHITELISTED_RECIPIENTS`：额外白名单地址，逗号分隔
-- `EXECUTOR_MOCK_CHAIN`：是否使用模拟链执行（默认 `false`）
-- `BUNDLER_RPC_URL`：ERC-4337 Bundler RPC（可选）
-- `ENTRY_POINT_ADDRESS`：ERC-4337 EntryPoint（默认 `0x0576...1B57`）
-- `EXECUTOR_BASE_URL`：`brain-py` 调用 `executor-ts` 的基地址（默认 `http://executor-ts:3000`）
-- `EXECUTOR_TIMEOUT_SECONDS`：`brain-py` 调用 `executor-ts` 的超时时间秒数（默认 `20`）
-- `OPENAI_API_KEY`：`brain-py` LangChain Agent 使用的模型密钥
-- `BRAIN_AGENT_MODEL`：`brain-py` Agent 模型名（默认 `gpt-4o-mini`）
-- `X402_FACILITATOR_URL`：x402 facilitator 地址（默认 `https://x402.org/facilitator`）
-- `X402_NETWORK`：x402 CAIP-2 网络标识（默认 `eip155:84532`）
-- `X402_PAY_TO`：`brain-py` seller 收款地址
-- `X402_PRICE`：seller 演示资源价格（默认 `0.01`，也支持 `$0.01`）
-- `X402_BUYER_PRIVATE_KEY`：x402 buyer 专用私钥；为空时回退到 `PRIVATE_KEY`
-- `X402_USDC_SINGLE_CAP`：x402 单笔 USDC 上限（默认 `1.0`）
-- `X402_USDC_DAILY_CAP`：x402 每日 USDC 上限（默认 `2.0`）
-- `DEMO_SIGN_TRANSFER_TO`：演示脚本里 `/transfers/sign` 与 `/executions/submit` 使用的测试链地址
-- `DEMO_X402_PAYMENT_TO`：演示脚本里 x402 收款地址默认值
-- `FREQTRADE_MCP_URL`：`brain-py` 访问 Freqtrade MCP 的地址（默认 `http://freqtrade:8090/mcp/`）
-- `FREQTRADE_USERNAME`：Freqtrade REST API 用户名（默认 `freqtrade`）
-- `FREQTRADE_PASSWORD`：Freqtrade REST API 密码（默认 `freqtrade`）
-- `FREQTRADE_TIMEOUT_SECONDS`：Freqtrade API / MCP 调用超时时间（默认 `20`）
-- `FREQTRADE_ALLOW_WRITE_ACTIONS`：是否允许 `start/stop/force_enter/force_exit` 这类写操作（默认 `true`）
-- `FREQTRADE_STRATEGY_NAME`：默认启动策略（默认 `SimpleAgentStrategy`）
-
-## `POST /transfers/sign`
-
-签名原生转账（不广播）：
-
-```json
-{
-  "to": "0x000000000000000000000000000000000000dEaD",
-  "amountEth": "0.01"
-}
-```
-
-返回签名后的原始交易、tx hash，以及策略引擎快照。
-
-## `POST /executions/submit`
-
-提交一笔通用链上交易：
-
-```json
-{
-  "to": "0x000000000000000000000000000000000000dEaD",
-  "valueEth": "0",
-  "data": "0x"
-}
-```
-
-## `POST /user-operations/submit`
-
-提交一笔 ERC-4337 UserOperation：
-
-```json
-{
-  "target": "0x1111111111111111111111111111111111111111",
-  "maxCostEth": "0.01",
-  "raw": {
-    "sender": "0x...",
-    "nonce": "0x1",
-    "initCode": "0x",
-    "callData": "0x",
-    "callGasLimit": "0x5208",
-    "verificationGasLimit": "0x100000",
-    "preVerificationGas": "0xc350",
-    "maxFeePerGas": "0x59682f00",
-    "maxPriorityFeePerGas": "0x59682f00",
-    "paymasterAndData": "0x",
-    "signature": "0x..."
-  }
-}
-```
-
-## `POST /x402/fetch`
-
-通过官方 x402 buyer flow 访问付费资源：
-
-```json
-{
-  "url": "http://brain-py:8000/x402/demo-resource",
-  "method": "GET"
-}
-```
-
-返回：
-
-- 上游最终状态码和响应体
-- 选中的 `accepts` requirement 摘要
-- 解析后的 `PAYMENT-RESPONSE`
-- x402 USDC 策略快照
-
-## `GET /x402/demo-resource`
-
-这是 `brain-py` 内置的标准 x402 seller 演示资源。
-
-- 首次访问会返回 `402 Payment Required`
-- 响应头里包含 `PAYMENT-REQUIRED`
-- buyer 成功重试后，返回业务 JSON，并带 `PAYMENT-RESPONSE`
-
-在 `EXECUTOR_MOCK_CHAIN=true` 的本地演示场景下，脚本会自动把 facilitator 切到 `brain-py` 内置的 mock facilitator，便于非 live 回归。
-
-## `POST /agent/run`
-
-`brain-py` 内置了 LangGraph Agent，并通过 `StructuredTool` 调用：
-
-- `executor-ts /transfers/sign`
-- `executor-ts /x402/fetch`
-- `executor-ts /executions/submit`
-- `executor-ts /user-operations/submit`
-- `freqtrade` MCP tools，例如：
+- `executor-ts` MCP tools
+  - `chain_sign_transfer`
+  - `chain_submit_execution`
+  - `chain_submit_user_operation`
+  - `chain_x402_fetch`
+- `freqtrade` MCP tools
   - `get_trading_status`
   - `list_strategies`
   - `get_open_trades`
@@ -253,10 +52,142 @@ PRIVATE_KEY=0x... \
   - `force_enter_trade`
   - `force_exit_trade`
 
+## 演示脚本
+
+### Executor MCP 演示
+
+```bash
+./scripts/demo-executor-mcp.sh
+```
+
+这个脚本会：
+
+- 启动完整 compose 栈
+- 等待 `brain-py` 和 `executor-ts` MCP 就绪
+- 发现 executor MCP tools
+- 依次调用：
+  - `chain_sign_transfer`
+  - `chain_x402_fetch`
+  - `chain_submit_execution`
+  - `chain_submit_user_operation`
+
+如需本地 mock 验证：
+
+```bash
+EXECUTOR_MOCK_CHAIN=true ./scripts/demo-executor-mcp.sh
+```
+
+如需 live 测试，至少准备：
+
+```bash
+PRIVATE_KEY=0x... \
+DEMO_SIGN_TRANSFER_TO=0x... \
+DEMO_X402_PAYMENT_TO=0x... \
+X402_PAY_TO=0x... \
+./scripts/demo-executor-mcp.sh
+```
+
+### Freqtrade MCP 演示
+
+```bash
+./scripts/demo-freqtrade-mcp.sh
+```
+
+这个脚本会：
+
+- 启动 `brain-py`、`executor-ts`、`freqtrade`
+- 检查 `freqtrade` REST API 是否就绪
+- 让 `brain-py` 通过 MCP 发现投资工具
+- 调一次 `get_trading_status`
+
+### Simplescraper live x402 验证
+
+```bash
+PRIVATE_KEY=0x... \
+./scripts/live-x402-simplescraper.sh
+```
+
+脚本会通过 `executor-ts` MCP tool `chain_x402_fetch` 请求：
+
+- `POST https://api.simplescraper.io/v1/extract`
+
+默认抓取目标：
+
+- `https://example.com`
+
+## 默认链与协议
+
+- 默认 RPC：`https://base-sepolia-rpc.publicnode.com`
+- 默认链 ID：`84532`
+- 默认 x402 网络：`eip155:84532`
+- 默认 facilitator：`https://x402.org/facilitator`
+- 默认 x402 资产：Base Sepolia USDC
+- seller / buyer 使用标准头：
+  - `PAYMENT-REQUIRED`
+  - `PAYMENT-SIGNATURE`
+  - `PAYMENT-RESPONSE`
+
+## 关键环境变量
+
+### brain-py
+
+- `EXECUTOR_MCP_URL`：`brain-py` 访问链上 MCP 的地址，默认 `http://executor-ts:8091/mcp/`
+- `EXECUTOR_TIMEOUT_SECONDS`：请求相关超时，默认 `20`
+- `FREQTRADE_MCP_URL`：`brain-py` 访问 Freqtrade MCP 的地址，默认 `http://freqtrade:8090/mcp/`
+- `OPENAI_API_KEY`：Agent 模型密钥
+- `BRAIN_AGENT_MODEL`：Agent 模型名，默认 `gpt-4o-mini`
+- `X402_PAY_TO`：`brain-py` seller 收款地址
+- `X402_PRICE`：seller 演示资源价格，默认 `$0.01`
+- `X402_NETWORK`：seller CAIP-2 网络，默认 `eip155:84532`
+- `X402_FACILITATOR_URL`：seller 使用的 facilitator，默认 `https://x402.org/facilitator`
+
+### executor-ts
+
+- `EXECUTOR_MCP_PORT`：executor MCP 端口，默认 `8091`
+- `PRIVATE_KEY`：链上执行和 x402 buyer 默认签名私钥
+- `RPC_URL`：链 RPC 地址，默认 Base Sepolia
+- `CHAIN_ID`：期望连接的链 ID，默认 `84532`
+- `DAILY_LIMIT`：每日可执行总额度，默认 `2.0`
+- `SINGLE_TX_CAP`：单笔 ETH 额度上限，默认 `1.0`
+- `WHITELISTED_RECIPIENTS`：额外白名单地址，逗号分隔
+- `EXECUTOR_MOCK_CHAIN`：是否使用模拟链执行，默认 `false`
+- `BUNDLER_RPC_URL`：ERC-4337 Bundler RPC
+- `ENTRY_POINT_ADDRESS`：ERC-4337 EntryPoint
+- `X402_FACILITATOR_URL`：x402 facilitator 地址
+- `X402_NETWORK`：x402 CAIP-2 网络标识
+- `X402_BUYER_PRIVATE_KEY`：x402 buyer 专用私钥；为空时回退到 `PRIVATE_KEY`
+- `X402_USDC_SINGLE_CAP`：x402 单笔 USDC 上限，默认 `1.0`
+- `X402_USDC_DAILY_CAP`：x402 每日 USDC 上限，默认 `2.0`
+
+### freqtrade
+
+- `FREQTRADE_USERNAME`：Freqtrade REST API 用户名，默认 `freqtrade`
+- `FREQTRADE_PASSWORD`：Freqtrade REST API 密码，默认 `freqtrade`
+- `FREQTRADE_TIMEOUT_SECONDS`：Freqtrade API / MCP 调用超时，默认 `20`
+- `FREQTRADE_ALLOW_WRITE_ACTIONS`：是否允许写操作，默认 `true`
+- `FREQTRADE_STRATEGY_NAME`：默认策略，默认 `SimpleAgentStrategy`
+
+## `/agent/run`
+
+`brain-py` 内置 LangGraph Agent，会自动使用：
+
+- `executor-ts` 链上 MCP tools
+- `freqtrade` 投资 MCP tools
+
 请求示例：
 
 ```json
 {
-  "input": "访问 x402 demo 资源，然后根据返回结果决定是否继续执行链上动作"
+  "input": "先访问 x402 demo 资源，再决定是否提交链上执行"
 }
 ```
+
+## `GET /x402/demo-resource`
+
+这是 `brain-py` 内置的标准 x402 seller 演示资源：
+
+- 首次访问会返回 `402 Payment Required`
+- 响应头包含 `PAYMENT-REQUIRED`
+- buyer 成功重试后，返回业务 JSON，并带 `PAYMENT-RESPONSE`
+
+在 `EXECUTOR_MOCK_CHAIN=true` 的本地回归场景下，脚本会把 facilitator 切到 `brain-py` 内置 mock facilitator。

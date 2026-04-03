@@ -21,6 +21,31 @@ wait_for_url() {
   return 1
 }
 
+wait_for_executor_mcp() {
+  local max_retries="${1:-60}"
+
+  for ((i=1; i<=max_retries; i+=1)); do
+    if docker compose exec -T brain-py python - <<'PY' >/dev/null 2>&1
+import asyncio
+from executor_mcp_client import ExecutorMcpClient
+
+async def main():
+    tools = await ExecutorMcpClient("http://executor-ts:8091/mcp/").list_tools()
+    assert "chain_x402_fetch" in tools
+
+asyncio.run(main())
+PY
+    then
+      echo "✅ executor-mcp is ready"
+      return 0
+    fi
+    sleep 1
+  done
+
+  echo "❌ executor-mcp failed to become ready"
+  return 1
+}
+
 require_env() {
   local env_name="$1"
   if [[ -z "${!env_name:-}" ]]; then
@@ -53,26 +78,36 @@ echo "===> Starting live Base Sepolia stack for Simplescraper x402"
 docker compose up -d --build
 
 wait_for_url "http://localhost:8000/health" "brain-py"
-wait_for_url "http://localhost:3000/health" "executor-ts"
+wait_for_executor_mcp
 
 echo
-echo "===> Executor health"
-curl -sS "http://localhost:3000/health"
+echo "===> Brain health"
+curl -sS "http://localhost:8000/health"
 echo
 
 echo
 echo "===> Simplescraper live x402 fetch"
-curl -sS -X POST "http://localhost:3000/x402/fetch" \
-  -H "content-type: application/json" \
-  -d "{
-    \"url\": \"${SIMPLESCRAPER_ENDPOINT}\",
-    \"method\": \"POST\",
-    \"body\": {
-      \"url\": \"${SIMPLESCRAPER_TARGET_URL}\",
-      \"markdown\": true
-    }
-  }"
-echo
+docker compose exec -T brain-py python - <<PY
+import asyncio
+import json
+from executor_mcp_client import ExecutorMcpClient
+
+async def main():
+    result = await ExecutorMcpClient("http://executor-ts:8091/mcp/").call_tool(
+        "chain_x402_fetch",
+        {
+            "url": "${SIMPLESCRAPER_ENDPOINT}",
+            "method": "POST",
+            "body": {
+                "url": "${SIMPLESCRAPER_TARGET_URL}",
+                "markdown": True,
+            },
+        },
+    )
+    print(json.dumps(result, ensure_ascii=False))
+
+asyncio.run(main())
+PY
 
 echo
 echo "===> Done"
