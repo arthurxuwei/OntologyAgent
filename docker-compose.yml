@@ -11,10 +11,6 @@ services:
       CHAIN_MCP_URL: ${CHAIN_MCP_URL:-http://chain-mcp:8091/mcp/}
       CHAIN_TIMEOUT_SECONDS: ${CHAIN_TIMEOUT_SECONDS:-20}
       FREQTRADE_MCP_URL: ${FREQTRADE_MCP_URL:-http://freqtrade:8090/mcp/}
-      X402_PAY_TO: ${X402_PAY_TO:-}
-      X402_PRICE: ${X402_PRICE:-0.01}
-      X402_NETWORK: ${X402_NETWORK:-eip155:84532}
-      X402_FACILITATOR_URL: ${X402_FACILITATOR_URL:-https://x402.org/facilitator}
     restart: unless-stopped
     depends_on:
       - chain
@@ -48,6 +44,18 @@ services:
           - chain-mcp
     restart: unless-stopped
 
+  x402-seller:
+    build:
+      context: ./x402-seller
+    container_name: x402-seller
+    environment:
+      X402_PAY_TO: ${X402_PAY_TO:-}
+      X402_PRICE: ${X402_PRICE:-0.01}
+      X402_NETWORK: ${X402_NETWORK:-eip155:84532}
+      X402_FACILITATOR_URL: ${X402_FACILITATOR_URL:-https://x402.org/facilitator}
+      X402_TIMEOUT_SECONDS: ${X402_TIMEOUT_SECONDS:-20}
+    restart: unless-stopped
+
   freqtrade:
     build:
       context: ./freqtrade
@@ -69,4 +77,10 @@ services:
       - ./freqtrade/config:/app/config
       - ./freqtrade/strategies:/app/strategies
       - ./freqtrade/data:/app/data
+    restart: unless-stopped
+
+  x402-mock:
+    build:
+      context: ./x402-mock
+    container_name: x402-mock
     restart: unless-stopped

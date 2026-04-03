@@ -2,9 +2,14 @@
 
 当前仓库由三条能力线组成：
 
-- `agent`：Python Agent 本体，负责 tool orchestration、x402 seller 资源和 `/agent/run`
+- `agent`：Python Agent 本体，负责 tool orchestration 和 `/agent/run`
 - `chain`：TypeScript 链上 MCP skill provider，负责钱包、执行、UserOperation 和 x402 buyer flow
 - `freqtrade`：单容器 Freqtrade + MCP skill provider，负责量化策略和 CEX 交易技能
+
+另外还有一个仅用于本地测试的辅助服务：
+
+- `x402-seller`：独立的 x402 seller demo 资源服务
+- `x402-mock`：独立的 mock facilitator，用于 `CHAIN_MOCK=true` 的本地 x402 回归
 
 ## 同时启动
 
@@ -18,7 +23,7 @@ docker compose up -d --build
 
 - `agent` 健康检查：`http://localhost:8000/health`
 - `agent` Agent 接口：`POST /agent/run`
-- `agent` x402 seller 演示资源：`GET /x402/demo-resource`
+- `x402-seller` 演示资源：`GET /x402/demo-resource`
 - `chain` MCP：`http://localhost:8091/mcp/`
 - `freqtrade` REST API：`http://localhost:8080/api/v1`
 - `freqtrade` MCP：`http://localhost:8090/mcp/`
@@ -27,7 +32,7 @@ docker compose up -d --build
 
 当前设计里：
 
-- `agent` 是 agent 本体
+- `agent` 是 agent 本体，不承载 seller resource
 - 链上动作只能通过 `chain` MCP tools 完成
 - 中心化交易和量化动作只能通过 `freqtrade` MCP tools 完成
 - `chain` 不再提供 Fastify HTTP 业务接口
@@ -63,7 +68,7 @@ docker compose up -d --build
 这个脚本会：
 
 - 启动完整 compose 栈
-- 等待 `agent` 和 `chain` MCP 就绪
+- 等待 `agent`、`chain` 和 `x402-seller` 就绪
 - 发现 chain MCP tools
 - 依次调用：
   - `chain_sign_transfer`
@@ -136,11 +141,6 @@ PRIVATE_KEY=0x... \
 - `FREQTRADE_MCP_URL`：`agent` 访问 Freqtrade MCP 的地址，默认 `http://freqtrade:8090/mcp/`
 - `OPENAI_API_KEY`：Agent 模型密钥
 - `BRAIN_AGENT_MODEL`：Agent 模型名，默认 `gpt-4o-mini`
-- `X402_PAY_TO`：`agent` seller 收款地址
-- `X402_PRICE`：seller 演示资源价格，默认 `$0.01`
-- `X402_NETWORK`：seller CAIP-2 网络，默认 `eip155:84532`
-- `X402_FACILITATOR_URL`：seller 使用的 facilitator，默认 `https://x402.org/facilitator`
-
 ### chain
 
 - `CHAIN_MCP_PORT`：chain MCP 端口，默认 `8091`
@@ -158,6 +158,14 @@ PRIVATE_KEY=0x... \
 - `X402_BUYER_PRIVATE_KEY`：x402 buyer 专用私钥；为空时回退到 `PRIVATE_KEY`
 - `X402_USDC_SINGLE_CAP`：x402 单笔 USDC 上限，默认 `1.0`
 - `X402_USDC_DAILY_CAP`：x402 每日 USDC 上限，默认 `2.0`
+
+### x402-seller
+
+- `X402_PAY_TO`：seller 收款地址
+- `X402_PRICE`：seller 演示资源价格，默认 `$0.01`
+- `X402_NETWORK`：seller CAIP-2 网络，默认 `eip155:84532`
+- `X402_FACILITATOR_URL`：seller 使用的 facilitator，默认 `https://x402.org/facilitator`
+- `X402_TIMEOUT_SECONDS`：seller 请求 facilitator 的超时，默认 `20`
 
 ### freqtrade
 
@@ -182,12 +190,12 @@ PRIVATE_KEY=0x... \
 }
 ```
 
-## `GET /x402/demo-resource`
+## `x402-seller: GET /x402/demo-resource`
 
-这是 `agent` 内置的标准 x402 seller 演示资源：
+这是独立 `x402-seller` 服务提供的标准 x402 seller 演示资源：
 
 - 首次访问会返回 `402 Payment Required`
 - 响应头包含 `PAYMENT-REQUIRED`
 - buyer 成功重试后，返回业务 JSON，并带 `PAYMENT-RESPONSE`
 
-在 `CHAIN_MOCK=true` 的本地回归场景下，脚本会把 facilitator 切到 `agent` 内置 mock facilitator。
+在 `CHAIN_MOCK=true` 的本地回归场景下，脚本会把 facilitator 切到独立的 `x402-mock` 服务，而不是 `agent` 本体。

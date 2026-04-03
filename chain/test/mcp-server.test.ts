@@ -127,7 +127,7 @@ test("chain_x402_fetch returns x402 result through MCP", async () => {
       const response = await client.callTool({
         name: "chain_x402_fetch",
         arguments: {
-          url: "http://agent:8000/x402/demo-resource",
+          url: "http://x402-seller:8000/x402/demo-resource",
           method: "GET",
         },
       });

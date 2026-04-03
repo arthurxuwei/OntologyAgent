@@ -46,6 +46,48 @@ PY
   return 1
 }
 
+wait_for_x402_mock() {
+  local max_retries="${1:-60}"
+
+  for ((i=1; i<=max_retries; i+=1)); do
+    if docker compose exec -T agent python - <<'PY' >/dev/null 2>&1
+import httpx
+
+response = httpx.get("http://x402-mock:8000/health", timeout=5)
+assert response.status_code == 200
+PY
+    then
+      echo "✅ x402-mock is ready"
+      return 0
+    fi
+    sleep 1
+  done
+
+  echo "❌ x402-mock failed to become ready"
+  return 1
+}
+
+wait_for_x402_seller() {
+  local max_retries="${1:-60}"
+
+  for ((i=1; i<=max_retries; i+=1)); do
+    if docker compose exec -T agent python - <<'PY' >/dev/null 2>&1
+import httpx
+
+response = httpx.get("http://x402-seller:8000/health", timeout=5)
+assert response.status_code == 200
+PY
+    then
+      echo "✅ x402-seller is ready"
+      return 0
+    fi
+    sleep 1
+  done
+
+  echo "❌ x402-seller failed to become ready"
+  return 1
+}
+
 require_env() {
   local env_name="$1"
   if [[ -z "${!env_name:-}" ]]; then
@@ -67,7 +109,7 @@ if [[ "${CHAIN_MOCK}" == "true" ]]; then
   export DEMO_SIGN_TRANSFER_TO="${DEMO_SIGN_TRANSFER_TO:-0x000000000000000000000000000000000000dEaD}"
   export DEMO_X402_PAYMENT_TO="${DEMO_X402_PAYMENT_TO:-0x1111111111111111111111111111111111111111}"
   export X402_PAY_TO="${X402_PAY_TO:-${DEMO_X402_PAYMENT_TO}}"
-  export X402_FACILITATOR_URL="http://agent:8000/x402/mock-facilitator"
+  export X402_FACILITATOR_URL="http://x402-mock:8000/x402/facilitator"
 else
   echo "===> Starting chain MCP demo on live testnet"
   require_env "PRIVATE_KEY"
@@ -86,6 +128,10 @@ docker compose up -d --build
 
 wait_for_url "http://localhost:8000/health" "agent"
 wait_for_chain_mcp
+wait_for_x402_seller
+if [[ "${CHAIN_MOCK}" == "true" ]]; then
+  wait_for_x402_mock
+fi
 
 echo
 echo "===> agent health"
@@ -137,7 +183,7 @@ async def main():
     result = await ChainMcpClient("http://chain-mcp:8091/mcp/").call_tool(
         "chain_x402_fetch",
         {
-            "url": "http://agent:8000/x402/demo-resource",
+            "url": "http://x402-seller:8000/x402/demo-resource",
             "method": "GET",
         },
     )

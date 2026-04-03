@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 from functools import lru_cache
 from typing import Any, Literal, Optional
 
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, HTTPException
 from langchain_core.tools import StructuredTool
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
@@ -15,13 +13,6 @@ from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
 from chain_mcp_client import ChainMcpClient
 from freqtrade_mcp_client import FreqtradeMcpClient, FreqtradeMcpClientError
-from x402_seller import (
-    BASE_SEPOLIA_NETWORK,
-    X402SellerConfig,
-    X402SellerError,
-    X402SellerService,
-)
-
 app = FastAPI(title="OntologyAgent agent")
 
 SYSTEM_PROMPT = (
@@ -129,23 +120,6 @@ def get_chain_mcp_client() -> ChainMcpClient:
 @lru_cache(maxsize=1)
 def get_freqtrade_mcp_client() -> FreqtradeMcpClient:
     return FreqtradeMcpClient(FREQTRADE_MCP_URL)
-
-
-@lru_cache(maxsize=1)
-def get_x402_seller_service() -> X402SellerService:
-    pay_to = os.getenv("X402_PAY_TO")
-    if not pay_to:
-        raise RuntimeError("X402_PAY_TO is not configured")
-
-    return X402SellerService(
-        X402SellerConfig(
-            pay_to=pay_to,
-            facilitator_url=os.getenv("X402_FACILITATOR_URL", "https://x402.org/facilitator"),
-            price=os.getenv("X402_PRICE", "$0.01"),
-            network=os.getenv("X402_NETWORK", BASE_SEPOLIA_NETWORK),
-            timeout_seconds=REQUEST_TIMEOUT_SECONDS,
-        )
-    )
 
 
 def _unwrap_mcp_result(tool_name: str, result: dict[str, Any]) -> dict[str, Any]:
@@ -492,94 +466,12 @@ def health() -> dict[str, Any]:
     return {
         "service": "OntologyAgent-agent",
         "status": "ok",
-        "x402Network": os.getenv("X402_NETWORK", BASE_SEPOLIA_NETWORK),
-        "x402PayToConfigured": bool(os.getenv("X402_PAY_TO")),
         "chainMcpUrl": CHAIN_MCP_URL,
         "chainTools": chain_tools,
         "chainError": chain_error,
         "freqtradeMcpUrl": FREQTRADE_MCP_URL,
         "freqtradeTools": freqtrade_tools,
         "freqtradeError": freqtrade_error,
-    }
-
-
-@app.get("/x402/demo-resource")
-async def x402_demo_resource(request: Request):
-    try:
-        seller = get_x402_seller_service()
-    except RuntimeError as error:
-        raise HTTPException(status_code=503, detail=str(error)) from error
-
-    try:
-        authorization = await seller.authorize_or_challenge(request)
-    except X402SellerError as error:
-        raise HTTPException(status_code=502, detail=str(error)) from error
-
-    if isinstance(authorization, JSONResponse):
-        return authorization
-
-    return seller.build_success_response(
-        {
-            "ok": True,
-            "resource": "demo-x402-resource",
-            "network": os.getenv("X402_NETWORK", BASE_SEPOLIA_NETWORK),
-            "quote": {
-                "tokenIn": "ETH",
-                "tokenOut": "USDC",
-                "price": os.getenv("X402_PRICE", "$0.01"),
-            },
-        },
-        authorization,
-    )
-
-
-@app.post("/x402/mock-facilitator/verify")
-async def mock_x402_facilitator_verify(request: Request) -> dict[str, Any]:
-    body = await request.json()
-    payment_payload = body.get("paymentPayload")
-    payment_requirements = body.get("paymentRequirements")
-
-    if not isinstance(payment_payload, dict) or not isinstance(payment_requirements, dict):
-        raise HTTPException(status_code=400, detail="missing paymentPayload or paymentRequirements")
-
-    accepted = payment_payload.get("accepted", {})
-    if accepted.get("network") != payment_requirements.get("network"):
-        return {
-            "isValid": False,
-            "invalidReason": "NETWORK_MISMATCH",
-            "invalidMessage": "payment network does not match requirements",
-        }
-
-    payer = (
-        payment_payload.get("payload", {})
-        .get("authorization", {})
-        .get("from")
-    )
-    return {
-        "isValid": True,
-        "payer": payer,
-    }
-
-
-@app.post("/x402/mock-facilitator/settle")
-async def mock_x402_facilitator_settle(request: Request) -> dict[str, Any]:
-    body = await request.json()
-    payment_payload = body.get("paymentPayload")
-    payment_requirements = body.get("paymentRequirements")
-
-    if not isinstance(payment_payload, dict) or not isinstance(payment_requirements, dict):
-        raise HTTPException(status_code=400, detail="missing paymentPayload or paymentRequirements")
-
-    payer = (
-        payment_payload.get("payload", {})
-        .get("authorization", {})
-        .get("from")
-    )
-    return {
-        "success": True,
-        "transaction": f"0xmock_x402_settlement_{abs(hash(json_dump_sorted(body))) % 10**12:x}",
-        "network": payment_requirements.get("network", BASE_SEPOLIA_NETWORK),
-        "payer": payer,
     }
 
 
@@ -614,7 +506,3 @@ def run_agent(request: AgentRunRequest) -> dict[str, Any]:
         "input": request.input,
         "output": output,
     }
-
-
-def json_dump_sorted(value: Any) -> str:
-    return json.dumps(value, sort_keys=True)
