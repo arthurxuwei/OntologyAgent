@@ -2,7 +2,7 @@
 
 当前仓库由三条能力线组成：
 
-- `agent`：Python Agent 本体，负责 tool orchestration 和 `/agent/run`
+- `agent`：Python Agent 本体，负责交互式会话、tool orchestration，以及对子 Agent 的管理
 - `chain`：TypeScript 链上 MCP skill provider，负责钱包、执行、UserOperation 和 x402 buyer flow
 - `freqtrade`：单容器 Freqtrade + MCP skill provider，负责量化策略和 CEX 交易技能
 
@@ -22,7 +22,9 @@ docker compose up -d --build
 启动后默认可用的入口：
 
 - `agent` 健康检查：`http://localhost:8000/health`
-- `agent` Agent 接口：`POST /agent/run`
+- `agent` 单轮调用：`POST /agent/run`
+- `agent` 交互式会话：`POST /agent/sessions` 和 `POST /agent/sessions/{sessionId}/messages`
+- `agent` 子 Agent 管理：`POST /autonomy/start`、`POST /autonomy/stop`、`POST /autonomy/tick`
 - `x402-seller` 演示资源：`GET /x402/demo-resource`
 - `chain` MCP：`http://localhost:8091/mcp/`
 - `freqtrade` REST API：`http://localhost:8080/api/v1`
@@ -37,8 +39,13 @@ docker compose up -d --build
 - 中心化交易和量化动作只能通过 `freqtrade` MCP tools 完成
 - `chain` 不再提供 Fastify HTTP 业务接口
 
-`agent` 启动后会同时发现两组内部工具：
+`agent` 启动后会同时发现三类内部工具：
 
+- 本地 guard 工具
+  - `get_guard_status`
+  - `start_guard_agent`
+  - `stop_guard_agent`
+  - `run_guard_tick`
 - `chain` MCP tools
   - `chain_get_wallet_state`（内部账本 / 自治循环使用）
   - `chain_sign_transfer`
@@ -62,32 +69,71 @@ docker compose up -d --build
 
 ## 自治运行
 
-当前 `agent` 同时支持两条运行路径：
+当前 `agent` 同时支持三条运行路径：
 
-- `POST /agent/run`：手动交互式决策
-- 后台自治循环：按固定周期读取链上钱包、x402 消费和 Freqtrade dry-run 盈亏，再用 GPT 做预算约束下的决策
+- `POST /agent/run`：单轮调用
+- `POST /agent/sessions` + `POST /agent/sessions/{sessionId}/messages`：持续交互式会话
+- 后台自治循环：按固定周期读取链上钱包和 Freqtrade dry-run 状态，再由一个资金守门子 Agent 做保护性判断
 
 自治循环默认是 **关闭** 的，避免一启动就自动花费真实资产。启用后：
 
 - 启动资金默认来自链上钱包余额
-- `agent` 会把其中一部分预算同步给 Freqtrade 的 `dry_run_wallet`
-- 后续统一按内部账本跟踪：
-  - `startingCapital`
-  - `reservedForX402`
-  - `allocatedToDryRunTrading`
-  - `x402Spent`
+- 自治子 Agent 只关心钱包余额、dry-run 盈亏和风险阈值
+- 自治子 Agent 不会主动调用 x402，也不会自动同步 `dry_run_wallet`
+- 后续统一按资金健康账本跟踪：
+  - `startingCapitalEth`
+  - `startingCapitalUsd`
+  - `currentWalletBalanceEth`
+  - `currentWalletBalanceUsd`
   - `dryRunRealizedPnl`
   - `dryRunUnrealizedPnl`
-  - `netBudget`
+  - `netWorthEstimate`
+  - `healthStatus`
+  - `lastProtectiveAction`
+  - `lastFundingRecommendation`
 
 可通过：
 
 - `GET /health`
 - `GET /autonomy/status`
+- `POST /autonomy/start`
+- `POST /autonomy/stop`
+- `POST /autonomy/tick`
 
-查看当前自治状态和账本快照。
+查看当前自治状态和账本快照，也可以显式管理子 Agent 的生命周期。
+
+主 Agent 仍然负责：
+
+- 是否调用 x402
+- 是否给 Freqtrade dry-run 增加资金
+- 是否执行其他链上或交易动作
+
+在这些业务动作之前，建议先调用 `get_guard_status` 查看资金守门子 Agent 的当前状态。主 Agent 也可以直接通过 `start_guard_agent`、`stop_guard_agent`、`run_guard_tick` 管理子 Agent。
 
 ## 演示脚本
+
+### Agent 交互入口
+
+```bash
+./scripts/agent-chat.sh
+```
+
+这个脚本会：
+
+- 创建一个新的 `agent` 会话
+- 持续读取你的输入并发送到同一个 session
+- 允许你在会话里直接和主 Agent 多轮交互
+- 支持几个内建命令：
+  - `/guard-status`
+  - `/guard-start`
+  - `/guard-stop`
+  - `/guard-tick`
+
+如需自定义地址：
+
+```bash
+AGENT_BASE_URL=http://localhost:8000 ./scripts/agent-chat.sh
+```
 
 ### Chain MCP 演示
 
@@ -166,21 +212,22 @@ PRIVATE_KEY=0x... \
 
 ### agent
 
+- `OPENAI_API_KEY`：会被 `docker compose` 直接注入 `agent` 容器；建议放在仓库根目录未提交的 `.env`
+- `OPENAI_BASE_URL`：OpenAI 兼容 endpoint；会被 `docker compose` 直接注入 `agent` 容器
+- `OPENAI_ENDPOINT`：`OPENAI_BASE_URL` 的兼容别名；如两者都设置，优先使用 `OPENAI_BASE_URL`
+- `BRAIN_AGENT_MODEL`：主 Agent 使用的模型名；会被 `docker compose` 直接注入 `agent` 容器，默认 `gpt-4o-mini`
 - `CHAIN_MCP_URL`：`agent` 访问链上 MCP 的地址，默认 `http://chain-mcp:8091/mcp/`
 - `CHAIN_TIMEOUT_SECONDS`：请求相关超时，默认 `20`
 - `FREQTRADE_MCP_URL`：`agent` 访问 Freqtrade MCP 的地址，默认 `http://freqtrade:8090/mcp/`
-- `OPENAI_API_KEY`：Agent 模型密钥
 - `BRAIN_AGENT_MODEL`：Agent 模型名，默认 `gpt-4o-mini`
 - `AUTONOMY_ENABLED`：是否开启后台自治循环，默认 `false`
 - `AUTONOMY_INTERVAL_SECONDS`：自治轮询间隔，默认 `60`
 - `AUTONOMY_STATE_PATH`：自治账本状态文件，默认 `/app/data/autonomy_state.json`
-- `AUTONOMY_X402_URL`：自治模式下调用的 x402 目标，默认 `http://x402-seller:8000/x402/demo-resource`
 - `AUTONOMY_ETH_PRICE_USD`：用于把链上 ETH 预算折算为统一 USD 视图的参考价格，默认 `3000`
-- `AUTONOMY_TRADING_ALLOCATION_RATIO`：映射到 Freqtrade dry-run 资金的预算比例，默认 `0.5`
-- `AUTONOMY_MIN_CASH_RESERVE_RATIO`：最低现金保留比例，默认 `0.25`
-- `AUTONOMY_MIN_NET_BUDGET_RATIO`：净预算阈值比例，默认 `0.6`
+- `AUTONOMY_MIN_WALLET_BALANCE_USD`：低于该值时建议补充资金，默认 `250`
+- `AUTONOMY_STOP_TRADING_BALANCE_USD`：低于该值时自治子 Agent 可停止交易，默认 `150`
+- `AUTONOMY_FORCE_EXIT_BALANCE_USD`：低于该值时自治子 Agent 可强制平仓，默认 `75`
 - `AUTONOMY_MAX_DRAWDOWN_RATIO`：最大回撤阈值比例，默认 `0.15`
-- `AUTONOMY_MIN_X402_INTERVAL_SECONDS`：连续 x402 消费的最小冷却时间，默认 `1800`
 - `AUTONOMY_MODEL`：自治循环专用模型；为空时回退到 `BRAIN_AGENT_MODEL`
 ### chain
 
@@ -216,22 +263,29 @@ PRIVATE_KEY=0x... \
 - `FREQTRADE_TIMEOUT_SECONDS`：Freqtrade API / MCP 调用超时，默认 `20`
 - `FREQTRADE_ALLOW_WRITE_ACTIONS`：是否允许写操作，默认 `true`
 - `FREQTRADE_STRATEGY_NAME`：默认策略，默认 `SimpleAgentStrategy`
-- `FREQTRADE_CONFIG_PATH`：Freqtrade 配置路径；`sync_dry_run_wallet` 会更新其中的 `dry_run_wallet`
+- `FREQTRADE_CONFIG_PATH`：Freqtrade 配置路径；主 Agent 如需调整 `dry_run_wallet`，会通过 `sync_dry_run_wallet` 更新这里
 
-## `/agent/run`
+## 交互式 Agent
 
 `agent` 内置 LangGraph Agent，会自动使用：
 
 - `chain` 链上 MCP tools
 - `freqtrade` 投资 MCP tools
+- 本地的 guard 管理工具
 
-请求示例：
+单轮调用示例：
 
 ```json
 {
   "input": "先访问 x402 demo 资源，再决定是否提交链上执行"
 }
 ```
+
+多轮会话流程：
+
+1. `POST /agent/sessions` 创建 session
+2. `POST /agent/sessions/{sessionId}/messages` 持续发送消息
+3. `GET /agent/sessions/{sessionId}` 查看当前 session 状态
 
 ## `x402-seller: GET /x402/demo-resource`
 

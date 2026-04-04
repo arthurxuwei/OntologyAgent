@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,19 +20,69 @@ def utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _round_amount(value: float, digits: int = 6) -> float:
+    return round(float(value), digits)
+
+
+def get_openai_base_url() -> Optional[str]:
+    value = os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_ENDPOINT")
+    if value is None:
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
+def _normalize_message_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                text = item.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+            else:
+                text = getattr(item, "text", None)
+                if isinstance(text, str):
+                    parts.append(text)
+        return "\n".join(parts).strip()
+
+    return str(content)
+
+
+def _extract_json_object(text: str) -> dict[str, Any]:
+    normalized = text.strip()
+    if normalized.startswith("```"):
+        normalized = re.sub(r"^```(?:json)?\s*", "", normalized)
+        normalized = re.sub(r"\s*```$", "", normalized)
+
+    try:
+        parsed = json.loads(normalized)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", normalized, re.DOTALL)
+        if not match:
+            raise RuntimeError(f"Could not parse GuardDecision JSON from model output: {text}")
+        parsed = json.loads(match.group(0))
+
+    if not isinstance(parsed, dict):
+        raise RuntimeError(f"GuardDecision model output must be a JSON object: {parsed!r}")
+    return parsed
+
+
 @dataclass(frozen=True)
 class AutonomyConfig:
     enabled: bool
     interval_seconds: float
     state_path: str
-    x402_url: str
-    x402_method: str
     eth_price_usd: float
-    trading_allocation_ratio: float
-    min_cash_reserve_ratio: float
-    min_net_budget_ratio: float
+    min_wallet_balance_usd: float
+    stop_trading_balance_usd: float
+    force_exit_balance_usd: float
     max_drawdown_ratio: float
-    min_x402_interval_seconds: float
     model_name: str
 
 
@@ -55,14 +106,11 @@ def load_autonomy_config(env: Optional[dict[str, str]] = None) -> AutonomyConfig
         enabled=get_bool("AUTONOMY_ENABLED", False),
         interval_seconds=float(source.get("AUTONOMY_INTERVAL_SECONDS", "60")),
         state_path=get_text("AUTONOMY_STATE_PATH", "/app/data/autonomy_state.json"),
-        x402_url=get_text("AUTONOMY_X402_URL", "http://x402-seller:8000/x402/demo-resource"),
-        x402_method=get_text("AUTONOMY_X402_METHOD", "GET").upper(),
         eth_price_usd=float(source.get("AUTONOMY_ETH_PRICE_USD", "3000")),
-        trading_allocation_ratio=float(source.get("AUTONOMY_TRADING_ALLOCATION_RATIO", "0.5")),
-        min_cash_reserve_ratio=float(source.get("AUTONOMY_MIN_CASH_RESERVE_RATIO", "0.25")),
-        min_net_budget_ratio=float(source.get("AUTONOMY_MIN_NET_BUDGET_RATIO", "0.6")),
+        min_wallet_balance_usd=float(source.get("AUTONOMY_MIN_WALLET_BALANCE_USD", "250")),
+        stop_trading_balance_usd=float(source.get("AUTONOMY_STOP_TRADING_BALANCE_USD", "150")),
+        force_exit_balance_usd=float(source.get("AUTONOMY_FORCE_EXIT_BALANCE_USD", "75")),
         max_drawdown_ratio=float(source.get("AUTONOMY_MAX_DRAWDOWN_RATIO", "0.15")),
-        min_x402_interval_seconds=float(source.get("AUTONOMY_MIN_X402_INTERVAL_SECONDS", "1800")),
         model_name=get_text(
             "AUTONOMY_MODEL",
             get_text("BRAIN_AGENT_MODEL", "gpt-4o-mini"),
@@ -70,36 +118,34 @@ def load_autonomy_config(env: Optional[dict[str, str]] = None) -> AutonomyConfig
     )
 
 
-class AutonomyDecision(BaseModel):
+class GuardDecision(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    action: Literal["hold", "start_trading", "stop_trading", "spend_x402", "force_exit_all"]
+    action: Literal["hold", "stop_trading", "force_exit_all", "request_funding"]
     reason: str = Field(min_length=1)
     riskLevel: Literal["low", "medium", "high"] = "medium"
-    maxSpendAllowed: float = Field(default=0, ge=0)
+    recommendedFundingUsd: float = Field(default=0, ge=0)
 
 
-class BudgetLedger(BaseModel):
+class GuardLedger(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     initialized: bool = False
     initializedAt: Optional[str] = None
     startingCapitalEth: str = "0"
     startingCapitalUsd: float = 0
-    availableBudget: float = 0
-    reservedForX402: float = 0
-    allocatedToDryRunTrading: float = 0
-    x402Spent: float = 0
+    currentWalletBalanceEth: str = "0"
+    currentWalletBalanceUsd: float = 0
     dryRunRealizedPnl: float = 0
     dryRunUnrealizedPnl: float = 0
-    netBudget: float = 0
+    netWorthEstimate: float = 0
     botEnabled: bool = False
-    dryRunWalletSynced: bool = False
+    healthStatus: Literal["healthy", "watch", "critical"] = "healthy"
     lastDecision: Optional[dict[str, Any]] = None
-    lastActionResult: Optional[dict[str, Any]] = None
+    lastProtectiveAction: Optional[dict[str, Any]] = None
+    lastFundingRecommendation: Optional[dict[str, Any]] = None
     lastError: Optional[str] = None
     lastTickAt: Optional[str] = None
-    lastX402At: Optional[str] = None
     tickCount: int = 0
 
 
@@ -118,31 +164,47 @@ class AutonomyController:
         self._stop_event: Optional[asyncio.Event] = None
         self._state = self._load_state()
         self._running = False
+        self._enabled = config.enabled
+        self._autostart_configured = config.enabled
 
-    async def start(self) -> None:
-        if not self.config.enabled or self._task is not None:
+    async def start(self, *, force: bool = False) -> None:
+        if force:
+            self._enabled = True
+
+        if not self._enabled or self._task is not None:
             return
 
         if self._stop_event is None:
             self._stop_event = asyncio.Event()
         self._stop_event.clear()
-        self._task = asyncio.create_task(self._run_loop(), name="agent-autonomy-loop")
+        self._task = asyncio.create_task(self._run_loop(), name="agent-wallet-guard-loop")
 
-    async def stop(self) -> None:
+    async def stop(self, *, disable: bool = True) -> None:
+        if disable:
+            self._enabled = False
         if self._stop_event is not None:
             self._stop_event.set()
         task = self._task
         self._task = None
         if task is not None:
-            await task
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
     async def status(self) -> dict[str, Any]:
         return {
-            "enabled": self.config.enabled,
+            "enabled": self._enabled,
+            "autostartConfigured": self._autostart_configured,
             "running": self._running,
             "intervalSeconds": self.config.interval_seconds,
-            "x402Url": self.config.x402_url,
             "modelName": self.config.model_name,
+            "thresholds": {
+                "minWalletBalanceUsd": self.config.min_wallet_balance_usd,
+                "stopTradingBalanceUsd": self.config.stop_trading_balance_usd,
+                "forceExitBalanceUsd": self.config.force_exit_balance_usd,
+                "maxDrawdownRatio": self.config.max_drawdown_ratio,
+            },
             "ledger": self._state.model_dump(),
         }
 
@@ -158,9 +220,7 @@ class AutonomyController:
                 self._freqtrade_tool_invoker("get_budget_snapshot", {}),
             )
 
-            self._bootstrap_if_needed(chain_state, freqtrade_budget)
-            await self._sync_dry_run_wallet_if_needed()
-
+            self._bootstrap_if_needed(chain_state)
             context = self._build_context(chain_state, freqtrade_budget)
             decision = await self._make_decision(context)
             decision = self._normalize_decision(decision, context)
@@ -204,7 +264,7 @@ class AutonomyController:
             raise RuntimeError(f"Unexpected MCP tool result shape: {payload}")
         return result
 
-    def _bootstrap_if_needed(self, chain_state: dict[str, Any], freqtrade_budget: dict[str, Any]) -> None:
+    def _bootstrap_if_needed(self, chain_state: dict[str, Any]) -> None:
         if self._state.initialized:
             return
 
@@ -212,156 +272,156 @@ class AutonomyController:
         if not wallet.get("signerConfigured"):
             raise RuntimeError("Autonomy requires a configured chain signer")
 
-        balance_eth = float(wallet.get("balanceEth", "0"))
-        starting_capital_usd = round(balance_eth * self.config.eth_price_usd, 6)
-        allocated_to_trading = round(
-            starting_capital_usd * self.config.trading_allocation_ratio,
-            2,
-        )
-        reserved_for_x402 = round(starting_capital_usd - allocated_to_trading, 2)
-
-        self._state = BudgetLedger(
+        balance_eth = str(wallet.get("balanceEth", "0"))
+        starting_capital_usd = _round_amount(float(balance_eth) * self.config.eth_price_usd)
+        self._state = GuardLedger(
             initialized=True,
             initializedAt=utcnow_iso(),
-            startingCapitalEth=str(balance_eth),
+            startingCapitalEth=balance_eth,
             startingCapitalUsd=starting_capital_usd,
-            availableBudget=starting_capital_usd,
-            reservedForX402=reserved_for_x402,
-            allocatedToDryRunTrading=allocated_to_trading,
-            x402Spent=0,
+            currentWalletBalanceEth=balance_eth,
+            currentWalletBalanceUsd=starting_capital_usd,
             dryRunRealizedPnl=0,
             dryRunUnrealizedPnl=0,
-            netBudget=starting_capital_usd,
-            botEnabled=bool(freqtrade_budget.get("openTradeCount", 0) > 0),
-            dryRunWalletSynced=False,
+            netWorthEstimate=starting_capital_usd,
+            botEnabled=False,
+            healthStatus="healthy",
             tickCount=0,
         )
-
-    async def _sync_dry_run_wallet_if_needed(self) -> None:
-        if self._state.dryRunWalletSynced:
-            return
-
-        await self._tool_result(
-            self._freqtrade_tool_invoker(
-                "sync_dry_run_wallet",
-                {"dry_run_wallet": self._state.allocatedToDryRunTrading},
-            ),
-        )
-        self._state.dryRunWalletSynced = True
 
     def _build_context(
         self,
         chain_state: dict[str, Any],
         freqtrade_budget: dict[str, Any],
     ) -> dict[str, Any]:
-        policy = chain_state.get("policy", {})
-        x402_spent = round(int(policy.get("spentTodayUsdcAtomic", "0")) / 1_000_000, 6)
-        realized_pnl = round(float(freqtrade_budget.get("realizedPnl", 0)), 6)
-        unrealized_pnl = round(float(freqtrade_budget.get("unrealizedPnl", 0)), 6)
-        net_budget = round(
-            self._state.startingCapitalUsd - x402_spent + realized_pnl + unrealized_pnl,
-            6,
+        wallet = chain_state.get("wallet", {})
+        current_wallet_balance_eth = str(wallet.get("balanceEth", "0"))
+        current_wallet_balance_usd = _round_amount(
+            float(current_wallet_balance_eth) * self.config.eth_price_usd,
         )
-        min_cash_reserve = round(
-            self._state.startingCapitalUsd * self.config.min_cash_reserve_ratio,
-            6,
+        realized_pnl = _round_amount(float(freqtrade_budget.get("realizedPnl", 0)))
+        unrealized_pnl = _round_amount(float(freqtrade_budget.get("unrealizedPnl", 0)))
+        net_worth_estimate = _round_amount(
+            current_wallet_balance_usd + realized_pnl + unrealized_pnl,
         )
-        min_net_budget = round(
-            self._state.startingCapitalUsd * self.config.min_net_budget_ratio,
-            6,
-        )
-        current_drawdown = round(max(0, self._state.startingCapitalUsd - net_budget), 6)
-        max_drawdown = round(
-            self._state.startingCapitalUsd * self.config.max_drawdown_ratio,
-            6,
-        )
-
-        can_spend_x402 = (
-            self.config.x402_url != ""
-            and net_budget >= min_cash_reserve
-            and self._x402_cooldown_elapsed()
-        )
-        should_force_exit = current_drawdown >= max_drawdown
-        should_stop = net_budget < min_net_budget
         open_trades = int(freqtrade_budget.get("openTradeCount", 0))
+        bot_enabled = bool(open_trades > 0 or self._state.botEnabled)
+        drawdown_usd = _round_amount(
+            max(0.0, self._state.startingCapitalUsd - net_worth_estimate),
+        )
+        drawdown_ratio = (
+            0.0
+            if self._state.startingCapitalUsd <= 0
+            else _round_amount(drawdown_usd / self._state.startingCapitalUsd)
+        )
+        health_status = self._compute_health_status(current_wallet_balance_usd, drawdown_ratio)
+        recommended_funding_usd = _round_amount(
+            max(0.0, self.config.min_wallet_balance_usd - current_wallet_balance_usd),
+        )
 
         allowed_actions = ["hold"]
-        if should_force_exit and open_trades > 0:
-            allowed_actions.append("force_exit_all")
-        if self._state.botEnabled:
+        if bot_enabled and (
+            current_wallet_balance_usd <= self.config.stop_trading_balance_usd
+            or drawdown_ratio >= self.config.max_drawdown_ratio
+        ):
             allowed_actions.append("stop_trading")
-        elif not should_stop:
-            allowed_actions.append("start_trading")
-        if can_spend_x402 and not should_stop:
-            allowed_actions.append("spend_x402")
+        if bot_enabled and (
+            current_wallet_balance_usd <= self.config.force_exit_balance_usd
+            or drawdown_ratio >= self.config.max_drawdown_ratio
+        ):
+            allowed_actions.append("force_exit_all")
+        if recommended_funding_usd > 0:
+            allowed_actions.append("request_funding")
 
         return {
-            "wallet": chain_state.get("wallet", {}),
+            "wallet": {
+                **wallet,
+                "balanceUsd": current_wallet_balance_usd,
+            },
             "chain": chain_state.get("chain", {}),
-            "policy": policy,
             "freqtrade": freqtrade_budget,
             "budget": {
-                "startingCapital": self._state.startingCapitalUsd,
-                "availableBudget": net_budget,
-                "reservedForX402": self._state.reservedForX402,
-                "allocatedToDryRunTrading": self._state.allocatedToDryRunTrading,
-                "x402Spent": x402_spent,
+                "startingCapitalEth": self._state.startingCapitalEth,
+                "startingCapitalUsd": self._state.startingCapitalUsd,
+                "currentWalletBalanceEth": current_wallet_balance_eth,
+                "currentWalletBalanceUsd": current_wallet_balance_usd,
                 "dryRunRealizedPnl": realized_pnl,
                 "dryRunUnrealizedPnl": unrealized_pnl,
-                "netBudget": net_budget,
+                "netWorthEstimate": net_worth_estimate,
             },
             "risk": {
-                "minCashReserve": min_cash_reserve,
-                "minNetBudget": min_net_budget,
-                "currentDrawdown": current_drawdown,
-                "maxDrawdown": max_drawdown,
-                "botEnabled": self._state.botEnabled,
+                "healthStatus": health_status,
+                "drawdownUsd": drawdown_usd,
+                "drawdownRatio": drawdown_ratio,
+                "botEnabled": bot_enabled,
                 "openTradeCount": open_trades,
+                "recommendedFundingUsd": recommended_funding_usd,
                 "allowedActions": allowed_actions,
+                "thresholds": {
+                    "minWalletBalanceUsd": self.config.min_wallet_balance_usd,
+                    "stopTradingBalanceUsd": self.config.stop_trading_balance_usd,
+                    "forceExitBalanceUsd": self.config.force_exit_balance_usd,
+                    "maxDrawdownRatio": self.config.max_drawdown_ratio,
+                },
             },
         }
 
-    async def _make_decision(self, context: dict[str, Any]) -> AutonomyDecision:
+    async def _make_decision(self, context: dict[str, Any]) -> GuardDecision:
         api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
             raise RuntimeError("OPENAI_API_KEY is required for autonomy decisions")
 
-        llm = ChatOpenAI(model=self.config.model_name, temperature=0)
-        structured_llm = llm.with_structured_output(AutonomyDecision)
+        llm_kwargs: dict[str, Any] = {
+            "model": self.config.model_name,
+            "temperature": 0,
+        }
+        base_url = get_openai_base_url()
+        if base_url is not None:
+            llm_kwargs["base_url"] = base_url
+        llm = ChatOpenAI(**llm_kwargs)
         prompt = (
-            "你在管理一个会花钱也会赚钱的代理。"
+            "你是一个钱包资金守门子 Agent。"
+            "你只关心钱包余额、dry-run 绩效和风险阈值。"
             "只允许在 allowedActions 中选择 action。"
-            "优先保护预算与现金储备，再考虑让 dry-run 策略运行和购买 x402 资源。"
-            "如果当前回撤过大或预算跌破阈值，应优先 stop_trading 或 force_exit_all。"
-            "如果没有足够信息或不应冒险，选择 hold。"
+            "你不能主动发起 x402 消费，也不能主动给 Freqtrade 加钱。"
+            "当余额或净资产风险过高时，优先执行 stop_trading 或 force_exit_all。"
+            "当需要用户补钱时，选择 request_funding。"
+            "如果没有保护动作必要，选择 hold。"
+            "你必须只返回一个 JSON 对象，不要附加解释、不要使用 markdown 代码块。"
+            "JSON 必须严格包含这些字段："
+            '{"action":"hold|stop_trading|force_exit_all|request_funding","reason":"...","riskLevel":"low|medium|high","recommendedFundingUsd":0}'
             f"\n\n当前上下文:\n{json.dumps(context, ensure_ascii=False, indent=2)}"
         )
-        return await structured_llm.ainvoke(prompt)
+        message = await llm.ainvoke(prompt)
+        payload = _extract_json_object(_normalize_message_text(getattr(message, "content", "")))
+        return GuardDecision.model_validate(payload)
 
     def _normalize_decision(
         self,
-        decision: AutonomyDecision,
+        decision: GuardDecision,
         context: dict[str, Any],
-    ) -> AutonomyDecision:
+    ) -> GuardDecision:
         allowed_actions = set(context["risk"]["allowedActions"])
         if decision.action in allowed_actions:
             return decision
 
-        return AutonomyDecision(
+        return GuardDecision(
             action="hold",
             reason=f"Requested action {decision.action} is not currently allowed; holding instead.",
             riskLevel="medium",
-            maxSpendAllowed=0,
+            recommendedFundingUsd=0,
         )
 
-    async def _execute_decision(self, decision: AutonomyDecision) -> dict[str, Any]:
+    async def _execute_decision(self, decision: GuardDecision) -> dict[str, Any]:
         if decision.action == "hold":
             return {"action": "hold", "changedState": False}
 
-        if decision.action == "start_trading":
-            result = await self._tool_result(self._freqtrade_tool_invoker("start_bot", {}))
-            self._state.botEnabled = True
-            return {"action": decision.action, "result": result, "changedState": True}
+        if decision.action == "request_funding":
+            return {
+                "action": decision.action,
+                "changedState": False,
+                "recommendedFundingUsd": decision.recommendedFundingUsd,
+            }
 
         if decision.action == "stop_trading":
             result = await self._tool_result(self._freqtrade_tool_invoker("stop_bot", {}))
@@ -378,57 +438,68 @@ class AutonomyController:
             self._state.botEnabled = False
             return {"action": decision.action, "result": result, "changedState": True}
 
-        if decision.action == "spend_x402":
-            result = await self._tool_result(
-                self._chain_tool_invoker(
-                    "chain_x402_fetch",
-                    {"url": self.config.x402_url, "method": self.config.x402_method},
-                ),
-            )
-            self._state.lastX402At = utcnow_iso()
-            return {"action": decision.action, "result": result, "changedState": True}
-
         raise RuntimeError(f"Unsupported autonomy action: {decision.action}")
 
     def _update_state(
         self,
         context: dict[str, Any],
-        decision: AutonomyDecision,
+        decision: GuardDecision,
         action_result: dict[str, Any],
     ) -> None:
         budget = context["budget"]
-        self._state.availableBudget = float(budget["availableBudget"])
-        self._state.x402Spent = float(budget["x402Spent"])
+        risk = context["risk"]
+        self._state.currentWalletBalanceEth = str(budget["currentWalletBalanceEth"])
+        self._state.currentWalletBalanceUsd = float(budget["currentWalletBalanceUsd"])
         self._state.dryRunRealizedPnl = float(budget["dryRunRealizedPnl"])
         self._state.dryRunUnrealizedPnl = float(budget["dryRunUnrealizedPnl"])
-        self._state.netBudget = float(budget["netBudget"])
+        self._state.netWorthEstimate = float(budget["netWorthEstimate"])
+        self._state.botEnabled = bool(risk["botEnabled"])
+        self._state.healthStatus = risk["healthStatus"]
         self._state.lastDecision = decision.model_dump()
-        self._state.lastActionResult = action_result
         self._state.lastTickAt = utcnow_iso()
         self._state.lastError = None
         self._state.tickCount += 1
 
-    def _x402_cooldown_elapsed(self) -> bool:
-        if self._state.lastX402At is None:
-            return True
+        if decision.action in {"stop_trading", "force_exit_all"}:
+            self._state.lastProtectiveAction = {
+                "action": decision.action,
+                "result": action_result,
+                "at": self._state.lastTickAt,
+            }
 
-        try:
-            previous = datetime.fromisoformat(self._state.lastX402At)
-        except ValueError:
-            return True
+        if decision.action == "request_funding":
+            self._state.lastFundingRecommendation = {
+                "action": decision.action,
+                "recommendedFundingUsd": decision.recommendedFundingUsd,
+                "reason": decision.reason,
+                "at": self._state.lastTickAt,
+            }
 
-        elapsed = datetime.now(timezone.utc) - previous
-        return elapsed.total_seconds() >= self.config.min_x402_interval_seconds
+    def _compute_health_status(
+        self,
+        current_wallet_balance_usd: float,
+        drawdown_ratio: float,
+    ) -> Literal["healthy", "watch", "critical"]:
+        if (
+            current_wallet_balance_usd <= self.config.force_exit_balance_usd
+            or drawdown_ratio >= self.config.max_drawdown_ratio
+        ):
+            return "critical"
 
-    def _load_state(self) -> BudgetLedger:
+        if current_wallet_balance_usd <= self.config.min_wallet_balance_usd:
+            return "watch"
+
+        return "healthy"
+
+    def _load_state(self) -> GuardLedger:
         path = Path(self.config.state_path)
         if not path.exists():
-            return BudgetLedger()
+            return GuardLedger()
 
         try:
-            return BudgetLedger.model_validate_json(path.read_text(encoding="utf-8"))
+            return GuardLedger.model_validate_json(path.read_text(encoding="utf-8"))
         except Exception:
-            return BudgetLedger()
+            return GuardLedger()
 
     def _save_state(self) -> None:
         path = Path(self.config.state_path)

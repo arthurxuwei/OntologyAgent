@@ -43,6 +43,8 @@ class FakeFreqtradeMcpClient:
             "get_open_trades",
             "get_closed_trades",
             "get_performance_summary",
+            "get_budget_snapshot",
+            "sync_dry_run_wallet",
             "start_bot",
             "stop_bot",
             "pause_trading",
@@ -66,6 +68,7 @@ class FreqtradeToolDiscoveryTests(unittest.TestCase):
             [
                 "force_enter_trade",
                 "force_exit_trade",
+                "get_budget_snapshot",
                 "get_closed_trades",
                 "get_open_trades",
                 "get_performance_summary",
@@ -75,6 +78,7 @@ class FreqtradeToolDiscoveryTests(unittest.TestCase):
                 "resume_trading",
                 "start_bot",
                 "stop_bot",
+                "sync_dry_run_wallet",
             ],
         )
 

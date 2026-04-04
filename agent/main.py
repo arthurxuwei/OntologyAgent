@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import os
+import threading
+from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any, Literal, Optional
+from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException
+from langchain_core.messages import HumanMessage
 from langchain_core.tools import StructuredTool
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
@@ -19,6 +23,8 @@ app = FastAPI(title="OntologyAgent agent")
 SYSTEM_PROMPT = (
     "你是一个金融助理。链上相关动作只能通过 chain MCP 工具完成；"
     "中心化交易和量化相关动作只能通过 Freqtrade MCP 工具完成。"
+    "在决定是否调用 x402、是否给 Freqtrade 增加 dry-run 资金前，应先查看 guard 状态。"
+    "你可以启动、停止或手动驱动资金守门子 Agent，但只有在确有需要时才这么做。"
     "执行任何会改变链上状态、Freqtrade 运行状态或交易状态的动作前，先清晰总结当前状态、"
     "即将执行的动作和影响对象，然后再调用工具。"
 )
@@ -30,6 +36,14 @@ REQUEST_TIMEOUT_SECONDS = float(
     os.getenv("CHAIN_TIMEOUT_SECONDS", os.getenv("EXECUTOR_TIMEOUT_SECONDS", "20"))
 )
 FREQTRADE_MCP_URL = os.getenv("FREQTRADE_MCP_URL", "http://freqtrade:8090/mcp/")
+
+
+def get_openai_base_url() -> Optional[str]:
+    value = os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_ENDPOINT")
+    if value is None:
+        return None
+    normalized = value.strip()
+    return normalized or None
 
 
 class SignTransferIntent(BaseModel):
@@ -83,6 +97,43 @@ class AgentRunRequest(BaseModel):
     input: str = Field(min_length=1, description="用户自然语言指令")
 
 
+class AgentSessionCreateResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ok: bool = True
+    sessionId: str
+
+
+class AgentChatRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    input: str = Field(min_length=1, description="当前轮用户输入")
+
+
+class AgentChatResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ok: bool = True
+    sessionId: str
+    input: str
+    output: str
+    messageCount: int
+
+
+class AgentSessionStateResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ok: bool = True
+    sessionId: str
+    messageCount: int
+
+
+@dataclass
+class AgentSession:
+    session_id: str
+    messages: list[Any] = field(default_factory=list)
+
+
 class EmptyIntent(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -92,6 +143,12 @@ class TradeListIntent(BaseModel):
 
     limit: int = Field(default=20, ge=1, le=200, description="返回记录数")
     offset: int = Field(default=0, ge=0, description="偏移量")
+
+
+class SyncDryRunWalletIntent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    dryRunWallet: float = Field(ge=0, description="新的 Freqtrade dry-run wallet 资金")
 
 
 class ForceEnterTradeIntent(BaseModel):
@@ -111,6 +168,30 @@ class ForceExitTradeIntent(BaseModel):
     tradeId: str = Field(description="交易 ID，或 all")
     orderType: Literal["market", "limit"] = Field(default="market", description="订单类型")
     amount: Optional[float] = Field(default=None, description="部分平仓数量")
+
+
+class AgentSessionStore:
+    def __init__(self) -> None:
+        self._sessions: dict[str, AgentSession] = {}
+        self._lock = threading.RLock()
+
+    def create(self) -> AgentSession:
+        session = AgentSession(session_id=str(uuid4()))
+        with self._lock:
+            self._sessions[session.session_id] = session
+        return session
+
+    def get(self, session_id: str) -> AgentSession:
+        with self._lock:
+            session = self._sessions.get(session_id)
+        if session is None:
+            raise KeyError(session_id)
+        return session
+
+
+@lru_cache(maxsize=1)
+def get_session_store() -> AgentSessionStore:
+    return AgentSessionStore()
 
 
 @lru_cache(maxsize=1)
@@ -190,8 +271,8 @@ async def chain_x402_fetch_tool(
     body: Optional[Any] = None,
 ) -> dict[str, Any]:
     intent = X402FetchIntent(
-        url=url,
-        method=method,
+        url=HttpUrl(url),
+        method=method,  # type: ignore[arg-type]
         headers=headers,
         body=body,
     )
@@ -236,6 +317,18 @@ async def get_closed_trades_tool(limit: int = 20, offset: int = 0) -> dict[str, 
 
 async def get_performance_summary_tool() -> dict[str, Any]:
     return await call_freqtrade_tool("get_performance_summary")
+
+
+async def get_budget_snapshot_tool() -> dict[str, Any]:
+    return await call_freqtrade_tool("get_budget_snapshot")
+
+
+async def sync_dry_run_wallet_tool(dryRunWallet: float) -> dict[str, Any]:
+    intent = SyncDryRunWalletIntent(dryRunWallet=dryRunWallet)
+    return await call_freqtrade_tool(
+        "sync_dry_run_wallet",
+        {"dry_run_wallet": intent.dryRunWallet},
+    )
 
 
 async def start_bot_tool() -> dict[str, Any]:
@@ -289,6 +382,26 @@ async def force_exit_trade_tool(
     return await call_freqtrade_tool("force_exit_trade", payload)
 
 
+async def get_guard_status_tool() -> dict[str, Any]:
+    return await get_autonomy_controller().status()
+
+
+async def start_guard_agent_tool() -> dict[str, Any]:
+    controller = get_autonomy_controller()
+    await controller.start(force=True)
+    return await controller.status()
+
+
+async def stop_guard_agent_tool() -> dict[str, Any]:
+    controller = get_autonomy_controller()
+    await controller.stop(disable=True)
+    return await controller.status()
+
+
+async def run_guard_tick_tool() -> dict[str, Any]:
+    return await get_autonomy_controller().tick()
+
+
 CHAIN_TOOL_REGISTRY: dict[str, dict[str, Any]] = {
     "chain_sign_transfer": {
         "description": "签名 ETH 转账，但不广播。",
@@ -338,6 +451,16 @@ FREQTRADE_TOOL_REGISTRY: dict[str, dict[str, Any]] = {
         "description": "查看收益、表现和绩效摘要。",
         "args_schema": EmptyIntent,
         "coroutine": get_performance_summary_tool,
+    },
+    "get_budget_snapshot": {
+        "description": "查看 dry-run 资金、盈亏和预算快照。",
+        "args_schema": EmptyIntent,
+        "coroutine": get_budget_snapshot_tool,
+    },
+    "sync_dry_run_wallet": {
+        "description": "更新 Freqtrade dry-run wallet 资金；由主 Agent 决定是否调用。",
+        "args_schema": SyncDryRunWalletIntent,
+        "coroutine": sync_dry_run_wallet_tool,
     },
     "start_bot": {
         "description": "启动 Freqtrade bot。",
@@ -415,7 +538,34 @@ def discover_freqtrade_tools() -> list[StructuredTool]:
 
 
 def build_tools() -> list[StructuredTool]:
-    return [*discover_chain_tools(), *discover_freqtrade_tools()]
+    return [
+        StructuredTool.from_function(
+            name="get_guard_status",
+            description="查看资金守门子 Agent 当前状态、阈值、账本和最近建议。",
+            args_schema=EmptyIntent,
+            coroutine=get_guard_status_tool,
+        ),
+        StructuredTool.from_function(
+            name="start_guard_agent",
+            description="启动后台资金守门子 Agent，让它开始周期性检查钱包和 dry-run 风险。",
+            args_schema=EmptyIntent,
+            coroutine=start_guard_agent_tool,
+        ),
+        StructuredTool.from_function(
+            name="stop_guard_agent",
+            description="停止后台资金守门子 Agent。",
+            args_schema=EmptyIntent,
+            coroutine=stop_guard_agent_tool,
+        ),
+        StructuredTool.from_function(
+            name="run_guard_tick",
+            description="立即让资金守门子 Agent 执行一次检查和保护性决策。",
+            args_schema=EmptyIntent,
+            coroutine=run_guard_tick_tool,
+        ),
+        *discover_chain_tools(),
+        *discover_freqtrade_tools(),
+    ]
 
 
 @lru_cache(maxsize=1)
@@ -434,7 +584,14 @@ def get_agent_graph() -> Any:
         raise RuntimeError("OPENAI_API_KEY is not configured")
 
     model_name = os.getenv("BRAIN_AGENT_MODEL", "gpt-4o-mini")
-    llm = ChatOpenAI(model=model_name, temperature=0)
+    llm_kwargs: dict[str, Any] = {
+        "model": model_name,
+        "temperature": 0,
+    }
+    base_url = get_openai_base_url()
+    if base_url is not None:
+        llm_kwargs["base_url"] = base_url
+    llm = ChatOpenAI(**llm_kwargs)
     tools = build_tools()
     return create_react_agent(model=llm, tools=tools, prompt=SYSTEM_PROMPT)
 
@@ -457,6 +614,33 @@ def _normalize_message_content(content: Any) -> str:
     return str(content)
 
 
+def _extract_final_output(messages: list[Any]) -> str:
+    final_message = None
+    for message in reversed(messages):
+        if getattr(message, "type", None) == "ai":
+            final_message = message
+            break
+
+    if final_message is None and messages:
+        final_message = messages[-1]
+
+    return _normalize_message_content(
+        getattr(final_message, "content", "No response from agent.")
+    )
+
+
+def _invoke_agent(messages: list[Any]) -> dict[str, Any]:
+    try:
+        graph = get_agent_graph()
+    except RuntimeError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+
+    try:
+        return graph.invoke({"messages": messages})
+    except Exception as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
 @app.on_event("startup")
 async def startup_event() -> None:
     await get_autonomy_controller().start()
@@ -464,7 +648,7 @@ async def startup_event() -> None:
 
 @app.on_event("shutdown")
 async def shutdown_event() -> None:
-    await get_autonomy_controller().stop()
+    await get_autonomy_controller().stop(disable=False)
 
 
 @app.get("/health")
@@ -511,31 +695,66 @@ async def autonomy_status() -> dict[str, Any]:
     return await get_autonomy_controller().status()
 
 
+@app.post("/autonomy/start")
+async def autonomy_start() -> dict[str, Any]:
+    controller = get_autonomy_controller()
+    await controller.start(force=True)
+    return await controller.status()
+
+
+@app.post("/autonomy/stop")
+async def autonomy_stop() -> dict[str, Any]:
+    controller = get_autonomy_controller()
+    await controller.stop(disable=True)
+    return await controller.status()
+
+
+@app.post("/autonomy/tick")
+async def autonomy_tick() -> dict[str, Any]:
+    return await get_autonomy_controller().tick()
+
+
+@app.post("/agent/sessions")
+def create_agent_session() -> AgentSessionCreateResponse:
+    session = get_session_store().create()
+    return AgentSessionCreateResponse(sessionId=session.session_id)
+
+
+@app.get("/agent/sessions/{session_id}")
+def get_agent_session(session_id: str) -> AgentSessionStateResponse:
+    try:
+        session = get_session_store().get(session_id)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=f"Unknown agent session: {session_id}") from error
+
+    return AgentSessionStateResponse(sessionId=session.session_id, messageCount=len(session.messages))
+
+
+@app.post("/agent/sessions/{session_id}/messages")
+def send_agent_session_message(session_id: str, request: AgentChatRequest) -> AgentChatResponse:
+    try:
+        session = get_session_store().get(session_id)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=f"Unknown agent session: {session_id}") from error
+
+    result = _invoke_agent([*session.messages, HumanMessage(content=request.input)])
+    messages = result.get("messages", [])
+    session.messages = list(messages)
+    output = _extract_final_output(session.messages)
+
+    return AgentChatResponse(
+        sessionId=session.session_id,
+        input=request.input,
+        output=output,
+        messageCount=len(session.messages),
+    )
+
+
 @app.post("/agent/run")
 def run_agent(request: AgentRunRequest) -> dict[str, Any]:
-    try:
-        graph = get_agent_graph()
-    except RuntimeError as error:
-        raise HTTPException(status_code=503, detail=str(error)) from error
-
-    try:
-        result = graph.invoke({"messages": [{"role": "user", "content": request.input}]})
-    except Exception as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
-
+    result = _invoke_agent([HumanMessage(content=request.input)])
     messages = result.get("messages", [])
-    final_message = None
-    for message in reversed(messages):
-        if getattr(message, "type", None) == "ai":
-            final_message = message
-            break
-
-    if final_message is None and messages:
-        final_message = messages[-1]
-
-    output = _normalize_message_content(
-        getattr(final_message, "content", "No response from agent.")
-    )
+    output = _extract_final_output(messages)
 
     return {
         "ok": True,
