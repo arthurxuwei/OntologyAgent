@@ -5,14 +5,18 @@ import { createTransactionSender } from "../chain-executor.js";
 import { loadConfig, type AppConfig } from "../config.js";
 import { normalizeError } from "../domain/errors.js";
 import { BundlerClient } from "../erc4337.js";
+import { NetworkClient } from "../infra/network-client.js";
+import { PrivateKeySigner } from "../infra/signers/private-key-signer.js";
 import { PolicyGuard } from "../policies/policy-guard.js";
 import { ExecutionService } from "../services/execution-service.js";
 import { SettlementService } from "../services/settlement-service.js";
 import { SignTransferService } from "../services/sign-transfer-service.js";
 import { UserOperationService } from "../services/user-operation-service.js";
+import { WalletStateService } from "../services/wallet-state-service.js";
 import { X402FetchService } from "../services/x402-fetch-service.js";
 
 type ChainRuntime = {
+  walletStateService: WalletStateService;
   signTransferService: SignTransferService;
   executionService: ExecutionService;
   userOperationService: UserOperationService;
@@ -75,11 +79,19 @@ export function createChainRuntime(
     x402FetchService?: X402FetchService;
   },
 ): ChainRuntime {
+  const networkClient = config.network.mockChain ? null : new NetworkClient(config.network);
+  const signer = config.signer.privateKey
+    ? new PrivateKeySigner(
+        config.signer,
+        networkClient ?? new NetworkClient(config.network),
+      )
+    : null;
   const sender = createTransactionSender(config);
   const policyGuard = new PolicyGuard(config.policy, config.x402);
   const settlementService = new SettlementService();
 
   return {
+    walletStateService: new WalletStateService(config, policyGuard, networkClient, signer),
     signTransferService: new SignTransferService(sender, policyGuard, settlementService),
     executionService: new ExecutionService(sender, policyGuard, settlementService),
     userOperationService: new UserOperationService(
@@ -97,6 +109,15 @@ export function createChainMcpServer(runtime: ChainRuntime): McpServer {
     name: "ontologyagent-chain",
     version: "1.0.0",
   });
+
+  server.registerTool(
+    "chain_get_wallet_state",
+    {
+      description: "Return the configured signer address, current wallet balance, and chain policy snapshot.",
+      inputSchema: {},
+    },
+    async () => runTool(() => runtime.walletStateService.execute()),
+  );
 
   server.registerTool(
     "chain_sign_transfer",
@@ -142,7 +163,7 @@ export function createChainMcpServer(runtime: ChainRuntime): McpServer {
   server.registerTool(
     "chain_x402_fetch",
     {
-        description: "Execute an x402 fetch flow against a paid upstream endpoint.",
+      description: "Execute an x402 fetch flow against a paid upstream endpoint.",
       inputSchema: {
         url: z.string().url().describe("Target x402 upstream URL"),
         method: z

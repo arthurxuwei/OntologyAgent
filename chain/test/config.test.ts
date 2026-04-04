@@ -22,3 +22,11 @@ test("loadConfig normalizes private keys with missing 0x prefix", () => {
   assert.equal(config.signer.privateKey, "0xabc123");
   assert.equal(config.x402.buyerPrivateKey, "0xdef456");
 });
+
+test("loadConfig exposes mock balance for chain wallet state", () => {
+  const config = loadConfig({
+    CHAIN_MOCK_BALANCE_ETH: "2.5",
+  });
+
+  assert.equal(config.network.mockBalanceWei.toString(), "2500000000000000000");
+});

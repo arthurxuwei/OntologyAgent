@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import Any, Literal
@@ -20,6 +21,7 @@ FREQTRADE_ALLOW_WRITE_ACTIONS = os.getenv("FREQTRADE_ALLOW_WRITE_ACTIONS", "true
     "on",
 }
 FREQTRADE_STRATEGY_PATH = Path(os.getenv("FREQTRADE_STRATEGY_PATH", "/app/strategies"))
+FREQTRADE_CONFIG_PATH = Path(os.getenv("FREQTRADE_CONFIG_PATH", "/app/config/config.json"))
 
 mcp = FastMCP(
     "Freqtrade Skill Provider",
@@ -101,6 +103,34 @@ def summarize_closed_trades(payload: Any) -> dict[str, Any]:
     }
 
 
+def read_config() -> dict[str, Any]:
+    return json.loads(FREQTRADE_CONFIG_PATH.read_text(encoding="utf-8"))
+
+
+def write_config(payload: dict[str, Any]) -> None:
+    FREQTRADE_CONFIG_PATH.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+
+def extract_first_numeric(payload: Any, keys: list[str]) -> float:
+    if not isinstance(payload, dict):
+        return 0.0
+
+    for key in keys:
+        value = payload.get(key)
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
+            try:
+                return float(value)
+            except ValueError:
+                continue
+
+    return 0.0
+
+
 @mcp.tool()
 async def get_trading_status() -> dict[str, Any]:
     status = await rest_client.get("/status")
@@ -158,6 +188,70 @@ async def get_performance_summary() -> dict[str, Any]:
         "profit": profit,
         "performance": performance,
         "balance": balance,
+    }
+
+
+@mcp.tool()
+async def get_budget_snapshot() -> dict[str, Any]:
+    config = read_config()
+    profit = await rest_client.get("/profit")
+    balance = await rest_client.get("/balance")
+    status = await rest_client.get("/status")
+    show_config = await rest_client.get("/show_config")
+
+    open_trade_count = len(status) if isinstance(status, list) else 0
+    realized_pnl = extract_first_numeric(
+        profit,
+        [
+            "profit_closed_coin",
+            "profit_closed_abs",
+            "profit_closed_fiat",
+            "profit_total_abs",
+        ],
+    )
+    unrealized_pnl = extract_first_numeric(
+        profit,
+        [
+            "profit_open_coin",
+            "profit_open_abs",
+            "profit_open_fiat",
+        ],
+    )
+
+    return {
+        "summary": "Dry-run budget snapshot with config and profit metrics",
+        "dryRun": bool(config.get("dry_run", False)),
+        "dryRunWallet": float(config.get("dry_run_wallet", 0)),
+        "stakeCurrency": config.get("stake_currency"),
+        "stakeAmount": float(config.get("stake_amount", 0)),
+        "maxOpenTrades": int(config.get("max_open_trades", 0)),
+        "activeStrategy": show_config.get("strategy") if isinstance(show_config, dict) else None,
+        "initialState": config.get("initial_state"),
+        "openTradeCount": open_trade_count,
+        "realizedPnl": realized_pnl,
+        "unrealizedPnl": unrealized_pnl,
+        "profit": profit,
+        "balance": balance,
+    }
+
+
+@mcp.tool()
+async def sync_dry_run_wallet(dry_run_wallet: float) -> dict[str, Any]:
+    ensure_write_allowed()
+    if dry_run_wallet < 0:
+        raise FreqtradeRestError("dry_run_wallet must be non-negative")
+
+    config = read_config()
+    previous_wallet = float(config.get("dry_run_wallet", 0))
+    config["dry_run_wallet"] = dry_run_wallet
+    write_config(config)
+
+    return {
+        "summary": "Updated Freqtrade dry-run wallet in config",
+        "previousDryRunWallet": previous_wallet,
+        "currentDryRunWallet": dry_run_wallet,
+        "configPath": str(FREQTRADE_CONFIG_PATH),
+        "restartRecommended": True,
     }
 
 

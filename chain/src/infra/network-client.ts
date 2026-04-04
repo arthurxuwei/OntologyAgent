@@ -18,6 +18,10 @@ export class NetworkClient {
     return this.provider.getTransactionCount(address, "pending");
   }
 
+  async getBalance(address: string): Promise<bigint> {
+    return this.provider.getBalance(address);
+  }
+
   async getFeeData(): Promise<FeeData> {
     return this.provider.getFeeData();
   }

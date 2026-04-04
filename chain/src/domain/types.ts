@@ -161,3 +161,26 @@ export type HealthResult = {
     buyerSignerConfigured: boolean;
   };
 };
+
+export type WalletStateResult = {
+  wallet: {
+    address: string | null;
+    signerConfigured: boolean;
+    balanceWei: string;
+    balanceEth: string;
+    mockChain: boolean;
+  };
+  chain: {
+    blockNumber: number;
+    rpcUrl: string;
+    chainId: number | null;
+    expectedChainId: number;
+    mockChain: boolean;
+  };
+  policy: PolicySnapshot;
+  x402: {
+    network: string;
+    asset: string;
+    buyerSignerConfigured: boolean;
+  };
+};

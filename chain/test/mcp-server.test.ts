@@ -12,6 +12,7 @@ import type { X402FetchService } from "../src/services/x402-fetch-service.js";
 function createMockConfig() {
   return loadConfig({
     CHAIN_MOCK: "true",
+    PRIVATE_KEY: "0x59c6995e998f97a5a0044966f0945382d7fb8f3c2b5b2dd8f04c208dbb0f4f8d",
     WHITELISTED_RECIPIENTS:
       "0x2222222222222222222222222222222222222222,0x3333333333333333333333333333333333333333",
   });
@@ -59,11 +60,27 @@ test("chain MCP exposes the expected tool names", async () => {
     const response = await client.listTools();
     const toolNames = response.tools.map((tool) => tool.name).sort();
     assert.deepEqual(toolNames, [
+      "chain_get_wallet_state",
       "chain_sign_transfer",
       "chain_submit_execution",
       "chain_submit_user_operation",
       "chain_x402_fetch",
     ]);
+  });
+});
+
+test("chain_get_wallet_state returns the configured mock wallet balance", async () => {
+  await withClient(async (client) => {
+    const response = await client.callTool({
+      name: "chain_get_wallet_state",
+      arguments: {},
+    });
+
+    assert.notEqual(response.isError, true);
+    const content = response.structuredContent as Record<string, any>;
+    assert.equal(content.wallet?.mockChain, true);
+    assert.equal(content.wallet?.balanceEth, "1.0");
+    assert.equal(content.policy?.dailyLimitUsdcAtomic, "2000000");
   });
 });
 

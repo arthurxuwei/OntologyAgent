@@ -3,9 +3,6 @@ from __future__ import annotations
 import json
 from typing import Any, Awaitable, Callable, Optional
 
-from mcp import ClientSession
-from mcp.client.streamable_http import streamable_http_client
-
 
 class FreqtradeMcpClientError(Exception):
     pass
@@ -31,6 +28,9 @@ class FreqtradeMcpClient:
         if self._tool_lister is not None:
             return await self._tool_lister()
 
+        from mcp import ClientSession
+        from mcp.client.streamable_http import streamable_http_client
+
         async with streamable_http_client(self.server_url) as (
             read_stream,
             write_stream,
@@ -48,6 +48,9 @@ class FreqtradeMcpClient:
     ) -> dict[str, Any]:
         if self._tool_caller is not None:
             return await self._tool_caller(tool_name, arguments or {})
+
+        from mcp import ClientSession
+        from mcp.client.streamable_http import streamable_http_client
 
         async with streamable_http_client(self.server_url) as (
             read_stream,

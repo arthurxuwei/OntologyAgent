@@ -11,6 +11,7 @@ from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
+from autonomy import AutonomyController, load_autonomy_config
 from chain_mcp_client import ChainMcpClient
 from freqtrade_mcp_client import FreqtradeMcpClient, FreqtradeMcpClientError
 app = FastAPI(title="OntologyAgent agent")
@@ -418,6 +419,15 @@ def build_tools() -> list[StructuredTool]:
 
 
 @lru_cache(maxsize=1)
+def get_autonomy_controller() -> AutonomyController:
+    return AutonomyController(
+        load_autonomy_config(),
+        call_chain_tool,
+        call_freqtrade_tool,
+    )
+
+
+@lru_cache(maxsize=1)
 def get_agent_graph() -> Any:
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
@@ -447,6 +457,16 @@ def _normalize_message_content(content: Any) -> str:
     return str(content)
 
 
+@app.on_event("startup")
+async def startup_event() -> None:
+    await get_autonomy_controller().start()
+
+
+@app.on_event("shutdown")
+async def shutdown_event() -> None:
+    await get_autonomy_controller().stop()
+
+
 @app.get("/health")
 def health() -> dict[str, Any]:
     chain_tools: list[str] = []
@@ -463,6 +483,16 @@ def health() -> dict[str, Any]:
     except Exception as error:
         freqtrade_error = str(error)
 
+    autonomy_status: dict[str, Any]
+    try:
+        autonomy_status = asyncio.run(get_autonomy_controller().status())
+    except Exception as error:
+        autonomy_status = {
+            "enabled": False,
+            "running": False,
+            "error": str(error),
+        }
+
     return {
         "service": "OntologyAgent-agent",
         "status": "ok",
@@ -472,7 +502,13 @@ def health() -> dict[str, Any]:
         "freqtradeMcpUrl": FREQTRADE_MCP_URL,
         "freqtradeTools": freqtrade_tools,
         "freqtradeError": freqtrade_error,
+        "autonomy": autonomy_status,
     }
+
+
+@app.get("/autonomy/status")
+async def autonomy_status() -> dict[str, Any]:
+    return await get_autonomy_controller().status()
 
 
 @app.post("/agent/run")

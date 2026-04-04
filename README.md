@@ -40,6 +40,7 @@ docker compose up -d --build
 `agent` 启动后会同时发现两组内部工具：
 
 - `chain` MCP tools
+  - `chain_get_wallet_state`（内部账本 / 自治循环使用）
   - `chain_sign_transfer`
   - `chain_submit_execution`
   - `chain_submit_user_operation`
@@ -56,6 +57,35 @@ docker compose up -d --build
   - `resume_trading`
   - `force_enter_trade`
   - `force_exit_trade`
+  - `get_budget_snapshot`（内部账本 / 自治循环使用）
+  - `sync_dry_run_wallet`（内部 dry-run 资金同步使用）
+
+## 自治运行
+
+当前 `agent` 同时支持两条运行路径：
+
+- `POST /agent/run`：手动交互式决策
+- 后台自治循环：按固定周期读取链上钱包、x402 消费和 Freqtrade dry-run 盈亏，再用 GPT 做预算约束下的决策
+
+自治循环默认是 **关闭** 的，避免一启动就自动花费真实资产。启用后：
+
+- 启动资金默认来自链上钱包余额
+- `agent` 会把其中一部分预算同步给 Freqtrade 的 `dry_run_wallet`
+- 后续统一按内部账本跟踪：
+  - `startingCapital`
+  - `reservedForX402`
+  - `allocatedToDryRunTrading`
+  - `x402Spent`
+  - `dryRunRealizedPnl`
+  - `dryRunUnrealizedPnl`
+  - `netBudget`
+
+可通过：
+
+- `GET /health`
+- `GET /autonomy/status`
+
+查看当前自治状态和账本快照。
 
 ## 演示脚本
 
@@ -141,6 +171,17 @@ PRIVATE_KEY=0x... \
 - `FREQTRADE_MCP_URL`：`agent` 访问 Freqtrade MCP 的地址，默认 `http://freqtrade:8090/mcp/`
 - `OPENAI_API_KEY`：Agent 模型密钥
 - `BRAIN_AGENT_MODEL`：Agent 模型名，默认 `gpt-4o-mini`
+- `AUTONOMY_ENABLED`：是否开启后台自治循环，默认 `false`
+- `AUTONOMY_INTERVAL_SECONDS`：自治轮询间隔，默认 `60`
+- `AUTONOMY_STATE_PATH`：自治账本状态文件，默认 `/app/data/autonomy_state.json`
+- `AUTONOMY_X402_URL`：自治模式下调用的 x402 目标，默认 `http://x402-seller:8000/x402/demo-resource`
+- `AUTONOMY_ETH_PRICE_USD`：用于把链上 ETH 预算折算为统一 USD 视图的参考价格，默认 `3000`
+- `AUTONOMY_TRADING_ALLOCATION_RATIO`：映射到 Freqtrade dry-run 资金的预算比例，默认 `0.5`
+- `AUTONOMY_MIN_CASH_RESERVE_RATIO`：最低现金保留比例，默认 `0.25`
+- `AUTONOMY_MIN_NET_BUDGET_RATIO`：净预算阈值比例，默认 `0.6`
+- `AUTONOMY_MAX_DRAWDOWN_RATIO`：最大回撤阈值比例，默认 `0.15`
+- `AUTONOMY_MIN_X402_INTERVAL_SECONDS`：连续 x402 消费的最小冷却时间，默认 `1800`
+- `AUTONOMY_MODEL`：自治循环专用模型；为空时回退到 `BRAIN_AGENT_MODEL`
 ### chain
 
 - `CHAIN_MCP_PORT`：chain MCP 端口，默认 `8091`
@@ -151,6 +192,7 @@ PRIVATE_KEY=0x... \
 - `SINGLE_TX_CAP`：单笔 ETH 额度上限，默认 `1.0`
 - `WHITELISTED_RECIPIENTS`：额外白名单地址，逗号分隔
 - `CHAIN_MOCK`：是否使用模拟链执行，默认 `false`
+- `CHAIN_MOCK_BALANCE_ETH`：mock 模式下链上钱包返回给自治账本的余额，默认 `1.0`
 - `BUNDLER_RPC_URL`：ERC-4337 Bundler RPC
 - `ENTRY_POINT_ADDRESS`：ERC-4337 EntryPoint
 - `X402_FACILITATOR_URL`：x402 facilitator 地址
@@ -174,6 +216,7 @@ PRIVATE_KEY=0x... \
 - `FREQTRADE_TIMEOUT_SECONDS`：Freqtrade API / MCP 调用超时，默认 `20`
 - `FREQTRADE_ALLOW_WRITE_ACTIONS`：是否允许写操作，默认 `true`
 - `FREQTRADE_STRATEGY_NAME`：默认策略，默认 `SimpleAgentStrategy`
+- `FREQTRADE_CONFIG_PATH`：Freqtrade 配置路径；`sync_dry_run_wallet` 会更新其中的 `dry_run_wallet`
 
 ## `/agent/run`
 
