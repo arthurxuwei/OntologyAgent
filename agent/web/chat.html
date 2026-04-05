@@ -447,6 +447,17 @@
                         <span class="meta-value" id="guard-decision">未查询</span>
                       </div>
                     </div>
+
+                    <div class="meta-box">
+                      <div class="meta-row">
+                        <span class="meta-label">Chain Signer</span>
+                        <span class="meta-value" id="chain-signer-address">未查询</span>
+                      </div>
+                      <div class="meta-row">
+                        <span class="meta-label">最近链上动作</span>
+                        <span class="meta-value" id="recent-chain-action">暂无</span>
+                      </div>
+                    </div>
                   </div>
 
                   <div>
@@ -499,6 +510,8 @@
       const guardRunningEl = document.getElementById("guard-running");
       const guardHealthEl = document.getElementById("guard-health");
       const guardDecisionEl = document.getElementById("guard-decision");
+      const chainSignerAddressEl = document.getElementById("chain-signer-address");
+      const recentChainActionEl = document.getElementById("recent-chain-action");
       const messagesEl = document.getElementById("messages");
       const composerEl = document.getElementById("composer");
       const sendButtonEl = document.getElementById("send-button");
@@ -560,6 +573,39 @@
         guardResultEl.style.color = isError ? "var(--danger)" : "var(--ink)";
       }
 
+      function summarizeRecentChainAction(action) {
+        if (!action || !action.summary) {
+          return "暂无";
+        }
+
+        const summary = action.summary;
+        const parts = [summary.kind || action.tool || "未知动作"];
+        if (summary.to) parts.push(`to=${summary.to}`);
+        if (summary.target) parts.push(`target=${summary.target}`);
+        if (summary.url) parts.push(`url=${summary.url}`);
+        if (summary.amountEth) parts.push(`amount=${summary.amountEth} ETH`);
+        if (summary.valueEth && summary.valueEth !== "0") parts.push(`value=${summary.valueEth} ETH`);
+        if (summary.txHash) parts.push(`tx=${summary.txHash}`);
+        if (summary.userOpHash) parts.push(`userOp=${summary.userOpHash}`);
+        return parts.join(" | ");
+      }
+
+      function updateChainStatus(payload) {
+        const wallet = payload?.chainWallet?.wallet ?? {};
+        chainSignerAddressEl.textContent = wallet.address ?? "未配置";
+        recentChainActionEl.textContent = summarizeRecentChainAction(payload?.recentChainAction);
+      }
+
+      async function refreshHealth() {
+        try {
+          const payload = await requestJson("/health", { method: "GET" });
+          updateChainStatus(payload);
+        } catch (_error) {
+          chainSignerAddressEl.textContent = "读取失败";
+          recentChainActionEl.textContent = "读取失败";
+        }
+      }
+
       async function requestJson(url, options = {}) {
         const response = await fetch(url, {
           headers: {
@@ -596,6 +642,7 @@
           updateGuardResult("创建会话失败", error.message, true);
         } finally {
           setBusy(false);
+          refreshHealth();
         }
       }
 
@@ -633,6 +680,7 @@
         } finally {
           setBusy(false);
           composerEl.focus();
+          refreshHealth();
         }
       }
 
@@ -648,6 +696,7 @@
           updateGuardResult(`${label} 失败`, error.message, true);
         } finally {
           setBusy(false);
+          refreshHealth();
         }
       }
 
@@ -665,6 +714,7 @@
       });
 
       runGuardAction("/autonomy/status", "初始化理财子状态");
+      refreshHealth();
     </script>
   </body>
 </html>

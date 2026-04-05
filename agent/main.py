@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import threading
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -142,6 +143,37 @@ class AgentSession:
     messages: list[Any] = field(default_factory=list)
 
 
+@dataclass
+class RecentChainAction:
+    tool: str
+    at: str
+    summary: dict[str, Any]
+
+
+class ChainActivityStore:
+    def __init__(self) -> None:
+        self._last_action: Optional[RecentChainAction] = None
+        self._lock = threading.RLock()
+
+    def set(self, tool: str, summary: dict[str, Any]) -> None:
+        with self._lock:
+            self._last_action = RecentChainAction(
+                tool=tool,
+                at=datetime.now(timezone.utc).isoformat(),
+                summary=summary,
+            )
+
+    def get(self) -> Optional[dict[str, Any]]:
+        with self._lock:
+            if self._last_action is None:
+                return None
+            return {
+                "tool": self._last_action.tool,
+                "at": self._last_action.at,
+                "summary": self._last_action.summary,
+            }
+
+
 class EmptyIntent(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -203,6 +235,11 @@ def get_session_store() -> AgentSessionStore:
 
 
 @lru_cache(maxsize=1)
+def get_chain_activity_store() -> ChainActivityStore:
+    return ChainActivityStore()
+
+
+@lru_cache(maxsize=1)
 def get_chain_mcp_client() -> ChainMcpClient:
     return ChainMcpClient(CHAIN_MCP_URL)
 
@@ -218,16 +255,78 @@ def _unwrap_mcp_result(tool_name: str, result: dict[str, Any]) -> dict[str, Any]
     return result
 
 
+def _summarize_chain_result(tool_name: str, result: dict[str, Any]) -> dict[str, Any]:
+    structured = result.get("result", result)
+
+    if tool_name == "chain_sign_transfer":
+        tx = structured.get("transaction", {})
+        policy = structured.get("policy", {})
+        return {
+            "kind": "sign_transfer",
+            "to": tx.get("to"),
+            "amountEth": tx.get("amountEth"),
+            "txHash": tx.get("txHash"),
+            "mode": structured.get("mode"),
+            "decision": policy.get("decision"),
+        }
+
+    if tool_name == "chain_submit_execution":
+        execution = structured.get("execution", {})
+        settlement = structured.get("settlement", {})
+        return {
+            "kind": "submit_execution",
+            "to": execution.get("to"),
+            "valueEth": execution.get("valueEth"),
+            "txHash": settlement.get("txHash"),
+            "status": settlement.get("status"),
+            "mode": settlement.get("mode"),
+        }
+
+    if tool_name == "chain_submit_user_operation":
+        settlement = structured.get("settlement", {})
+        return {
+            "kind": "submit_user_operation",
+            "target": structured.get("target"),
+            "userOpHash": settlement.get("userOpHash"),
+            "status": settlement.get("status"),
+            "mode": settlement.get("mode"),
+        }
+
+    if tool_name == "chain_x402_fetch":
+        payment = structured.get("payment", {})
+        return {
+            "kind": "x402_fetch",
+            "url": structured.get("request", {}).get("url"),
+            "statusCode": structured.get("upstream", {}).get("status"),
+            "payer": payment.get("payer"),
+            "txHash": payment.get("txHash"),
+            "success": structured.get("paymentResponse", {}).get("success"),
+        }
+
+    return {
+        "kind": tool_name,
+        "result": structured,
+    }
+
+
 async def call_chain_tool(tool_name: str, arguments: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     try:
         result = await get_chain_mcp_client().call_tool(tool_name, arguments or {})
     except Exception as error:
         raise RuntimeError(f"Chain MCP tool failed: {tool_name}: {error}") from error
 
-    return {
+    payload = {
         "tool": tool_name,
         "result": _unwrap_mcp_result(tool_name, result),
     }
+    if tool_name != "chain_get_wallet_state":
+        get_chain_activity_store().set(tool_name, _summarize_chain_result(tool_name, payload))
+    return payload
+
+
+async def get_chain_wallet_state() -> dict[str, Any]:
+    result = await get_chain_mcp_client().call_tool("chain_get_wallet_state", {})
+    return _unwrap_mcp_result("chain_get_wallet_state", result)
 
 
 async def chain_sign_transfer_tool(to: str, amountEth: str) -> dict[str, Any]:
@@ -704,12 +803,20 @@ def health() -> dict[str, Any]:
             "error": str(error),
         }
 
+    chain_wallet: Optional[dict[str, Any]] = None
+    try:
+        chain_wallet = asyncio.run(get_chain_wallet_state())
+    except Exception:
+        chain_wallet = None
+
     return {
         "service": "OntologyAgent-agent",
         "status": "ok",
         "chainMcpUrl": CHAIN_MCP_URL,
         "chainTools": chain_tools,
         "chainError": chain_error,
+        "chainWallet": chain_wallet,
+        "recentChainAction": get_chain_activity_store().get(),
         "freqtradeMcpUrl": FREQTRADE_MCP_URL,
         "freqtradeTools": freqtrade_tools,
         "freqtradeError": freqtrade_error,
