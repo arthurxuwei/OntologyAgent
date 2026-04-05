@@ -35,10 +35,10 @@ session_id="$(printf '%s' "$session_json" | extract_json_field "sessionId")"
 echo "Connected to ${AGENT_BASE_URL}"
 echo "Session: ${session_id}"
 echo "Commands:"
-echo "  /guard-status  show child agent status"
-echo "  /guard-start   start child agent"
-echo "  /guard-stop    stop child agent"
-echo "  /guard-tick    run one child-agent tick"
+echo "  /wealth-status 查看理财子状态"
+echo "  /wealth-start  启动理财子"
+echo "  /wealth-stop   停止理财子"
+echo "  /wealth-tick   执行一轮理财子检查"
 echo "  /exit          quit"
 echo
 
@@ -57,19 +57,19 @@ while true; do
     /exit|exit|quit)
       break
       ;;
-    /guard-status)
+    /wealth-status|/guard-status)
       curl -fsS "${AGENT_BASE_URL}/autonomy/status" | print_json
       continue
       ;;
-    /guard-start)
+    /wealth-start|/guard-start)
       curl -fsS -X POST "${AGENT_BASE_URL}/autonomy/start" | print_json
       continue
       ;;
-    /guard-stop)
+    /wealth-stop|/guard-stop)
       curl -fsS -X POST "${AGENT_BASE_URL}/autonomy/stop" | print_json
       continue
       ;;
-    /guard-tick)
+    /wealth-tick|/guard-tick)
       curl -fsS -X POST "${AGENT_BASE_URL}/autonomy/tick" | print_json
       continue
       ;;

@@ -25,8 +25,8 @@ app = FastAPI(title="OntologyAgent agent")
 SYSTEM_PROMPT = (
     "你是一个金融助理。链上相关动作只能通过 chain MCP 工具完成；"
     "中心化交易和量化相关动作只能通过 Freqtrade MCP 工具完成。"
-    "在决定是否调用 x402、是否给 Freqtrade 增加 dry-run 资金前，应先查看 guard 状态。"
-    "你可以启动、停止或手动驱动资金守门子 Agent，但只有在确有需要时才这么做。"
+    "在决定是否调用 x402、是否给 Freqtrade 增加 dry-run 资金前，应先查看理财子状态。"
+    "你可以启动、停止或手动驱动理财子 Agent，但只有在确有需要时才这么做。"
     "执行任何会改变链上状态、Freqtrade 运行状态或交易状态的动作前，先清晰总结当前状态、"
     "即将执行的动作和影响对象，然后再调用工具。"
 )
@@ -390,23 +390,23 @@ async def force_exit_trade_tool(
     return await call_freqtrade_tool("force_exit_trade", payload)
 
 
-async def get_guard_status_tool() -> dict[str, Any]:
+async def get_wealth_status_tool() -> dict[str, Any]:
     return await get_autonomy_controller().status()
 
 
-async def start_guard_agent_tool() -> dict[str, Any]:
+async def start_wealth_agent_tool() -> dict[str, Any]:
     controller = get_autonomy_controller()
     await controller.start(force=True)
     return await controller.status()
 
 
-async def stop_guard_agent_tool() -> dict[str, Any]:
+async def stop_wealth_agent_tool() -> dict[str, Any]:
     controller = get_autonomy_controller()
     await controller.stop(disable=True)
     return await controller.status()
 
 
-async def run_guard_tick_tool() -> dict[str, Any]:
+async def run_wealth_tick_tool() -> dict[str, Any]:
     return await get_autonomy_controller().tick()
 
 
@@ -466,7 +466,7 @@ FREQTRADE_TOOL_REGISTRY: dict[str, dict[str, Any]] = {
         "coroutine": get_budget_snapshot_tool,
     },
     "sync_dry_run_wallet": {
-        "description": "更新 Freqtrade dry-run wallet 资金；由主 Agent 决定是否调用。",
+        "description": "更新 Freqtrade dry-run wallet 资金；由管家决定是否调用。",
         "args_schema": SyncDryRunWalletIntent,
         "coroutine": sync_dry_run_wallet_tool,
     },
@@ -557,28 +557,28 @@ def _make_structured_tool(name: str, spec: dict[str, Any]) -> StructuredTool:
 def build_tools() -> list[StructuredTool]:
     return [
         StructuredTool.from_function(
-            name="get_guard_status",
-            description="查看资金守门子 Agent 当前状态、阈值、账本和最近建议。",
+            name="get_wealth_status",
+            description="查看理财子 Agent 当前状态、阈值、账本和最近建议。",
             args_schema=EmptyIntent,
-            coroutine=get_guard_status_tool,
+            coroutine=get_wealth_status_tool,
         ),
         StructuredTool.from_function(
-            name="start_guard_agent",
-            description="启动后台资金守门子 Agent，让它开始周期性检查钱包和 dry-run 风险。",
+            name="start_wealth_agent",
+            description="启动后台理财子 Agent，让它开始周期性检查钱包和 dry-run 风险。",
             args_schema=EmptyIntent,
-            coroutine=start_guard_agent_tool,
+            coroutine=start_wealth_agent_tool,
         ),
         StructuredTool.from_function(
-            name="stop_guard_agent",
-            description="停止后台资金守门子 Agent。",
+            name="stop_wealth_agent",
+            description="停止后台理财子 Agent。",
             args_schema=EmptyIntent,
-            coroutine=stop_guard_agent_tool,
+            coroutine=stop_wealth_agent_tool,
         ),
         StructuredTool.from_function(
-            name="run_guard_tick",
-            description="立即让资金守门子 Agent 执行一次检查和保护性决策。",
+            name="run_wealth_tick",
+            description="立即让理财子 Agent 执行一次检查和保护性决策。",
             args_schema=EmptyIntent,
-            coroutine=run_guard_tick_tool,
+            coroutine=run_wealth_tick_tool,
         ),
         *[_make_structured_tool(name, spec) for name, spec in CHAIN_TOOL_REGISTRY.items()],
         *[_make_structured_tool(name, spec) for name, spec in FREQTRADE_TOOL_REGISTRY.items()],

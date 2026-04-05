@@ -380,7 +380,7 @@ class AutonomyController:
             llm_kwargs["base_url"] = base_url
         llm = ChatOpenAI(**llm_kwargs)
         prompt = (
-            "你是一个钱包资金守门子 Agent。"
+            "你是一个钱包理财子 Agent。"
             "你只关心钱包余额、dry-run 绩效和风险阈值。"
             "只允许在 allowedActions 中选择 action。"
             "你不能主动发起 x402 消费，也不能主动给 Freqtrade 加钱。"

@@ -397,7 +397,7 @@
     <div class="shell">
       <section class="hero">
         <span class="eyebrow">OntologyAgent Console</span>
-        <h1>和主 Agent 持续对话，同时管理守门子。</h1>
+        <h1>和管家持续对话，同时管理理财子。</h1>
       </section>
 
       <div class="card chat">
@@ -405,19 +405,19 @@
           <section class="guard-panel">
             <div class="guard-shell">
               <div>
-                <h3 class="panel-title">Guard Console</h3>
+                <h3 class="panel-title">理财子控制台</h3>
               </div>
 
               <div class="guard-grid">
                 <div class="guard-actions">
                   <button class="primary" id="new-session-button" data-control-button>新建会话</button>
                   <select class="guard-select" id="guard-action-select" data-control-button>
-                    <option value="/autonomy/status">查看状态</option>
-                    <option value="/autonomy/start">启动守门子</option>
-                    <option value="/autonomy/tick">执行一轮 Tick</option>
-                    <option value="/autonomy/stop">停止守门子</option>
+                    <option value="/autonomy/status">查看理财子状态</option>
+                    <option value="/autonomy/start">启动理财子</option>
+                    <option value="/autonomy/tick">执行一轮理财子 Tick</option>
+                    <option value="/autonomy/stop">停止理财子</option>
                   </select>
-                  <button class="secondary" id="guard-action-button" data-control-button>执行 Guard 操作</button>
+                  <button class="secondary" id="guard-action-button" data-control-button>执行理财子操作</button>
                 </div>
 
                 <div class="guard-summary">
@@ -450,7 +450,7 @@
                   </div>
 
                   <div>
-                    <span class="meta-label">最近 Guard 返回</span>
+                    <span class="meta-label">最近理财子返回</span>
                     <div class="guard-result" id="guard-result">等待操作…</div>
                   </div>
                 </div>
@@ -461,7 +461,7 @@
           <section class="chat-main">
             <header class="chat-header">
               <div>
-                <h2>Interactive Agent</h2>
+                <h2>管家</h2>
               </div>
               <div class="status-pill" id="connection-status">Ready</div>
             </header>
@@ -476,10 +476,10 @@
             <section class="composer">
               <textarea
                 id="composer"
-                placeholder="输入你的问题，比如：先查看 guard 状态，再告诉我当前适合继续交易还是先补充资金。"
+                placeholder="输入你的问题，比如：先查看理财子状态，再告诉我当前适合继续交易还是先补充资金。"
               ></textarea>
               <div class="composer-actions">
-                <span class="hint">支持多轮会话。左侧 Guard 负责守门与控制，右侧用于和主 Agent 持续交互。</span>
+                <span class="hint">支持多轮会话。左侧理财子负责风控与保护，右侧用于和管家持续交互。</span>
                 <button class="primary" id="send-button">发送消息</button>
               </div>
             </section>
@@ -509,10 +509,10 @@
       const guardActionButtonEl = document.getElementById("guard-action-button");
 
       const GUARD_ACTION_LABELS = {
-        "/autonomy/status": "查看守门子状态",
-        "/autonomy/start": "启动守门子",
-        "/autonomy/tick": "执行守门子 Tick",
-        "/autonomy/stop": "停止守门子",
+        "/autonomy/status": "查看理财子状态",
+        "/autonomy/start": "启动理财子",
+        "/autonomy/tick": "执行理财子 Tick",
+        "/autonomy/stop": "停止理财子",
       };
 
       function setBusy(busy, label = "Working") {
@@ -664,7 +664,7 @@
         }
       });
 
-      runGuardAction("/autonomy/status", "初始化守门子状态");
+      runGuardAction("/autonomy/status", "初始化理财子状态");
     </script>
   </body>
 </html>

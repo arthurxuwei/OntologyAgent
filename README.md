@@ -42,11 +42,11 @@ docker compose up -d --build
 
 `agent` 启动后会同时发现三类内部工具：
 
-- 本地 guard 工具
-  - `get_guard_status`
-  - `start_guard_agent`
-  - `stop_guard_agent`
-  - `run_guard_tick`
+- 本地 wealth 工具
+  - `get_wealth_status`
+  - `start_wealth_agent`
+  - `stop_wealth_agent`
+  - `run_wealth_tick`
 - `chain` MCP tools
   - `chain_get_wallet_state`（内部账本 / 自治循环使用）
   - `chain_sign_transfer`
@@ -74,7 +74,7 @@ docker compose up -d --build
 
 - `POST /agent/run`：单轮调用
 - `POST /agent/sessions` + `POST /agent/sessions/{sessionId}/messages`：持续交互式会话
-- 后台自治循环：按固定周期读取链上钱包和 Freqtrade dry-run 状态，再由一个资金守门子 Agent 做保护性判断
+- 后台自治循环：按固定周期读取链上钱包和 Freqtrade dry-run 状态，再由一个理财子 Agent 做保护性判断
 
 自治循环默认是 **关闭** 的，避免一启动就自动花费真实资产。启用后：
 
@@ -103,13 +103,13 @@ docker compose up -d --build
 
 查看当前自治状态和账本快照，也可以显式管理子 Agent 的生命周期。
 
-主 Agent 仍然负责：
+管家仍然负责：
 
 - 是否调用 x402
 - 是否给 Freqtrade dry-run 增加资金
 - 是否执行其他链上或交易动作
 
-在这些业务动作之前，建议先调用 `get_guard_status` 查看资金守门子 Agent 的当前状态。主 Agent 也可以直接通过 `start_guard_agent`、`stop_guard_agent`、`run_guard_tick` 管理子 Agent。
+在这些业务动作之前，建议先调用 `get_wealth_status` 查看理财子 Agent 的当前状态。管家也可以直接通过 `start_wealth_agent`、`stop_wealth_agent`、`run_wealth_tick` 管理子 Agent。
 
 ## 演示脚本
 
@@ -124,7 +124,7 @@ http://localhost:8000/
 这个页面会：
 
 - 创建和复用 `agent` session
-- 直接和主 Agent 多轮对话
+- 直接和管家多轮对话
 - 在侧边栏查看、启动、停止、手动执行子 Agent
 - 展示最近一次守门建议和状态摘要
 
@@ -136,12 +136,12 @@ http://localhost:8000/
 
 - 创建一个新的 `agent` 会话
 - 持续读取你的输入并发送到同一个 session
-- 允许你在会话里直接和主 Agent 多轮交互
+- 允许你在会话里直接和管家多轮交互
 - 支持几个内建命令：
-  - `/guard-status`
-  - `/guard-start`
-  - `/guard-stop`
-  - `/guard-tick`
+  - `/wealth-status`
+  - `/wealth-start`
+  - `/wealth-stop`
+  - `/wealth-tick`
 
 如需自定义地址：
 
@@ -229,7 +229,7 @@ PRIVATE_KEY=0x... \
 - `OPENAI_API_KEY`：会被 `docker compose` 直接注入 `agent` 容器；建议放在仓库根目录未提交的 `.env`
 - `OPENAI_BASE_URL`：OpenAI 兼容 endpoint；会被 `docker compose` 直接注入 `agent` 容器
 - `OPENAI_ENDPOINT`：`OPENAI_BASE_URL` 的兼容别名；如两者都设置，优先使用 `OPENAI_BASE_URL`
-- `BRAIN_AGENT_MODEL`：主 Agent 使用的模型名；会被 `docker compose` 直接注入 `agent` 容器，默认 `gpt-4o-mini`
+- `BRAIN_AGENT_MODEL`：管家使用的模型名；会被 `docker compose` 直接注入 `agent` 容器，默认 `gpt-4o-mini`
 - `CHAIN_MCP_URL`：`agent` 访问链上 MCP 的地址，默认 `http://chain-mcp:8091/mcp/`
 - `CHAIN_TIMEOUT_SECONDS`：请求相关超时，默认 `20`
 - `FREQTRADE_MCP_URL`：`agent` 访问 Freqtrade MCP 的地址，默认 `http://freqtrade:8090/mcp/`
@@ -277,7 +277,7 @@ PRIVATE_KEY=0x... \
 - `FREQTRADE_TIMEOUT_SECONDS`：Freqtrade API / MCP 调用超时，默认 `20`
 - `FREQTRADE_ALLOW_WRITE_ACTIONS`：是否允许写操作，默认 `true`
 - `FREQTRADE_STRATEGY_NAME`：默认策略，默认 `SimpleAgentStrategy`
-- `FREQTRADE_CONFIG_PATH`：Freqtrade 配置路径；主 Agent 如需调整 `dry_run_wallet`，会通过 `sync_dry_run_wallet` 更新这里
+- `FREQTRADE_CONFIG_PATH`：Freqtrade 配置路径；管家如需调整 `dry_run_wallet`，会通过 `sync_dry_run_wallet` 更新这里
 
 ## 交互式 Agent
 
@@ -285,7 +285,7 @@ PRIVATE_KEY=0x... \
 
 - `chain` 链上 MCP tools
 - `freqtrade` 投资 MCP tools
-- 本地的 guard 管理工具
+- 本地的理财子管理工具
 
 单轮调用示例：
 
