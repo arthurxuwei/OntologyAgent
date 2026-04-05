@@ -5,10 +5,12 @@ import os
 import threading
 from dataclasses import dataclass, field
 from functools import lru_cache
+from pathlib import Path
 from typing import Any, Literal, Optional
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse, HTMLResponse
 from langchain_core.messages import HumanMessage
 from langchain_core.tools import StructuredTool
 from langchain_openai import ChatOpenAI
@@ -36,6 +38,7 @@ REQUEST_TIMEOUT_SECONDS = float(
     os.getenv("CHAIN_TIMEOUT_SECONDS", os.getenv("EXECUTOR_TIMEOUT_SECONDS", "20"))
 )
 FREQTRADE_MCP_URL = os.getenv("FREQTRADE_MCP_URL", "http://freqtrade:8090/mcp/")
+CHAT_PAGE_PATH = Path(__file__).resolve().parent / "web" / "chat.html"
 
 
 def get_openai_base_url() -> Optional[str]:
@@ -537,6 +540,15 @@ def discover_freqtrade_tools() -> list[StructuredTool]:
     return tools
 
 
+def _make_structured_tool(name: str, spec: dict[str, Any]) -> StructuredTool:
+    return StructuredTool.from_function(
+        name=name,
+        description=spec["description"],
+        args_schema=spec["args_schema"],
+        coroutine=spec["coroutine"],
+    )
+
+
 def build_tools() -> list[StructuredTool]:
     return [
         StructuredTool.from_function(
@@ -563,8 +575,8 @@ def build_tools() -> list[StructuredTool]:
             args_schema=EmptyIntent,
             coroutine=run_guard_tick_tool,
         ),
-        *discover_chain_tools(),
-        *discover_freqtrade_tools(),
+        *[_make_structured_tool(name, spec) for name, spec in CHAIN_TOOL_REGISTRY.items()],
+        *[_make_structured_tool(name, spec) for name, spec in FREQTRADE_TOOL_REGISTRY.items()],
     ]
 
 
@@ -629,14 +641,14 @@ def _extract_final_output(messages: list[Any]) -> str:
     )
 
 
-def _invoke_agent(messages: list[Any]) -> dict[str, Any]:
+async def _invoke_agent(messages: list[Any]) -> dict[str, Any]:
     try:
         graph = get_agent_graph()
     except RuntimeError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
 
     try:
-        return graph.invoke({"messages": messages})
+        return await graph.ainvoke({"messages": messages})
     except Exception as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
@@ -649,6 +661,16 @@ async def startup_event() -> None:
 @app.on_event("shutdown")
 async def shutdown_event() -> None:
     await get_autonomy_controller().stop(disable=False)
+
+
+@app.get("/", response_class=HTMLResponse)
+def chat_home() -> FileResponse:
+    return FileResponse(CHAT_PAGE_PATH)
+
+
+@app.get("/chat", response_class=HTMLResponse)
+def chat_page() -> FileResponse:
+    return FileResponse(CHAT_PAGE_PATH)
 
 
 @app.get("/health")
@@ -731,13 +753,13 @@ def get_agent_session(session_id: str) -> AgentSessionStateResponse:
 
 
 @app.post("/agent/sessions/{session_id}/messages")
-def send_agent_session_message(session_id: str, request: AgentChatRequest) -> AgentChatResponse:
+async def send_agent_session_message(session_id: str, request: AgentChatRequest) -> AgentChatResponse:
     try:
         session = get_session_store().get(session_id)
     except KeyError as error:
         raise HTTPException(status_code=404, detail=f"Unknown agent session: {session_id}") from error
 
-    result = _invoke_agent([*session.messages, HumanMessage(content=request.input)])
+    result = await _invoke_agent([*session.messages, HumanMessage(content=request.input)])
     messages = result.get("messages", [])
     session.messages = list(messages)
     output = _extract_final_output(session.messages)
@@ -751,8 +773,8 @@ def send_agent_session_message(session_id: str, request: AgentChatRequest) -> Ag
 
 
 @app.post("/agent/run")
-def run_agent(request: AgentRunRequest) -> dict[str, Any]:
-    result = _invoke_agent([HumanMessage(content=request.input)])
+async def run_agent(request: AgentRunRequest) -> dict[str, Any]:
+    result = await _invoke_agent([HumanMessage(content=request.input)])
     messages = result.get("messages", [])
     output = _extract_final_output(messages)
 

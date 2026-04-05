@@ -41,7 +41,7 @@ class FakeAutonomyController:
 
 
 class FakeGraph:
-    def invoke(self, payload: dict[str, object]) -> dict[str, object]:
+    async def ainvoke(self, payload: dict[str, object]) -> dict[str, object]:
         messages = list(payload["messages"])  # type: ignore[index]
         messages.append(AIMessage(content="interactive reply"))
         return {"messages": messages}
@@ -74,6 +74,16 @@ class MainApiTests(unittest.TestCase):
                 state_response = client.get(f"/agent/sessions/{session_id}")
                 self.assertEqual(state_response.status_code, 200)
                 self.assertEqual(state_response.json()["sessionId"], session_id)
+
+    def test_chat_page_is_served(self) -> None:
+        controller = FakeAutonomyController()
+        with patch.object(main, "get_autonomy_controller", return_value=controller):
+            with TestClient(main.app) as client:
+                response = client.get("/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("OntologyAgent Console", response.text)
+        self.assertIn("/agent/sessions", response.text)
 
     def test_autonomy_management_endpoints_use_controller(self) -> None:
         controller = FakeAutonomyController()

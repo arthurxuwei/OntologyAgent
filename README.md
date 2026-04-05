@@ -22,6 +22,7 @@ docker compose up -d --build
 启动后默认可用的入口：
 
 - `agent` 健康检查：`http://localhost:8000/health`
+- `agent` Web 控制台：`http://localhost:8000/`
 - `agent` 单轮调用：`POST /agent/run`
 - `agent` 交互式会话：`POST /agent/sessions` 和 `POST /agent/sessions/{sessionId}/messages`
 - `agent` 子 Agent 管理：`POST /autonomy/start`、`POST /autonomy/stop`、`POST /autonomy/tick`
@@ -113,6 +114,19 @@ docker compose up -d --build
 ## 演示脚本
 
 ### Agent 交互入口
+
+浏览器入口：
+
+```text
+http://localhost:8000/
+```
+
+这个页面会：
+
+- 创建和复用 `agent` session
+- 直接和主 Agent 多轮对话
+- 在侧边栏查看、启动、停止、手动执行子 Agent
+- 展示最近一次守门建议和状态摘要
 
 ```bash
 ./scripts/agent-chat.sh
