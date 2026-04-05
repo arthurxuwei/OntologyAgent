@@ -60,37 +60,17 @@
         font-weight: 700;
       }
 
-      .hero p {
-        margin: 0;
-        max-width: 820px;
-        color: var(--muted);
-        font-size: 17px;
-        line-height: 1.6;
-      }
-
-      .layout {
-        display: grid;
-        grid-template-columns: 320px 1fr;
-        gap: 18px;
-      }
-
       .card {
         background: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(255, 249, 239, 0.98));
         border: 1px solid var(--border);
         border-radius: 22px;
         box-shadow: var(--shadow);
-      }
-
-      .sidebar {
-        padding: 20px;
-        display: grid;
-        gap: 18px;
-        align-content: start;
+        overflow: hidden;
       }
 
       .panel-title {
         margin: 0 0 8px;
-        font-size: 18px;
+        font-size: 16px;
         font-weight: 700;
       }
 
@@ -119,7 +99,7 @@
       }
 
       .meta-value {
-        font-size: 15px;
+        font-size: 13px;
         line-height: 1.4;
         word-break: break-word;
       }
@@ -134,7 +114,7 @@
         border-radius: 14px;
         padding: 12px 14px;
         font: inherit;
-        font-size: 15px;
+        font-size: 14px;
         cursor: pointer;
         transition: transform 140ms ease, box-shadow 140ms ease, background 140ms ease;
       }
@@ -167,6 +147,16 @@
       }
 
       .chat {
+        display: grid;
+      }
+
+      .workspace {
+        min-height: 72vh;
+        display: grid;
+        grid-template-columns: minmax(360px, 420px) minmax(0, 1fr);
+      }
+
+      .chat-main {
         min-height: 72vh;
         display: grid;
         grid-template-rows: auto 1fr auto;
@@ -183,12 +173,7 @@
 
       .chat-header h2 {
         margin: 0;
-        font-size: 24px;
-      }
-
-      .chat-header p {
-        margin: 4px 0 0;
-        color: var(--muted);
+        font-size: 20px;
       }
 
       .status-pill {
@@ -199,7 +184,7 @@
         background: var(--accent-soft);
         border-radius: 999px;
         color: var(--accent-strong);
-        font-size: 14px;
+        font-size: 13px;
       }
 
       .status-pill::before {
@@ -223,10 +208,11 @@
 
       .message {
         max-width: min(84%, 760px);
-        padding: 16px 18px;
+        padding: 14px 16px;
         border-radius: 20px;
         border: 1px solid rgba(215, 201, 170, 0.85);
-        line-height: 1.65;
+        font-size: 14px;
+        line-height: 1.55;
         white-space: pre-wrap;
         word-break: break-word;
       }
@@ -238,6 +224,20 @@
 
       .message.agent {
         background: #fffdf8;
+      }
+
+      .message.intro-message {
+        max-width: 380px;
+        padding: 8px 10px;
+        border-radius: 16px;
+        font-size: 13px;
+        line-height: 1.45;
+        white-space: normal;
+      }
+
+      .message.intro-message .message-label {
+        margin-bottom: 4px;
+        font-size: 11px;
       }
 
       .message.system {
@@ -263,16 +263,85 @@
         gap: 12px;
       }
 
+      .guard-panel {
+        padding: 24px 20px;
+        border-right: 1px solid rgba(215, 201, 170, 0.7);
+        background:
+          linear-gradient(180deg, rgba(242, 229, 198, 0.35), rgba(255, 249, 239, 0.72));
+      }
+
+      .guard-shell {
+        display: grid;
+        gap: 14px;
+        padding: 18px;
+        border-radius: 18px;
+        border: 1px solid rgba(215, 201, 170, 0.9);
+        background: linear-gradient(180deg, rgba(242, 229, 198, 0.45), rgba(255, 249, 239, 0.72));
+      }
+
+      .guard-grid {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 16px;
+      }
+
+      .guard-actions {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 10px;
+        align-content: start;
+      }
+
+      .guard-select {
+        width: 100%;
+        border-radius: 14px;
+        border: 1px solid var(--border);
+        background: rgba(255, 255, 255, 0.86);
+        padding: 12px 14px;
+        font: inherit;
+        font-size: 14px;
+        color: var(--ink);
+      }
+
+      .guard-select:focus {
+        outline: 2px solid rgba(15, 118, 110, 0.18);
+        border-color: var(--accent);
+      }
+
+      .guard-summary {
+        display: grid;
+        gap: 12px;
+      }
+
+      .guard-summary-grid {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 12px;
+      }
+
+      .guard-result {
+        height: 240px;
+        padding: 14px;
+        border-radius: 16px;
+        background: rgba(255, 255, 255, 0.72);
+        border: 1px solid rgba(215, 201, 170, 0.9);
+        font-size: 13px;
+        line-height: 1.55;
+        white-space: pre-wrap;
+        word-break: break-word;
+        overflow: auto;
+      }
+
       textarea {
         width: 100%;
-        min-height: 118px;
+        min-height: 104px;
         resize: vertical;
         border-radius: 18px;
         border: 1px solid var(--border);
         background: rgba(255, 255, 255, 0.72);
         padding: 16px 18px;
         font: inherit;
-        font-size: 16px;
+        font-size: 14px;
         color: var(--ink);
       }
 
@@ -290,20 +359,36 @@
 
       .hint {
         color: var(--muted);
-        font-size: 14px;
+        font-size: 13px;
       }
 
       @media (max-width: 960px) {
-        .layout {
+        .workspace,
+        .chat-main {
+          min-height: auto;
+        }
+
+        .workspace {
           grid-template-columns: 1fr;
         }
 
-        .chat {
-          min-height: auto;
+        .guard-panel {
+          border-right: 0;
+          border-bottom: 1px solid rgba(215, 201, 170, 0.7);
         }
 
         .message {
           max-width: 100%;
+        }
+
+        .guard-grid,
+        .guard-summary-grid,
+        .guard-actions {
+          grid-template-columns: 1fr;
+        }
+
+        .guard-result {
+          height: 180px;
         }
       }
     </style>
@@ -313,87 +398,94 @@
       <section class="hero">
         <span class="eyebrow">OntologyAgent Console</span>
         <h1>和主 Agent 持续对话，同时管理守门子。</h1>
-        <p>
-          这个页面直接复用现有 session 接口。你可以和主 Agent 多轮交流，也可以在侧边栏查看、
-          启动、停止或手动执行一次子 Agent 的资金守门检查。
-        </p>
       </section>
 
-      <div class="layout">
-        <aside class="card sidebar">
-          <section>
-            <h3 class="panel-title">会话</h3>
-            <div class="meta-box">
-              <div class="meta-row">
-                <span class="meta-label">Session ID</span>
-                <span class="meta-value" id="session-id">未创建</span>
+      <div class="card chat">
+        <div class="workspace">
+          <section class="guard-panel">
+            <div class="guard-shell">
+              <div>
+                <h3 class="panel-title">Guard Console</h3>
               </div>
-              <div class="meta-row">
-                <span class="meta-label">消息数</span>
-                <span class="meta-value" id="message-count">0</span>
+
+              <div class="guard-grid">
+                <div class="guard-actions">
+                  <button class="primary" id="new-session-button" data-control-button>新建会话</button>
+                  <select class="guard-select" id="guard-action-select" data-control-button>
+                    <option value="/autonomy/status">查看状态</option>
+                    <option value="/autonomy/start">启动守门子</option>
+                    <option value="/autonomy/tick">执行一轮 Tick</option>
+                    <option value="/autonomy/stop">停止守门子</option>
+                  </select>
+                  <button class="secondary" id="guard-action-button" data-control-button>执行 Guard 操作</button>
+                </div>
+
+                <div class="guard-summary">
+                  <div class="guard-summary-grid">
+                    <div class="meta-box">
+                      <div class="meta-row">
+                        <span class="meta-label">Session ID</span>
+                        <span class="meta-value" id="session-id">未创建</span>
+                      </div>
+                      <div class="meta-row">
+                        <span class="meta-label">消息数</span>
+                        <span class="meta-value" id="message-count">0</span>
+                      </div>
+                    </div>
+
+                    <div class="meta-box">
+                      <div class="meta-row">
+                        <span class="meta-label">运行状态</span>
+                        <span class="meta-value" id="guard-running">未查询</span>
+                      </div>
+                      <div class="meta-row">
+                        <span class="meta-label">健康状态</span>
+                        <span class="meta-value" id="guard-health">未查询</span>
+                      </div>
+                      <div class="meta-row">
+                        <span class="meta-label">最近建议</span>
+                        <span class="meta-value" id="guard-decision">未查询</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <span class="meta-label">最近 Guard 返回</span>
+                    <div class="guard-result" id="guard-result">等待操作…</div>
+                  </div>
+                </div>
               </div>
             </div>
           </section>
 
-          <section>
-            <h3 class="panel-title">守门子 Agent</h3>
-            <div class="button-grid">
-              <button class="primary" id="new-session-button">新建会话</button>
-              <button class="secondary" id="guard-status-button">查看状态</button>
-              <button class="secondary" id="guard-start-button">启动守门子</button>
-              <button class="secondary" id="guard-tick-button">执行一轮 Tick</button>
-              <button class="ghost" id="guard-stop-button">停止守门子</button>
-            </div>
-          </section>
-
-          <section>
-            <h3 class="panel-title">最近守门结果</h3>
-            <div class="meta-box">
-              <div class="meta-row">
-                <span class="meta-label">运行状态</span>
-                <span class="meta-value" id="guard-running">未查询</span>
+          <section class="chat-main">
+            <header class="chat-header">
+              <div>
+                <h2>Interactive Agent</h2>
               </div>
-              <div class="meta-row">
-                <span class="meta-label">健康状态</span>
-                <span class="meta-value" id="guard-health">未查询</span>
+              <div class="status-pill" id="connection-status">Ready</div>
+            </header>
+
+            <section class="messages" id="messages">
+              <article class="message agent intro-message">
+                <span class="message-label">Agent</span>
+                页面已准备好。先创建一个 session，然后就可以开始聊天了。
+              </article>
+            </section>
+
+            <section class="composer">
+              <textarea
+                id="composer"
+                placeholder="输入你的问题，比如：先查看 guard 状态，再告诉我当前适合继续交易还是先补充资金。"
+              ></textarea>
+              <div class="composer-actions">
+                <span class="hint">支持多轮会话。左侧 Guard 负责守门与控制，右侧用于和主 Agent 持续交互。</span>
+                <button class="primary" id="send-button">发送消息</button>
               </div>
-              <div class="meta-row">
-                <span class="meta-label">最近建议</span>
-                <span class="meta-value" id="guard-decision">未查询</span>
-              </div>
-            </div>
+            </section>
           </section>
-        </aside>
-
-        <main class="card chat">
-          <header class="chat-header">
-            <div>
-              <h2>Interactive Agent</h2>
-              <p>主 Agent 会通过 MCP 使用 chain 和 Freqtrade 工具。</p>
-            </div>
-            <div class="status-pill" id="connection-status">Ready</div>
-          </header>
-
-          <section class="messages" id="messages">
-            <article class="message agent">
-              <span class="message-label">Agent</span>
-              页面已准备好。先创建一个 session，然后就可以开始聊天了。
-            </article>
-          </section>
-
-          <section class="composer">
-            <textarea
-              id="composer"
-              placeholder="输入你的问题，比如：先查看 guard 状态，再告诉我当前适合继续交易还是先补充资金。"
-            ></textarea>
-            <div class="composer-actions">
-              <span class="hint">支持多轮会话；子 Agent 管理动作也会显示在消息区。</span>
-              <button class="primary" id="send-button">发送消息</button>
-            </div>
-          </section>
-        </main>
+        </div>
       </div>
-    </div>
 
     <script>
       const state = {
@@ -412,12 +504,22 @@
       const sendButtonEl = document.getElementById("send-button");
       const newSessionButtonEl = document.getElementById("new-session-button");
       const connectionStatusEl = document.getElementById("connection-status");
+      const guardResultEl = document.getElementById("guard-result");
+      const guardActionSelectEl = document.getElementById("guard-action-select");
+      const guardActionButtonEl = document.getElementById("guard-action-button");
+
+      const GUARD_ACTION_LABELS = {
+        "/autonomy/status": "查看守门子状态",
+        "/autonomy/start": "启动守门子",
+        "/autonomy/tick": "执行守门子 Tick",
+        "/autonomy/stop": "停止守门子",
+      };
 
       function setBusy(busy, label = "Working") {
         state.busy = busy;
         sendButtonEl.disabled = busy;
         newSessionButtonEl.disabled = busy;
-        document.querySelectorAll("aside button").forEach((button) => {
+        document.querySelectorAll("[data-control-button]").forEach((button) => {
           button.disabled = busy;
         });
         connectionStatusEl.textContent = busy ? label : "Ready";
@@ -452,6 +554,12 @@
         guardDecisionEl.textContent = ledger.lastDecision?.action ?? "暂无";
       }
 
+      function updateGuardResult(title, payload, isError = false) {
+        guardResultEl.textContent =
+          `${title}\n\n${typeof payload === "string" ? payload : JSON.stringify(payload, null, 2)}`;
+        guardResultEl.style.color = isError ? "var(--danger)" : "var(--ink)";
+      }
+
       async function requestJson(url, options = {}) {
         const response = await fetch(url, {
           headers: {
@@ -482,8 +590,10 @@
           const payload = await requestJson("/agent/sessions", { method: "POST" });
           setSession(payload.sessionId, 0);
           addMessage("system", "System", `已创建新会话：${payload.sessionId}`);
+          updateGuardResult("会话已创建", payload);
         } catch (error) {
           addMessage("system", "System", `创建会话失败：${error.message}`);
+          updateGuardResult("创建会话失败", error.message, true);
         } finally {
           setBusy(false);
         }
@@ -533,9 +643,9 @@
             method: path === "/autonomy/status" ? "GET" : "POST",
           });
           updateGuardSummary(payload);
-          addMessage("system", "Guard", `${label} 完成：${JSON.stringify(payload, null, 2)}`);
+          updateGuardResult(`${label} 完成`, payload);
         } catch (error) {
-          addMessage("system", "Guard", `${label} 失败：${error.message}`);
+          updateGuardResult(`${label} 失败`, error.message, true);
         } finally {
           setBusy(false);
         }
@@ -543,18 +653,10 @@
 
       sendButtonEl.addEventListener("click", sendMessage);
       newSessionButtonEl.addEventListener("click", createSession);
-      document.getElementById("guard-status-button").addEventListener("click", () =>
-        runGuardAction("/autonomy/status", "查看守门子状态")
-      );
-      document.getElementById("guard-start-button").addEventListener("click", () =>
-        runGuardAction("/autonomy/start", "启动守门子")
-      );
-      document.getElementById("guard-tick-button").addEventListener("click", () =>
-        runGuardAction("/autonomy/tick", "执行守门子 Tick")
-      );
-      document.getElementById("guard-stop-button").addEventListener("click", () =>
-        runGuardAction("/autonomy/stop", "停止守门子")
-      );
+      guardActionButtonEl.addEventListener("click", () => {
+        const path = guardActionSelectEl.value;
+        runGuardAction(path, GUARD_ACTION_LABELS[path] ?? "执行 Guard 操作");
+      });
       composerEl.addEventListener("keydown", (event) => {
         if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
           event.preventDefault();

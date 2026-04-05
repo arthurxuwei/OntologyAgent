@@ -39,6 +39,11 @@ REQUEST_TIMEOUT_SECONDS = float(
 )
 FREQTRADE_MCP_URL = os.getenv("FREQTRADE_MCP_URL", "http://freqtrade:8090/mcp/")
 CHAT_PAGE_PATH = Path(__file__).resolve().parent / "web" / "chat.html"
+NO_CACHE_HEADERS = {
+    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+    "Pragma": "no-cache",
+    "Expires": "0",
+}
 
 
 def get_openai_base_url() -> Optional[str]:
@@ -665,12 +670,12 @@ async def shutdown_event() -> None:
 
 @app.get("/", response_class=HTMLResponse)
 def chat_home() -> FileResponse:
-    return FileResponse(CHAT_PAGE_PATH)
+    return FileResponse(CHAT_PAGE_PATH, headers=NO_CACHE_HEADERS)
 
 
 @app.get("/chat", response_class=HTMLResponse)
 def chat_page() -> FileResponse:
-    return FileResponse(CHAT_PAGE_PATH)
+    return FileResponse(CHAT_PAGE_PATH, headers=NO_CACHE_HEADERS)
 
 
 @app.get("/health")
