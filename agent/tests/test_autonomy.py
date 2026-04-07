@@ -13,7 +13,7 @@ from autonomy import (
     _extract_json_object,
     load_autonomy_config,
 )
-from autonomy_models import RuntimeExecutionRecord
+from autonomy_models import RuntimeExecutionRecord, RuntimeIntent
 
 
 def make_chain_state(balance_eth: str) -> dict[str, object]:
@@ -252,6 +252,75 @@ class AutonomyControllerTests(unittest.TestCase):
             ledger = status["ledger"]
             self.assertEqual(ledger["healthStatus"], "critical")
             self.assertEqual(ledger["lastProtectiveAction"]["action"], "force_exit_all")
+
+    def test_tick_builds_normalized_runtime_observation(self) -> None:
+        async def chain_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            return make_chain_state("2.0")
+
+        async def freqtrade_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            return make_freqtrade_budget(realized=20, unrealized=30, open_trades=1)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = AutonomyController(
+                make_config(str(Path(temp_dir) / "autonomy.json")),
+                chain_tool,
+                freqtrade_tool,
+            )
+
+            chain_state = make_chain_state("2.0")["result"]
+            freqtrade_budget = make_freqtrade_budget(
+                realized=20, unrealized=30, open_trades=1
+            )["result"]
+            controller._bootstrap_if_needed(chain_state)
+
+            observation = controller._build_runtime_observation(
+                chain_state,
+                freqtrade_budget,
+            )
+
+            self.assertEqual(observation["trading"]["openTradeCount"], 1)
+            self.assertEqual(observation["chain"]["wallet"]["balanceEth"], "2.0")
+            self.assertEqual(observation["budget"]["startingCapitalUsd"], 6000.0)
+
+    def test_plan_trade_intent_uses_open_trade_risk_signal(self) -> None:
+        async def chain_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            return make_chain_state("0.01")
+
+        async def freqtrade_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            return make_freqtrade_budget(realized=-40, unrealized=-20, open_trades=2)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = AutonomyController(
+                make_config(str(Path(temp_dir) / "autonomy.json")),
+                chain_tool,
+                freqtrade_tool,
+            )
+
+            chain_state = make_chain_state("0.01")["result"]
+            freqtrade_budget = make_freqtrade_budget(
+                realized=-40, unrealized=-20, open_trades=2
+            )["result"]
+            controller._bootstrap_if_needed(chain_state)
+
+            observation = controller._build_runtime_observation(
+                chain_state,
+                freqtrade_budget,
+            )
+
+            intent = controller._plan_intent(observation)
+
+            self.assertIsInstance(intent, RuntimeIntent)
+            self.assertEqual(intent.intentType, "trade")
+            self.assertEqual(intent.action, "force_exit_all")
+            self.assertEqual(intent.stage, "planned")
 
     def test_tick_recommends_funding_when_balance_is_low(self) -> None:
         async def chain_tool(

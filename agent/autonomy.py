@@ -8,11 +8,12 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Literal, Optional
+from uuid import uuid4
 
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, ConfigDict, Field
 
-from autonomy_models import RuntimeLedger
+from autonomy_models import RuntimeIntent, RuntimeLedger
 
 
 ToolInvoker = Callable[[str, Optional[dict[str, Any]]], Awaitable[dict[str, Any]]]
@@ -20,6 +21,14 @@ ToolInvoker = Callable[[str, Optional[dict[str, Any]]], Awaitable[dict[str, Any]
 
 def utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _intent_now() -> str:
+    return utcnow_iso()
+
+
+def _new_intent_id() -> str:
+    return f"intent-{uuid4()}"
 
 
 def _round_amount(value: float, digits: int = 6) -> float:
@@ -381,6 +390,48 @@ class AutonomyController:
                 },
             },
         }
+
+    def _build_runtime_observation(
+        self,
+        chain_state: dict[str, Any],
+        freqtrade_budget: dict[str, Any],
+    ) -> dict[str, Any]:
+        context = self._build_context(chain_state, freqtrade_budget)
+        return {
+            "chain": {
+                "wallet": context["wallet"],
+                "chain": context["chain"],
+            },
+            "trading": freqtrade_budget,
+            "budget": context["budget"],
+            "risk": context["risk"],
+        }
+
+    def _plan_intent(self, observation: dict[str, Any]) -> RuntimeIntent:
+        allowed_actions = set(observation["risk"].get("allowedActions", []))
+        open_trade_count = int(observation["trading"].get("openTradeCount", 0))
+
+        if "force_exit_all" in allowed_actions and open_trade_count > 0:
+            return RuntimeIntent(
+                intentId=_new_intent_id(),
+                intentType="trade",
+                action="force_exit_all",
+                reason="Open trades are exposed while the runtime is in a critical risk state.",
+                confidence=1,
+                riskTags=["critical_risk", "protective_action"],
+                createdAt=_intent_now(),
+                stage="planned",
+            )
+
+        return RuntimeIntent(
+            intentId=_new_intent_id(),
+            intentType="noop",
+            action="hold",
+            reason="No protective trade action is currently required.",
+            confidence=1,
+            createdAt=_intent_now(),
+            stage="planned",
+        )
 
     async def _make_decision(self, context: dict[str, Any]) -> GuardDecision:
         api_key = os.getenv("OPENAI_API_KEY")
