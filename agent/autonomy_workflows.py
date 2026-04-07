@@ -31,6 +31,19 @@ def _extract_chain_external_id(action: str, result: dict[str, Any]) -> str:
     return ""
 
 
+def _has_failed_settlement_status(result: dict[str, Any]) -> bool:
+    settlement = result.get("settlement", {})
+    if not isinstance(settlement, dict):
+        return False
+
+    status = settlement.get("status")
+    if not isinstance(status, str):
+        return False
+
+    normalized_status = status.strip().lower()
+    return normalized_status.startswith("fail")
+
+
 async def execute_trade_workflow(
     tool: ToolInvoker,
     intent: RuntimeIntent,
@@ -75,6 +88,13 @@ async def execute_chain_workflow(
     if not isinstance(result, dict):
         raise RuntimeError(f"Unexpected MCP tool result shape: {payload}")
 
+    if _has_failed_settlement_status(result):
+        raise RuntimeError("settlement failed")
+
+    external_id = _extract_chain_external_id(intent.action, result)
+    if not external_id:
+        raise RuntimeError("missing external id")
+
     confirmation_payload = await tool("chain_get_wallet_state", {})
     confirmation = confirmation_payload["result"]
     if not isinstance(confirmation, dict):
@@ -90,7 +110,7 @@ async def execute_chain_workflow(
         intentType="chain",
         stage="reconciled",
         status="completed",
-        externalId=_extract_chain_external_id(intent.action, result),
+        externalId=external_id,
     )
 
 
