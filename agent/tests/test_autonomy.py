@@ -859,11 +859,11 @@ class AutonomyControllerTests(unittest.TestCase):
 
             self.assertEqual(result["decision"]["action"], "chain_submit_execution")
             self.assertEqual(result["execution"]["stage"], "confirmed")
-            self.assertEqual(result["execution"]["status"], "active")
+            self.assertEqual(result["execution"]["status"], "completed")
             self.assertEqual(result["execution"]["externalId"], "0xchain123")
-            self.assertEqual(ledger["executionHistory"], [])
-            self.assertEqual(ledger["activeExecutions"][0]["stage"], "confirmed")
-            self.assertEqual(ledger["activeExecutions"][0]["externalId"], "0xchain123")
+            self.assertEqual(ledger["activeExecutions"], [])
+            self.assertEqual(ledger["executionHistory"][0]["stage"], "confirmed")
+            self.assertEqual(ledger["executionHistory"][0]["externalId"], "0xchain123")
             self.assertIn(("chain_submit_execution", {"operation": "rebalance"}), calls)
 
     def test_decision_from_intent_supports_whitelisted_chain_action(self) -> None:

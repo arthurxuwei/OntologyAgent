@@ -74,10 +74,10 @@ class AutonomyWorkflowTests(unittest.TestCase):
                 self.assertEqual(execution.intentId, intent.intentId)
                 self.assertEqual(execution.intentType, "chain")
                 self.assertEqual(execution.stage, "confirmed")
-                self.assertEqual(execution.status, "active")
+                self.assertEqual(execution.status, "completed")
                 self.assertEqual(execution.externalId, expected_external_id)
 
-    def test_execute_chain_workflow_keeps_submission_active_without_external_id_confirmation(
+    def test_execute_chain_workflow_keeps_submission_completed_without_external_id_confirmation(
         self,
     ) -> None:
         calls: list[tuple[str, dict[str, object]]] = []
@@ -113,7 +113,7 @@ class AutonomyWorkflowTests(unittest.TestCase):
             ],
         )
         self.assertEqual(execution.stage, "confirmed")
-        self.assertEqual(execution.status, "active")
+        self.assertEqual(execution.status, "completed")
         self.assertEqual(execution.externalId, "0xexec123")
 
     def test_execute_chain_workflow_rejects_non_chain_action(self) -> None:

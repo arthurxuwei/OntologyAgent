@@ -109,7 +109,7 @@ async def execute_chain_workflow(
         intentId=intent.intentId,
         intentType="chain",
         stage="confirmed",
-        status="active",
+        status="completed",
         externalId=external_id,
     )
 
