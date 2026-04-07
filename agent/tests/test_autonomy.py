@@ -896,7 +896,7 @@ class AutonomyControllerTests(unittest.TestCase):
             self.assertEqual(decision.action, "chain_sign_transfer")
             self.assertEqual(decision.reason, "Sign a transfer.")
 
-    def test_policy_denies_chain_action_outside_mock_or_testnet(self) -> None:
+    def test_policy_allows_local_request_funding_on_mainnet(self) -> None:
         async def chain_tool(
             tool_name: str, arguments: Optional[dict[str, object]] = None
         ) -> dict[str, object]:
@@ -927,9 +927,43 @@ class AutonomyControllerTests(unittest.TestCase):
 
             decision = controller._apply_policy(intent, observation)
 
+            self.assertEqual(decision["decision"], "allow")
+
+    def test_policy_denies_chain_action_outside_mock_or_testnet(self) -> None:
+        async def chain_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            return make_chain_state("1.0")
+
+        async def freqtrade_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            return make_freqtrade_budget()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = AutonomyController(
+                make_config(str(Path(temp_dir) / "autonomy.json")),
+                chain_tool,
+                freqtrade_tool,
+            )
+            observation = {
+                "chain": {
+                    "chain": {"chainId": 1, "mockChain": False},
+                },
+                "trading": {"dryRun": True},
+            }
+            intent = RuntimeIntent(
+                intentId="intent-1",
+                intentType="chain",
+                action="chain_submit_execution",
+                parameters={"operation": "rebalance"},
+            )
+
+            decision = controller._apply_policy(intent, observation)
+
             self.assertEqual(decision["decision"], "deny")
 
-    def test_tick_returns_early_when_policy_denies_planned_intent(self) -> None:
+    def test_tick_allows_request_funding_recommendation_on_mainnet(self) -> None:
         async def chain_tool(
             tool_name: str, arguments: Optional[dict[str, object]] = None
         ) -> dict[str, object]:
@@ -949,22 +983,45 @@ class AutonomyControllerTests(unittest.TestCase):
                 freqtrade_tool,
             )
 
-            with patch.object(
-                AutonomyController,
-                "_execute_decision",
-                side_effect=AssertionError(
-                    "tick should not execute when policy denies intent"
+            async def fake_run_chain_execution(
+                _self: AutonomyController,
+                intent: RuntimeIntent,
+            ) -> RuntimeExecutionRecord:
+                return RuntimeExecutionRecord(
+                    executionId="exec-request-funding-mainnet",
+                    intentId=intent.intentId,
+                    intentType=intent.intentType,
+                    stage="executing",
+                    status="active",
+                )
+
+            with (
+                patch.object(
+                    AutonomyController,
+                    "_run_chain_execution",
+                    fake_run_chain_execution,
+                ),
+                patch.object(
+                    AutonomyController,
+                    "_execute_decision",
+                    side_effect=AssertionError(
+                        "tick should keep request_funding on the local closed loop"
+                    ),
                 ),
             ):
                 result = asyncio.run(controller.tick())
 
             ledger = asyncio.run(controller.status())["ledger"]
 
-            self.assertEqual(result["policy"]["decision"], "deny")
+            self.assertEqual(result["policy"]["decision"], "allow")
+            self.assertEqual(result["decision"]["action"], "request_funding")
+            self.assertEqual(
+                result["execution"]["executionId"], "exec-request-funding-mainnet"
+            )
             self.assertEqual(ledger["activeIntents"][0]["action"], "request_funding")
             self.assertEqual(ledger["currentWalletBalanceUsd"], 150.0)
             self.assertEqual(ledger["healthStatus"], "watch")
-            self.assertEqual(ledger["lastDecision"]["action"], "hold")
+            self.assertEqual(ledger["lastDecision"]["action"], "request_funding")
 
     def test_tick_reuses_existing_active_execution_for_same_intent(self) -> None:
         async def chain_tool(

@@ -614,7 +614,10 @@ class AutonomyController:
             ).model_dump()
 
         chain = observation.get("chain", {}).get("chain", {})
-        if intent.intentType == "chain" and not bool(chain.get("mockChain", False)):
+        is_real_chain_action = (
+            intent.intentType == "chain" and intent.action != "request_funding"
+        )
+        if is_real_chain_action and not bool(chain.get("mockChain", False)):
             if int(chain.get("chainId", 0) or 0) == 1:
                 return PolicyDecision(
                     decision="deny",
