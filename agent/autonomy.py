@@ -8,8 +8,6 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Literal, Optional
-from uuid import uuid4
-
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -32,8 +30,8 @@ def _intent_now() -> str:
     return utcnow_iso()
 
 
-def _new_intent_id() -> str:
-    return f"intent-{uuid4()}"
+def _stable_intent_id(intent_type: str, action: str) -> str:
+    return f"intent-{intent_type}-{action}"
 
 
 def _round_amount(value: float, digits: int = 6) -> float:
@@ -254,9 +252,14 @@ class AutonomyController:
             self._state.activeIntents = [planned_intent]
             policy = self._apply_policy(planned_intent, observation)
             if policy["decision"] != "allow":
-                self._state.lastTickAt = utcnow_iso()
-                self._state.lastError = None
-                self._state.tickCount += 1
+                self._refresh_state_from_context(
+                    context,
+                    last_decision={
+                        "action": "hold",
+                        "reason": policy["reason"],
+                        "policyDecision": policy["decision"],
+                    },
+                )
                 self._save_state()
                 return {
                     "context": context,
@@ -267,9 +270,12 @@ class AutonomyController:
 
             existing_execution = self._find_active_execution(planned_intent.intentId)
             if existing_execution is not None:
-                self._state.lastTickAt = utcnow_iso()
-                self._state.lastError = None
-                self._state.tickCount += 1
+                self._refresh_state_from_context(
+                    context,
+                    last_decision=self._decision_from_intent(
+                        planned_intent
+                    ).model_dump(),
+                )
                 self._save_state()
                 return {
                     "context": context,
@@ -460,7 +466,7 @@ class AutonomyController:
 
         if "force_exit_all" in allowed_actions and bot_enabled and open_trade_count > 0:
             return RuntimeIntent(
-                intentId=_new_intent_id(),
+                intentId=_stable_intent_id("trade", "force_exit_all"),
                 intentType="trade",
                 action="force_exit_all",
                 reason="Open trades are exposed while the runtime is in a critical risk state.",
@@ -472,7 +478,7 @@ class AutonomyController:
 
         if "stop_trading" in allowed_actions and bot_enabled:
             return RuntimeIntent(
-                intentId=_new_intent_id(),
+                intentId=_stable_intent_id("trade", "stop_trading"),
                 intentType="trade",
                 action="stop_trading",
                 reason="Trading should stop while the runtime remains in a protective risk state.",
@@ -484,7 +490,7 @@ class AutonomyController:
 
         if "request_funding" in allowed_actions and recommended_funding_usd > 0:
             return RuntimeIntent(
-                intentId=_new_intent_id(),
+                intentId=_stable_intent_id("chain", "request_funding"),
                 intentType="chain",
                 action="request_funding",
                 parameters={"recommendedFundingUsd": recommended_funding_usd},
@@ -496,7 +502,7 @@ class AutonomyController:
             )
 
         return RuntimeIntent(
-            intentId=_new_intent_id(),
+            intentId=_stable_intent_id("noop", "hold"),
             intentType="noop",
             action="hold",
             reason="No protective trade action is currently required.",
@@ -635,6 +641,27 @@ class AutonomyController:
             return {"action": decision.action, "result": result, "changedState": True}
 
         raise RuntimeError(f"Unsupported autonomy action: {decision.action}")
+
+    def _refresh_state_from_context(
+        self,
+        context: dict[str, Any],
+        *,
+        last_decision: Optional[dict[str, Any]] = None,
+    ) -> None:
+        budget = context["budget"]
+        risk = context["risk"]
+        self._state.currentWalletBalanceEth = str(budget["currentWalletBalanceEth"])
+        self._state.currentWalletBalanceUsd = float(budget["currentWalletBalanceUsd"])
+        self._state.dryRunRealizedPnl = float(budget["dryRunRealizedPnl"])
+        self._state.dryRunUnrealizedPnl = float(budget["dryRunUnrealizedPnl"])
+        self._state.netWorthEstimate = float(budget["netWorthEstimate"])
+        self._state.botEnabled = bool(risk["botEnabled"])
+        self._state.healthStatus = risk["healthStatus"]
+        if last_decision is not None:
+            self._state.lastDecision = last_decision
+        self._state.lastTickAt = utcnow_iso()
+        self._state.lastError = None
+        self._state.tickCount += 1
 
     def _update_state(
         self,

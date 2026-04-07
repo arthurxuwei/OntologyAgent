@@ -699,7 +699,7 @@ class AutonomyControllerTests(unittest.TestCase):
         async def chain_tool(
             tool_name: str, arguments: Optional[dict[str, object]] = None
         ) -> dict[str, object]:
-            state = make_chain_state("1.0")
+            state = make_chain_state("0.05")
             state["result"]["chain"]["chainId"] = 1
             return state
 
@@ -714,24 +714,12 @@ class AutonomyControllerTests(unittest.TestCase):
                 chain_tool,
                 freqtrade_tool,
             )
-            planned_intent = RuntimeIntent(
-                intentId="intent-1",
-                intentType="chain",
-                action="request_funding",
-            )
 
-            with (
-                patch.object(
-                    AutonomyController,
-                    "_plan_intent",
-                    return_value=planned_intent,
-                ),
-                patch.object(
-                    AutonomyController,
-                    "_execute_decision",
-                    side_effect=AssertionError(
-                        "tick should not execute when policy denies intent"
-                    ),
+            with patch.object(
+                AutonomyController,
+                "_execute_decision",
+                side_effect=AssertionError(
+                    "tick should not execute when policy denies intent"
                 ),
             ):
                 result = asyncio.run(controller.tick())
@@ -739,18 +727,21 @@ class AutonomyControllerTests(unittest.TestCase):
             ledger = asyncio.run(controller.status())["ledger"]
 
             self.assertEqual(result["policy"]["decision"], "deny")
-            self.assertEqual(ledger["activeIntents"][0]["intentId"], "intent-1")
+            self.assertEqual(ledger["activeIntents"][0]["action"], "request_funding")
+            self.assertEqual(ledger["currentWalletBalanceUsd"], 150.0)
+            self.assertEqual(ledger["healthStatus"], "watch")
+            self.assertEqual(ledger["lastDecision"]["action"], "hold")
 
     def test_tick_reuses_existing_active_execution_for_same_intent(self) -> None:
         async def chain_tool(
             tool_name: str, arguments: Optional[dict[str, object]] = None
         ) -> dict[str, object]:
-            return make_chain_state("1.0")
+            return make_chain_state("0.04")
 
         async def freqtrade_tool(
             tool_name: str, arguments: Optional[dict[str, object]] = None
         ) -> dict[str, object]:
-            return make_freqtrade_budget()
+            return make_freqtrade_budget(open_trades=1)
 
         with tempfile.TemporaryDirectory() as temp_dir:
             controller = AutonomyController(
@@ -758,38 +749,32 @@ class AutonomyControllerTests(unittest.TestCase):
                 chain_tool,
                 freqtrade_tool,
             )
-            controller._bootstrap_if_needed(make_chain_state("1.0")["result"])
+            controller._bootstrap_if_needed(make_chain_state("0.04")["result"])
             existing_execution = RuntimeExecutionRecord(
                 executionId="exec-1",
-                intentId="intent-1",
+                intentId="intent-trade-stop_trading",
                 intentType="trade",
                 stage="executing",
             )
             controller._state.activeExecutions = [existing_execution]
-            planned_intent = RuntimeIntent(
-                intentId="intent-1",
-                intentType="trade",
-                action="stop_trading",
-            )
 
-            with (
-                patch.object(
-                    AutonomyController,
-                    "_plan_intent",
-                    return_value=planned_intent,
-                ),
-                patch.object(
-                    AutonomyController,
-                    "_execute_decision",
-                    side_effect=AssertionError(
-                        "tick should reuse active execution instead of executing again"
-                    ),
+            with patch.object(
+                AutonomyController,
+                "_execute_decision",
+                side_effect=AssertionError(
+                    "tick should reuse active execution instead of executing again"
                 ),
             ):
                 result = asyncio.run(controller.tick())
 
+            ledger = asyncio.run(controller.status())["ledger"]
+
             self.assertEqual(result["execution"]["executionId"], "exec-1")
             self.assertEqual(result["actionResult"]["action"], "reuse_execution")
+            self.assertEqual(result["intent"]["intentId"], "intent-trade-stop_trading")
+            self.assertEqual(ledger["currentWalletBalanceUsd"], 120.0)
+            self.assertEqual(ledger["healthStatus"], "watch")
+            self.assertEqual(ledger["lastDecision"]["action"], "stop_trading")
 
     def test_find_active_execution_returns_existing_active_execution_by_intent_id(
         self,
