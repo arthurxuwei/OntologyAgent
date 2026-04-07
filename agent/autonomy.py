@@ -247,8 +247,11 @@ class AutonomyController:
             planned_intent = self._plan_intent(observation)
             self._state.latestObservation = observation
             self._state.activeIntents = [planned_intent]
-            decision = await self._make_decision(context)
-            decision = self._normalize_decision(decision, context)
+            if planned_intent.intentType != "noop":
+                decision = self._decision_from_intent(planned_intent)
+            else:
+                decision = await self._make_decision(context)
+                decision = self._normalize_decision(decision, context)
             action_result = await self._execute_decision(decision)
             self._update_state(context, decision, action_result)
             self._save_state()
@@ -435,6 +438,14 @@ class AutonomyController:
             confidence=1,
             createdAt=_intent_now(),
             stage="planned",
+        )
+
+    def _decision_from_intent(self, intent: RuntimeIntent) -> GuardDecision:
+        return GuardDecision(
+            action=intent.action,
+            reason=intent.reason or "Runtime intent selected this action.",
+            riskLevel="high" if intent.intentType == "trade" else "low",
+            recommendedFundingUsd=0,
         )
 
     async def _make_decision(self, context: dict[str, Any]) -> GuardDecision:
