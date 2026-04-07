@@ -297,6 +297,13 @@ class AutonomyController:
                     context,
                     last_decision=decision.model_dump(),
                 )
+                if decision.action == "request_funding":
+                    self._state.lastFundingRecommendation = {
+                        "action": decision.action,
+                        "recommendedFundingUsd": decision.recommendedFundingUsd,
+                        "reason": decision.reason,
+                        "at": self._state.lastTickAt,
+                    }
                 self._save_state()
                 return {
                     "observation": observation,

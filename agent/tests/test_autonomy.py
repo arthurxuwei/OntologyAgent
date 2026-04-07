@@ -1141,6 +1141,45 @@ class AutonomyControllerTests(unittest.TestCase):
             self.assertEqual(ledger["healthStatus"], "watch")
             self.assertEqual(ledger["lastDecision"]["action"], "request_funding")
 
+    def test_tick_reused_request_funding_refreshes_recommendation(self) -> None:
+        chain_balances = iter(["0.05", "0.06"])
+
+        async def chain_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            return make_chain_state(next(chain_balances))
+
+        async def freqtrade_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            return make_freqtrade_budget(open_trades=0)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = AutonomyController(
+                make_config(str(Path(temp_dir) / "autonomy.json")),
+                chain_tool,
+                freqtrade_tool,
+            )
+            first_result = asyncio.run(controller.tick())
+
+            with patch.object(
+                AutonomyController,
+                "_execute_decision",
+                side_effect=AssertionError(
+                    "tick should reuse active execution instead of executing again"
+                ),
+            ):
+                second_result = asyncio.run(controller.tick())
+
+            ledger = asyncio.run(controller.status())["ledger"]
+
+            self.assertEqual(first_result["decision"]["recommendedFundingUsd"], 100)
+            self.assertEqual(second_result["actionResult"]["action"], "reuse_execution")
+            self.assertEqual(second_result["decision"]["recommendedFundingUsd"], 70)
+            self.assertEqual(
+                ledger["lastFundingRecommendation"]["recommendedFundingUsd"], 70
+            )
+
     def test_tick_records_completed_trade_execution_in_history(self) -> None:
         calls: list[tuple[str, dict[str, object]]] = []
 
