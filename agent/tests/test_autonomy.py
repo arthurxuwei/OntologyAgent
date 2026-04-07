@@ -1023,6 +1023,68 @@ class AutonomyControllerTests(unittest.TestCase):
             self.assertEqual(ledger["healthStatus"], "watch")
             self.assertEqual(ledger["lastDecision"]["action"], "request_funding")
 
+    def test_tick_denies_real_chain_intent_on_mainnet_before_execution(self) -> None:
+        async def chain_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            state = make_chain_state("1.0")
+            state["result"]["chain"]["chainId"] = 1
+            return state
+
+        async def freqtrade_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            return make_freqtrade_budget()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = AutonomyController(
+                make_config(str(Path(temp_dir) / "autonomy.json")),
+                chain_tool,
+                freqtrade_tool,
+            )
+            intent = RuntimeIntent(
+                intentId="intent-chain-submit_execution",
+                intentType="chain",
+                action="chain_submit_execution",
+                parameters={"operation": "rebalance"},
+                reason="Execute a reconciled chain action.",
+            )
+
+            with (
+                patch.object(AutonomyController, "_plan_intent", return_value=intent),
+                patch.object(
+                    AutonomyController,
+                    "_make_decision",
+                    side_effect=AssertionError(
+                        "tick should use the planned chain intent"
+                    ),
+                ),
+                patch.object(
+                    AutonomyController,
+                    "_run_chain_execution",
+                    side_effect=AssertionError(
+                        "tick should deny the chain intent before execution"
+                    ),
+                ),
+                patch.object(
+                    AutonomyController,
+                    "_execute_decision",
+                    side_effect=AssertionError(
+                        "tick should not execute a denied chain intent"
+                    ),
+                ),
+            ):
+                result = asyncio.run(controller.tick())
+
+            ledger = asyncio.run(controller.status())["ledger"]
+
+            self.assertEqual(result["policy"]["decision"], "deny")
+            self.assertEqual(result["intent"]["action"], "chain_submit_execution")
+            self.assertEqual(
+                ledger["activeIntents"][0]["action"], "chain_submit_execution"
+            )
+            self.assertEqual(ledger["lastDecision"]["action"], "hold")
+
     def test_tick_reuses_existing_active_execution_for_same_intent(self) -> None:
         async def chain_tool(
             tool_name: str, arguments: Optional[dict[str, object]] = None
