@@ -13,7 +13,12 @@ from uuid import uuid4
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, ConfigDict, Field
 
-from autonomy_models import RuntimeIntent, RuntimeLedger
+from autonomy_models import (
+    PolicyDecision,
+    RuntimeExecutionRecord,
+    RuntimeIntent,
+    RuntimeLedger,
+)
 
 
 ToolInvoker = Callable[[str, Optional[dict[str, Any]]], Awaitable[dict[str, Any]]]
@@ -482,6 +487,45 @@ class AutonomyController:
                 intent.parameters.get("recommendedFundingUsd", 0)
             ),
         )
+
+    def _find_active_execution(
+        self, intent_id: str
+    ) -> Optional[RuntimeExecutionRecord]:
+        for execution in self._state.activeExecutions:
+            if execution.intentId == intent_id and execution.status == "active":
+                return execution
+        return None
+
+    def _apply_policy(
+        self,
+        intent: RuntimeIntent,
+        observation: dict[str, Any],
+    ) -> dict[str, str]:
+        if intent.intentType == "noop":
+            return PolicyDecision(
+                decision="allow", reason="No-op intents are always allowed."
+            ).model_dump()
+
+        if intent.intentType == "trade" and not bool(
+            observation.get("trading", {}).get("dryRun", False)
+        ):
+            return PolicyDecision(
+                decision="deny",
+                reason="Trade actions are only allowed while trading runs in dry-run mode.",
+            ).model_dump()
+
+        chain = observation.get("chain", {}).get("chain", {})
+        if intent.intentType == "chain" and not bool(chain.get("mockChain", False)):
+            if int(chain.get("chainId", 0) or 0) == 1:
+                return PolicyDecision(
+                    decision="deny",
+                    reason="Chain actions are denied on mainnet outside mock or testnet environments.",
+                ).model_dump()
+
+        return PolicyDecision(
+            decision="allow",
+            reason="Intent is allowed by runtime policy.",
+        ).model_dump()
 
     async def _make_decision(self, context: dict[str, Any]) -> GuardDecision:
         api_key = os.getenv("OPENAI_API_KEY")

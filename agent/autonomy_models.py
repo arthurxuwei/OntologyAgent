@@ -58,6 +58,13 @@ class RuntimeExecutionRecord(BaseModel):
     failureMessage: str | None = None
 
 
+class PolicyDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    decision: Literal["allow", "deny", "cooldown", "trip_circuit"]
+    reason: str
+
+
 class RuntimeLedger(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

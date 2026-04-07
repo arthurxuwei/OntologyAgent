@@ -662,6 +662,68 @@ class AutonomyControllerTests(unittest.TestCase):
                 ledger["lastFundingRecommendation"]["recommendedFundingUsd"], 100
             )
 
+    def test_policy_denies_chain_action_outside_mock_or_testnet(self) -> None:
+        async def chain_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            return make_chain_state("1.0")
+
+        async def freqtrade_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            return make_freqtrade_budget()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = AutonomyController(
+                make_config(str(Path(temp_dir) / "autonomy.json")),
+                chain_tool,
+                freqtrade_tool,
+            )
+            observation = {
+                "chain": {
+                    "chain": {"chainId": 1, "mockChain": False},
+                },
+                "trading": {"dryRun": True},
+            }
+            intent = RuntimeIntent(
+                intentId="intent-1",
+                intentType="chain",
+                action="request_funding",
+            )
+
+            decision = controller._apply_policy(intent, observation)
+
+            self.assertEqual(decision["decision"], "deny")
+
+    def test_tick_reuses_existing_active_execution_for_same_intent(self) -> None:
+        async def chain_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            return make_chain_state("1.0")
+
+        async def freqtrade_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            return make_freqtrade_budget()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = AutonomyController(
+                make_config(str(Path(temp_dir) / "autonomy.json")),
+                chain_tool,
+                freqtrade_tool,
+            )
+            existing_execution = RuntimeExecutionRecord(
+                executionId="exec-1",
+                intentId="intent-1",
+                intentType="trade",
+                stage="executing",
+            )
+            controller._state.activeExecutions = [existing_execution]
+
+            execution = controller._find_active_execution("intent-1")
+
+            self.assertIs(execution, existing_execution)
+
 
 if __name__ == "__main__":
     unittest.main()
