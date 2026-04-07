@@ -9,9 +9,11 @@ from autonomy import (
     AutonomyConfig,
     AutonomyController,
     GuardDecision,
+    GuardLedger,
     _extract_json_object,
     load_autonomy_config,
 )
+from autonomy_models import RuntimeExecutionRecord
 
 
 def make_chain_state(balance_eth: str) -> dict[str, object]:
@@ -47,7 +49,9 @@ def make_chain_state(balance_eth: str) -> dict[str, object]:
     }
 
 
-def make_freqtrade_budget(realized: float = 0, unrealized: float = 0, open_trades: int = 0) -> dict[str, object]:
+def make_freqtrade_budget(
+    realized: float = 0, unrealized: float = 0, open_trades: int = 0
+) -> dict[str, object]:
     return {
         "result": {
             "dryRun": True,
@@ -79,6 +83,32 @@ def make_config(state_path: str) -> AutonomyConfig:
 
 
 class AutonomyControllerTests(unittest.TestCase):
+    def test_runtime_ledger_defaults_include_execution_tracking(self) -> None:
+        ledger = GuardLedger()
+
+        self.assertEqual(ledger.activeIntents, [])
+        self.assertEqual(ledger.activeExecutions, [])
+        self.assertEqual(ledger.executionHistory, [])
+        self.assertEqual(ledger.circuitBreaker.state, "closed")
+
+    def test_runtime_ledger_round_trips_with_shared_stage_values(self) -> None:
+        execution = RuntimeExecutionRecord(
+            executionId="exec-1",
+            intentId="intent-1",
+            intentType="trade",
+            stage="executing",
+        )
+
+        ledger = GuardLedger.model_validate(
+            {
+                "activeExecutions": [execution.model_dump()],
+                "executionHistory": [execution.model_dump()],
+            }
+        )
+
+        self.assertEqual(ledger.activeExecutions[0].stage, "executing")
+        self.assertEqual(ledger.executionHistory[0].stage, "executing")
+
     def test_extract_json_object_supports_code_fences(self) -> None:
         payload = _extract_json_object(
             """```json
@@ -98,11 +128,17 @@ class AutonomyControllerTests(unittest.TestCase):
 
         self.assertEqual(config.model_name, "gpt-4.1-mini")
 
-    def test_controller_can_be_started_manually_even_when_autostart_is_disabled(self) -> None:
-        async def chain_tool(tool_name: str, arguments: Optional[dict[str, object]] = None) -> dict[str, object]:
+    def test_controller_can_be_started_manually_even_when_autostart_is_disabled(
+        self,
+    ) -> None:
+        async def chain_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
             return make_chain_state("1.0")
 
-        async def freqtrade_tool(tool_name: str, arguments: Optional[dict[str, object]] = None) -> dict[str, object]:
+        async def freqtrade_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
             return make_freqtrade_budget()
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -123,12 +159,16 @@ class AutonomyControllerTests(unittest.TestCase):
     def test_tick_bootstraps_guard_state_without_syncing_dry_run_wallet(self) -> None:
         calls: list[tuple[str, dict[str, object]]] = []
 
-        async def chain_tool(tool_name: str, arguments: Optional[dict[str, object]] = None) -> dict[str, object]:
+        async def chain_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
             calls.append((tool_name, arguments or {}))
             self.assertEqual(tool_name, "chain_get_wallet_state")
             return make_chain_state("2.0")
 
-        async def freqtrade_tool(tool_name: str, arguments: Optional[dict[str, object]] = None) -> dict[str, object]:
+        async def freqtrade_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
             calls.append((tool_name, arguments or {}))
             self.assertEqual(tool_name, "get_budget_snapshot")
             return make_freqtrade_budget(realized=20, unrealized=30, open_trades=1)
@@ -140,7 +180,9 @@ class AutonomyControllerTests(unittest.TestCase):
                 freqtrade_tool,
             )
 
-            async def fake_decision(_self: AutonomyController, _context: dict[str, object]) -> GuardDecision:
+            async def fake_decision(
+                _self: AutonomyController, _context: dict[str, object]
+            ) -> GuardDecision:
                 return GuardDecision(
                     action="hold",
                     reason="Wallet is healthy; keep monitoring.",
@@ -164,14 +206,20 @@ class AutonomyControllerTests(unittest.TestCase):
     def test_tick_force_exits_when_guard_reaches_critical_state(self) -> None:
         calls: list[tuple[str, dict[str, object]]] = []
 
-        async def chain_tool(tool_name: str, arguments: Optional[dict[str, object]] = None) -> dict[str, object]:
+        async def chain_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
             calls.append((tool_name, arguments or {}))
             return make_chain_state("0.01")
 
-        async def freqtrade_tool(tool_name: str, arguments: Optional[dict[str, object]] = None) -> dict[str, object]:
+        async def freqtrade_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
             calls.append((tool_name, arguments or {}))
             if tool_name == "get_budget_snapshot":
-                return make_freqtrade_budget(realized=-40, unrealized=-20, open_trades=2)
+                return make_freqtrade_budget(
+                    realized=-40, unrealized=-20, open_trades=2
+                )
             if tool_name == "force_exit_trade":
                 return {"result": {"ok": True}}
             raise AssertionError(f"unexpected tool call: {tool_name}")
@@ -183,7 +231,9 @@ class AutonomyControllerTests(unittest.TestCase):
                 freqtrade_tool,
             )
 
-            async def fake_decision(_self: AutonomyController, _context: dict[str, object]) -> GuardDecision:
+            async def fake_decision(
+                _self: AutonomyController, _context: dict[str, object]
+            ) -> GuardDecision:
                 return GuardDecision(
                     action="force_exit_all",
                     reason="Wallet balance is critically low.",
@@ -195,17 +245,23 @@ class AutonomyControllerTests(unittest.TestCase):
                 result = asyncio.run(controller.tick())
 
             self.assertEqual(result["decision"]["action"], "force_exit_all")
-            self.assertIn(("force_exit_trade", {"trade_id": "all", "order_type": "market"}), calls)
+            self.assertIn(
+                ("force_exit_trade", {"trade_id": "all", "order_type": "market"}), calls
+            )
             status = asyncio.run(controller.status())
             ledger = status["ledger"]
             self.assertEqual(ledger["healthStatus"], "critical")
             self.assertEqual(ledger["lastProtectiveAction"]["action"], "force_exit_all")
 
     def test_tick_recommends_funding_when_balance_is_low(self) -> None:
-        async def chain_tool(tool_name: str, arguments: Optional[dict[str, object]] = None) -> dict[str, object]:
+        async def chain_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
             return make_chain_state("0.05")
 
-        async def freqtrade_tool(tool_name: str, arguments: Optional[dict[str, object]] = None) -> dict[str, object]:
+        async def freqtrade_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
             if tool_name == "get_budget_snapshot":
                 return make_freqtrade_budget(realized=0, unrealized=0, open_trades=0)
             raise AssertionError(f"unexpected tool call: {tool_name}")
@@ -217,7 +273,9 @@ class AutonomyControllerTests(unittest.TestCase):
                 freqtrade_tool,
             )
 
-            async def fake_decision(_self: AutonomyController, _context: dict[str, object]) -> GuardDecision:
+            async def fake_decision(
+                _self: AutonomyController, _context: dict[str, object]
+            ) -> GuardDecision:
                 return GuardDecision(
                     action="request_funding",
                     reason="Wallet balance is below the soft threshold.",
@@ -232,7 +290,9 @@ class AutonomyControllerTests(unittest.TestCase):
             status = asyncio.run(controller.status())
             ledger = status["ledger"]
             self.assertEqual(ledger["healthStatus"], "watch")
-            self.assertEqual(ledger["lastFundingRecommendation"]["recommendedFundingUsd"], 100)
+            self.assertEqual(
+                ledger["lastFundingRecommendation"]["recommendedFundingUsd"], 100
+            )
 
 
 if __name__ == "__main__":

@@ -12,6 +12,8 @@ from typing import Any, Awaitable, Callable, Literal, Optional
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, ConfigDict, Field
 
+from autonomy_models import RuntimeLedger
+
 
 ToolInvoker = Callable[[str, Optional[dict[str, Any]]], Awaitable[dict[str, Any]]]
 
@@ -65,11 +67,15 @@ def _extract_json_object(text: str) -> dict[str, Any]:
     except json.JSONDecodeError:
         match = re.search(r"\{.*\}", normalized, re.DOTALL)
         if not match:
-            raise RuntimeError(f"Could not parse GuardDecision JSON from model output: {text}")
+            raise RuntimeError(
+                f"Could not parse GuardDecision JSON from model output: {text}"
+            )
         parsed = json.loads(match.group(0))
 
     if not isinstance(parsed, dict):
-        raise RuntimeError(f"GuardDecision model output must be a JSON object: {parsed!r}")
+        raise RuntimeError(
+            f"GuardDecision model output must be a JSON object: {parsed!r}"
+        )
     return parsed
 
 
@@ -107,9 +113,15 @@ def load_autonomy_config(env: Optional[dict[str, str]] = None) -> AutonomyConfig
         interval_seconds=float(source.get("AUTONOMY_INTERVAL_SECONDS", "60")),
         state_path=get_text("AUTONOMY_STATE_PATH", "/app/data/autonomy_state.json"),
         eth_price_usd=float(source.get("AUTONOMY_ETH_PRICE_USD", "3000")),
-        min_wallet_balance_usd=float(source.get("AUTONOMY_MIN_WALLET_BALANCE_USD", "250")),
-        stop_trading_balance_usd=float(source.get("AUTONOMY_STOP_TRADING_BALANCE_USD", "150")),
-        force_exit_balance_usd=float(source.get("AUTONOMY_FORCE_EXIT_BALANCE_USD", "75")),
+        min_wallet_balance_usd=float(
+            source.get("AUTONOMY_MIN_WALLET_BALANCE_USD", "250")
+        ),
+        stop_trading_balance_usd=float(
+            source.get("AUTONOMY_STOP_TRADING_BALANCE_USD", "150")
+        ),
+        force_exit_balance_usd=float(
+            source.get("AUTONOMY_FORCE_EXIT_BALANCE_USD", "75")
+        ),
         max_drawdown_ratio=float(source.get("AUTONOMY_MAX_DRAWDOWN_RATIO", "0.15")),
         model_name=get_text(
             "AUTONOMY_MODEL",
@@ -127,10 +139,9 @@ class GuardDecision(BaseModel):
     recommendedFundingUsd: float = Field(default=0, ge=0)
 
 
-class GuardLedger(BaseModel):
+class GuardLedger(RuntimeLedger):
     model_config = ConfigDict(extra="forbid")
 
-    initialized: bool = False
     initializedAt: Optional[str] = None
     startingCapitalEth: str = "0"
     startingCapitalUsd: float = 0
@@ -145,7 +156,6 @@ class GuardLedger(BaseModel):
     lastProtectiveAction: Optional[dict[str, Any]] = None
     lastFundingRecommendation: Optional[dict[str, Any]] = None
     lastError: Optional[str] = None
-    lastTickAt: Optional[str] = None
     tickCount: int = 0
 
 
@@ -177,7 +187,9 @@ class AutonomyController:
         if self._stop_event is None:
             self._stop_event = asyncio.Event()
         self._stop_event.clear()
-        self._task = asyncio.create_task(self._run_loop(), name="agent-wallet-guard-loop")
+        self._task = asyncio.create_task(
+            self._run_loop(), name="agent-wallet-guard-loop"
+        )
 
     async def stop(self, *, disable: bool = True) -> None:
         if disable:
@@ -273,7 +285,9 @@ class AutonomyController:
             raise RuntimeError("Autonomy requires a configured chain signer")
 
         balance_eth = str(wallet.get("balanceEth", "0"))
-        starting_capital_usd = _round_amount(float(balance_eth) * self.config.eth_price_usd)
+        starting_capital_usd = _round_amount(
+            float(balance_eth) * self.config.eth_price_usd
+        )
         self._state = GuardLedger(
             initialized=True,
             initializedAt=utcnow_iso(),
@@ -314,7 +328,9 @@ class AutonomyController:
             if self._state.startingCapitalUsd <= 0
             else _round_amount(drawdown_usd / self._state.startingCapitalUsd)
         )
-        health_status = self._compute_health_status(current_wallet_balance_usd, drawdown_ratio)
+        health_status = self._compute_health_status(
+            current_wallet_balance_usd, drawdown_ratio
+        )
         recommended_funding_usd = _round_amount(
             max(0.0, self.config.min_wallet_balance_usd - current_wallet_balance_usd),
         )
@@ -393,7 +409,9 @@ class AutonomyController:
             f"\n\n当前上下文:\n{json.dumps(context, ensure_ascii=False, indent=2)}"
         )
         message = await llm.ainvoke(prompt)
-        payload = _extract_json_object(_normalize_message_text(getattr(message, "content", "")))
+        payload = _extract_json_object(
+            _normalize_message_text(getattr(message, "content", ""))
+        )
         return GuardDecision.model_validate(payload)
 
     def _normalize_decision(
@@ -424,7 +442,9 @@ class AutonomyController:
             }
 
         if decision.action == "stop_trading":
-            result = await self._tool_result(self._freqtrade_tool_invoker("stop_bot", {}))
+            result = await self._tool_result(
+                self._freqtrade_tool_invoker("stop_bot", {})
+            )
             self._state.botEnabled = False
             return {"action": decision.action, "result": result, "changedState": True}
 
