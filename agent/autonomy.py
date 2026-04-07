@@ -155,7 +155,13 @@ def load_autonomy_config(env: Optional[dict[str, str]] = None) -> AutonomyConfig
 class GuardDecision(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    action: Literal["hold", "stop_trading", "force_exit_all", "request_funding"]
+    action: Literal[
+        "hold",
+        "stop_trading",
+        "force_exit_all",
+        "request_funding",
+        "chain_submit_execution",
+    ]
     reason: str = Field(min_length=1)
     riskLevel: Literal["low", "medium", "high"] = "medium"
     recommendedFundingUsd: float = Field(default=0, ge=0)
@@ -314,6 +320,16 @@ class AutonomyController:
                 }
                 if execution.status == "completed":
                     self._state.botEnabled = False
+            elif (
+                planned_intent.intentType == "chain"
+                and planned_intent.action != "request_funding"
+            ):
+                execution = await self._run_chain_execution(planned_intent)
+                action_result = {
+                    "action": decision.action,
+                    "changedState": execution.status == "completed",
+                    "execution": execution.model_dump(),
+                }
             else:
                 action_result = await self._execute_decision(decision)
             execution = self._persist_execution(planned_intent, decision, execution)
