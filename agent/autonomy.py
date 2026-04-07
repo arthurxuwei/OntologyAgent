@@ -593,6 +593,13 @@ class AutonomyController:
         intent: RuntimeIntent,
         observation: dict[str, Any],
     ) -> dict[str, str]:
+        if self._state.circuitBreaker.state == "open" and intent.intentType != "noop":
+            reason = self._state.circuitBreaker.reason or "Circuit breaker is open."
+            return PolicyDecision(
+                decision="trip_circuit",
+                reason=f"{reason} Autonomous execution is blocked until the breaker is reset.",
+            ).model_dump()
+
         if intent.intentType == "noop":
             return PolicyDecision(
                 decision="allow", reason="No-op intents are always allowed."

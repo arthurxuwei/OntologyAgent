@@ -1215,6 +1215,67 @@ class AutonomyControllerTests(unittest.TestCase):
             )
             self.assertEqual(ledger["circuitBreaker"]["state"], "open")
 
+    def test_tick_blocks_execution_when_circuit_breaker_is_open(self) -> None:
+        budget_calls = iter(
+            [
+                make_freqtrade_budget(realized=-40, unrealized=-20, open_trades=2),
+                make_freqtrade_budget(realized=-40, unrealized=-20, open_trades=2),
+                make_freqtrade_budget(realized=-40, unrealized=-20, open_trades=2),
+                make_freqtrade_budget(realized=-55, unrealized=-25, open_trades=1),
+            ]
+        )
+        workflow_calls = 0
+
+        async def chain_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            return make_chain_state("0.01")
+
+        async def freqtrade_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            if tool_name == "get_budget_snapshot":
+                return next(budget_calls)
+            raise AssertionError(f"unexpected tool call: {tool_name}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = AutonomyController(
+                make_config(str(Path(temp_dir) / "autonomy.json")),
+                chain_tool,
+                freqtrade_tool,
+            )
+
+            async def raising_workflow(
+                _tool: autonomy.ToolInvoker,
+                _intent: RuntimeIntent,
+            ) -> RuntimeExecutionRecord:
+                nonlocal workflow_calls
+                workflow_calls += 1
+                raise RuntimeError("order rejected")
+
+            with patch.object(autonomy, "execute_trade_workflow", raising_workflow):
+                asyncio.run(controller.tick())
+                asyncio.run(controller.tick())
+                asyncio.run(controller.tick())
+                blocked = asyncio.run(controller.tick())
+
+            ledger = asyncio.run(controller.status())["ledger"]
+
+            self.assertEqual(workflow_calls, 3)
+            self.assertEqual(blocked["policy"]["decision"], "trip_circuit")
+            self.assertEqual(blocked["actionResult"]["action"], "policy_denied")
+            self.assertNotIn("execution", blocked)
+            self.assertEqual(
+                ledger["failureCounts"]["intent-trade-force_exit_all"],
+                3,
+            )
+            self.assertEqual(ledger["tickCount"], 4)
+            self.assertEqual(
+                ledger["latestObservation"]["trading"]["openTradeCount"], 1
+            )
+            self.assertEqual(ledger["lastDecision"]["policyDecision"], "trip_circuit")
+            self.assertEqual(ledger["circuitBreaker"]["state"], "open")
+
     def test_tick_closes_funding_execution_when_balance_recovers(self) -> None:
         chain_balances = iter(["0.05", "1.0", "0.05"])
 
