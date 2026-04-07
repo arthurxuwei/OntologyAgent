@@ -156,9 +156,12 @@ class AutonomyWorkflowTests(unittest.TestCase):
             asyncio.run(execute_chain_workflow(tool, intent))
 
     def test_execute_chain_workflow_rejects_missing_transfer_hash(self) -> None:
+        calls: list[tuple[str, dict[str, object]]] = []
+
         async def tool(
             tool_name: str, arguments: Optional[dict[str, object]] = None
         ) -> dict[str, object]:
+            calls.append((tool_name, arguments or {}))
             if tool_name == "chain_sign_transfer":
                 return {"result": {"transaction": {"txHash": ""}}}
             if tool_name == "chain_get_wallet_state":
@@ -175,10 +178,18 @@ class AutonomyWorkflowTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "missing external id"):
             asyncio.run(execute_chain_workflow(tool, intent))
 
+        self.assertEqual(
+            calls,
+            [("chain_sign_transfer", {"to": "0xabc", "amountEth": "0.1"})],
+        )
+
     def test_execute_chain_workflow_rejects_missing_execution_hash(self) -> None:
+        calls: list[tuple[str, dict[str, object]]] = []
+
         async def tool(
             tool_name: str, arguments: Optional[dict[str, object]] = None
         ) -> dict[str, object]:
+            calls.append((tool_name, arguments or {}))
             if tool_name == "chain_submit_execution":
                 return {"result": {"settlement": {"status": "submitted", "txHash": ""}}}
             if tool_name == "chain_get_wallet_state":
@@ -194,6 +205,11 @@ class AutonomyWorkflowTests(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "missing external id"):
             asyncio.run(execute_chain_workflow(tool, intent))
+
+        self.assertEqual(
+            calls,
+            [("chain_submit_execution", {"operation": "rebalance"})],
+        )
 
     def test_execute_trade_workflow_confirms_force_exit(self) -> None:
         calls: list[tuple[str, dict[str, object]]] = []
