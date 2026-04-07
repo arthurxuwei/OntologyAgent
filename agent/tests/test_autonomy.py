@@ -695,7 +695,105 @@ class AutonomyControllerTests(unittest.TestCase):
 
             self.assertEqual(decision["decision"], "deny")
 
+    def test_tick_returns_early_when_policy_denies_planned_intent(self) -> None:
+        async def chain_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            state = make_chain_state("1.0")
+            state["result"]["chain"]["chainId"] = 1
+            return state
+
+        async def freqtrade_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            return make_freqtrade_budget()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = AutonomyController(
+                make_config(str(Path(temp_dir) / "autonomy.json")),
+                chain_tool,
+                freqtrade_tool,
+            )
+            planned_intent = RuntimeIntent(
+                intentId="intent-1",
+                intentType="chain",
+                action="request_funding",
+            )
+
+            with (
+                patch.object(
+                    AutonomyController,
+                    "_plan_intent",
+                    return_value=planned_intent,
+                ),
+                patch.object(
+                    AutonomyController,
+                    "_execute_decision",
+                    side_effect=AssertionError(
+                        "tick should not execute when policy denies intent"
+                    ),
+                ),
+            ):
+                result = asyncio.run(controller.tick())
+
+            ledger = asyncio.run(controller.status())["ledger"]
+
+            self.assertEqual(result["policy"]["decision"], "deny")
+            self.assertEqual(ledger["activeIntents"][0]["intentId"], "intent-1")
+
     def test_tick_reuses_existing_active_execution_for_same_intent(self) -> None:
+        async def chain_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            return make_chain_state("1.0")
+
+        async def freqtrade_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            return make_freqtrade_budget()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = AutonomyController(
+                make_config(str(Path(temp_dir) / "autonomy.json")),
+                chain_tool,
+                freqtrade_tool,
+            )
+            controller._bootstrap_if_needed(make_chain_state("1.0")["result"])
+            existing_execution = RuntimeExecutionRecord(
+                executionId="exec-1",
+                intentId="intent-1",
+                intentType="trade",
+                stage="executing",
+            )
+            controller._state.activeExecutions = [existing_execution]
+            planned_intent = RuntimeIntent(
+                intentId="intent-1",
+                intentType="trade",
+                action="stop_trading",
+            )
+
+            with (
+                patch.object(
+                    AutonomyController,
+                    "_plan_intent",
+                    return_value=planned_intent,
+                ),
+                patch.object(
+                    AutonomyController,
+                    "_execute_decision",
+                    side_effect=AssertionError(
+                        "tick should reuse active execution instead of executing again"
+                    ),
+                ),
+            ):
+                result = asyncio.run(controller.tick())
+
+            self.assertEqual(result["execution"]["executionId"], "exec-1")
+            self.assertEqual(result["actionResult"]["action"], "reuse_execution")
+
+    def test_find_active_execution_returns_existing_active_execution_by_intent_id(
+        self,
+    ) -> None:
         async def chain_tool(
             tool_name: str, arguments: Optional[dict[str, object]] = None
         ) -> dict[str, object]:

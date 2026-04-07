@@ -252,6 +252,36 @@ class AutonomyController:
             planned_intent = self._plan_intent(observation)
             self._state.latestObservation = observation
             self._state.activeIntents = [planned_intent]
+            policy = self._apply_policy(planned_intent, observation)
+            if policy["decision"] != "allow":
+                self._state.lastTickAt = utcnow_iso()
+                self._state.lastError = None
+                self._state.tickCount += 1
+                self._save_state()
+                return {
+                    "context": context,
+                    "policy": policy,
+                    "intent": planned_intent.model_dump(),
+                    "actionResult": {"action": "policy_denied", "changedState": False},
+                }
+
+            existing_execution = self._find_active_execution(planned_intent.intentId)
+            if existing_execution is not None:
+                self._state.lastTickAt = utcnow_iso()
+                self._state.lastError = None
+                self._state.tickCount += 1
+                self._save_state()
+                return {
+                    "context": context,
+                    "policy": policy,
+                    "intent": planned_intent.model_dump(),
+                    "execution": existing_execution.model_dump(),
+                    "actionResult": {
+                        "action": "reuse_execution",
+                        "changedState": False,
+                    },
+                }
+
             if planned_intent.intentType != "noop":
                 decision = self._decision_from_intent(planned_intent)
             else:
@@ -263,6 +293,7 @@ class AutonomyController:
 
             return {
                 "context": context,
+                "policy": policy,
                 "decision": decision.model_dump(),
                 "actionResult": action_result,
             }
