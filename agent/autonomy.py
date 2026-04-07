@@ -416,12 +416,12 @@ class AutonomyController:
 
     def _plan_intent(self, observation: dict[str, Any]) -> RuntimeIntent:
         allowed_actions = set(observation["risk"].get("allowedActions", []))
-        open_trade_count = int(observation["trading"].get("openTradeCount", 0))
+        bot_enabled = bool(observation["risk"].get("botEnabled"))
         recommended_funding_usd = float(
             observation["risk"].get("recommendedFundingUsd", 0)
         )
 
-        if "force_exit_all" in allowed_actions and open_trade_count > 0:
+        if "force_exit_all" in allowed_actions and bot_enabled:
             return RuntimeIntent(
                 intentId=_new_intent_id(),
                 intentType="trade",
@@ -433,7 +433,7 @@ class AutonomyController:
                 stage="planned",
             )
 
-        if "stop_trading" in allowed_actions and open_trade_count > 0:
+        if "stop_trading" in allowed_actions and bot_enabled:
             return RuntimeIntent(
                 intentId=_new_intent_id(),
                 intentType="trade",
