@@ -269,6 +269,7 @@ class AutonomyController:
             planned_intent = self._plan_intent(observation)
             self._state.activeIntents = [planned_intent]
             self._close_stale_funding_execution(planned_intent)
+            decision = self._decision_from_intent(planned_intent)
             policy = self._apply_policy(planned_intent, observation)
             if policy["decision"] != "allow":
                 self._refresh_state_from_context(
@@ -284,6 +285,7 @@ class AutonomyController:
                     "observation": observation,
                     "intent": planned_intent.model_dump(),
                     "policy": policy,
+                    "decision": decision.model_dump(),
                     "context": context,
                     "actionResult": {"action": "policy_denied", "changedState": False},
                 }
@@ -309,7 +311,6 @@ class AutonomyController:
                     },
                 }
 
-            decision = self._decision_from_intent(planned_intent)
             execution: Optional[RuntimeExecutionRecord]
             if planned_intent.intentType == "trade":
                 execution = await self._run_trade_execution(planned_intent)

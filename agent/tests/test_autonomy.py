@@ -1081,6 +1081,14 @@ class AutonomyControllerTests(unittest.TestCase):
             self.assertEqual(result["policy"]["decision"], "deny")
             self.assertEqual(result["intent"]["action"], "chain_submit_execution")
             self.assertEqual(
+                set(result["decision"]),
+                {"action", "reason", "riskLevel", "recommendedFundingUsd"},
+            )
+            self.assertEqual(result["decision"]["action"], result["intent"]["action"])
+            self.assertEqual(result["decision"]["reason"], result["intent"]["reason"])
+            self.assertEqual(result["decision"]["riskLevel"], "medium")
+            self.assertEqual(result["decision"]["recommendedFundingUsd"], 0.0)
+            self.assertEqual(
                 ledger["activeIntents"][0]["action"], "chain_submit_execution"
             )
             self.assertEqual(ledger["lastDecision"]["action"], "hold")
@@ -1382,6 +1390,14 @@ class AutonomyControllerTests(unittest.TestCase):
 
             self.assertEqual(workflow_calls, 3)
             self.assertEqual(blocked["policy"]["decision"], "trip_circuit")
+            self.assertEqual(
+                set(blocked["decision"]),
+                {"action", "reason", "riskLevel", "recommendedFundingUsd"},
+            )
+            self.assertEqual(blocked["decision"]["action"], blocked["intent"]["action"])
+            self.assertEqual(blocked["decision"]["reason"], blocked["intent"]["reason"])
+            self.assertEqual(blocked["decision"]["riskLevel"], "high")
+            self.assertEqual(blocked["decision"]["recommendedFundingUsd"], 0.0)
             self.assertEqual(blocked["actionResult"]["action"], "policy_denied")
             self.assertNotIn("execution", blocked)
             self.assertEqual(
