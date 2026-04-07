@@ -823,6 +823,65 @@ class AutonomyControllerTests(unittest.TestCase):
             self.assertEqual(ledger["executionHistory"][0]["status"], "completed")
             self.assertIn(("stop_bot", {}), calls)
 
+    def test_tick_closes_funding_execution_when_balance_recovers(self) -> None:
+        chain_balances = iter(["0.05", "1.0", "0.05"])
+
+        async def chain_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            return make_chain_state(next(chain_balances))
+
+        async def freqtrade_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            return make_freqtrade_budget(open_trades=0)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = AutonomyController(
+                make_config(str(Path(temp_dir) / "autonomy.json")),
+                chain_tool,
+                freqtrade_tool,
+            )
+
+            async def fake_decision(
+                _self: AutonomyController, _context: dict[str, object]
+            ) -> GuardDecision:
+                return GuardDecision(
+                    action="hold",
+                    reason="Recovered wallet does not need funding.",
+                    riskLevel="low",
+                    recommendedFundingUsd=0,
+                )
+
+            with patch.object(AutonomyController, "_make_decision", fake_decision):
+                first_result = asyncio.run(controller.tick())
+                first_ledger = asyncio.run(controller.status())["ledger"]
+
+                second_result = asyncio.run(controller.tick())
+                second_ledger = asyncio.run(controller.status())["ledger"]
+
+                third_result = asyncio.run(controller.tick())
+                third_ledger = asyncio.run(controller.status())["ledger"]
+
+            self.assertEqual(first_result["decision"]["action"], "request_funding")
+            self.assertEqual(first_ledger["activeExecutions"][0]["status"], "active")
+            self.assertEqual(second_result["decision"]["action"], "hold")
+            self.assertEqual(second_ledger["activeExecutions"], [])
+            self.assertEqual(
+                second_ledger["executionHistory"][0]["intentId"],
+                "intent-chain-request_funding",
+            )
+            self.assertEqual(second_ledger["executionHistory"][0]["stage"], "closed")
+            self.assertEqual(third_result["decision"]["action"], "request_funding")
+            self.assertEqual(
+                third_ledger["activeExecutions"][0]["intentId"],
+                "intent-chain-request_funding",
+            )
+            self.assertNotEqual(
+                third_ledger["activeExecutions"][0]["executionId"],
+                first_ledger["activeExecutions"][0]["executionId"],
+            )
+
     def test_find_active_execution_returns_existing_active_execution_by_intent_id(
         self,
     ) -> None:

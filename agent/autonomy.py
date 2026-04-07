@@ -255,6 +255,7 @@ class AutonomyController:
             planned_intent = self._plan_intent(observation)
             self._state.latestObservation = observation
             self._state.activeIntents = [planned_intent]
+            self._close_stale_funding_execution(planned_intent)
             policy = self._apply_policy(planned_intent, observation)
             if policy["decision"] != "allow":
                 self._refresh_state_from_context(
@@ -706,6 +707,22 @@ class AutonomyController:
         )
         self._state.executionHistory.append(execution)
         return execution
+
+    def _close_stale_funding_execution(self, planned_intent: RuntimeIntent) -> None:
+        if planned_intent.intentId == _stable_intent_id("chain", "request_funding"):
+            return
+
+        retained_executions: list[RuntimeExecutionRecord] = []
+        for execution in self._state.activeExecutions:
+            if execution.intentId == _stable_intent_id("chain", "request_funding"):
+                self._state.executionHistory.append(
+                    execution.model_copy(
+                        update={"stage": "closed", "status": "completed"}
+                    )
+                )
+                continue
+            retained_executions.append(execution)
+        self._state.activeExecutions = retained_executions
 
     def _update_state(
         self,
