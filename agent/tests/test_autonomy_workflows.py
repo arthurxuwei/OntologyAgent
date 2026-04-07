@@ -134,9 +134,12 @@ class AutonomyWorkflowTests(unittest.TestCase):
             asyncio.run(execute_chain_workflow(tool, intent))
 
     def test_execute_chain_workflow_rejects_missing_settlement_hash(self) -> None:
+        calls: list[tuple[str, dict[str, object]]] = []
+
         async def tool(
             tool_name: str, arguments: Optional[dict[str, object]] = None
         ) -> dict[str, object]:
+            calls.append((tool_name, arguments or {}))
             if tool_name == "chain_submit_user_operation":
                 return {
                     "result": {"settlement": {"status": "submitted", "userOpHash": ""}}
@@ -154,6 +157,11 @@ class AutonomyWorkflowTests(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "missing external id"):
             asyncio.run(execute_chain_workflow(tool, intent))
+
+        self.assertEqual(
+            calls,
+            [("chain_submit_user_operation", {"target": "0xdef"})],
+        )
 
     def test_execute_chain_workflow_rejects_missing_transfer_hash(self) -> None:
         calls: list[tuple[str, dict[str, object]]] = []
