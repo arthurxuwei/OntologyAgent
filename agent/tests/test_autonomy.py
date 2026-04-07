@@ -102,10 +102,10 @@ class AutonomyControllerTests(unittest.TestCase):
                 freqtrade_tool,
             )
             intent = RuntimeIntent(
-                intentId="intent-chain-request_funding",
+                intentId="intent-chain-submit_execution",
                 intentType="chain",
-                action="request_funding",
-                parameters={"recommendedFundingUsd": 100},
+                action="chain_submit_execution",
+                parameters={"operation": "rebalance"},
             )
 
             async def raising_workflow(
@@ -117,7 +117,9 @@ class AutonomyControllerTests(unittest.TestCase):
             with patch.object(autonomy, "execute_chain_workflow", raising_workflow):
                 execution = asyncio.run(controller._run_chain_execution(intent))
 
-            self.assertEqual(execution.executionId, "exec-intent-chain-request_funding")
+            self.assertEqual(
+                execution.executionId, "exec-intent-chain-submit_execution"
+            )
             self.assertEqual(execution.intentId, intent.intentId)
             self.assertEqual(execution.intentType, "chain")
             self.assertEqual(execution.stage, "failed")
@@ -747,6 +749,59 @@ class AutonomyControllerTests(unittest.TestCase):
             self.assertEqual(ledger["activeExecutions"][0]["status"], "active")
             self.assertEqual(
                 ledger["lastFundingRecommendation"]["recommendedFundingUsd"], 100
+            )
+
+    def test_tick_routes_request_funding_through_chain_execution_helper(self) -> None:
+        async def chain_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            return make_chain_state("0.05")
+
+        async def freqtrade_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            if tool_name == "get_budget_snapshot":
+                return make_freqtrade_budget(realized=0, unrealized=0, open_trades=0)
+            raise AssertionError(f"unexpected tool call: {tool_name}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = AutonomyController(
+                make_config(str(Path(temp_dir) / "autonomy.json")),
+                chain_tool,
+                freqtrade_tool,
+            )
+
+            async def fake_run_chain_execution(
+                _self: AutonomyController,
+                intent: RuntimeIntent,
+            ) -> RuntimeExecutionRecord:
+                return RuntimeExecutionRecord(
+                    executionId="exec-request-funding-test",
+                    intentId=intent.intentId,
+                    intentType=intent.intentType,
+                    stage="executing",
+                    status="active",
+                )
+
+            with (
+                patch.object(
+                    AutonomyController,
+                    "_run_chain_execution",
+                    fake_run_chain_execution,
+                ),
+                patch.object(
+                    AutonomyController,
+                    "_execute_decision",
+                    side_effect=AssertionError(
+                        "tick should route request_funding through _run_chain_execution"
+                    ),
+                ),
+            ):
+                result = asyncio.run(controller.tick())
+
+            self.assertEqual(result["decision"]["action"], "request_funding")
+            self.assertEqual(
+                result["execution"]["executionId"], "exec-request-funding-test"
             )
 
     def test_tick_routes_real_chain_intent_through_chain_workflow(self) -> None:

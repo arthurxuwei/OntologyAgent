@@ -320,10 +320,7 @@ class AutonomyController:
                 }
                 if execution.status == "completed":
                     self._state.botEnabled = False
-            elif (
-                planned_intent.intentType == "chain"
-                and planned_intent.action != "request_funding"
-            ):
+            elif planned_intent.intentType == "chain":
                 execution = await self._run_chain_execution(planned_intent)
                 action_result = {
                     "action": decision.action,
@@ -701,6 +698,14 @@ class AutonomyController:
         intent: RuntimeIntent,
     ) -> RuntimeExecutionRecord:
         try:
+            if intent.action == "request_funding":
+                return RuntimeExecutionRecord(
+                    executionId=_new_execution_id(),
+                    intentId=intent.intentId,
+                    intentType="chain",
+                    stage="executing",
+                    status="active",
+                )
             return await execute_chain_workflow(self._chain_tool_invoker, intent)
         except Exception as error:
             return RuntimeExecutionRecord(
