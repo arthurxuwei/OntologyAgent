@@ -659,6 +659,11 @@ class AutonomyControllerTests(unittest.TestCase):
             self.assertEqual(ledger["healthStatus"], "watch")
             self.assertEqual(ledger["activeIntents"][0]["action"], "request_funding")
             self.assertEqual(
+                ledger["activeExecutions"][0]["intentId"],
+                "intent-chain-request_funding",
+            )
+            self.assertEqual(ledger["activeExecutions"][0]["status"], "active")
+            self.assertEqual(
                 ledger["lastFundingRecommendation"]["recommendedFundingUsd"], 100
             )
 
@@ -736,12 +741,12 @@ class AutonomyControllerTests(unittest.TestCase):
         async def chain_tool(
             tool_name: str, arguments: Optional[dict[str, object]] = None
         ) -> dict[str, object]:
-            return make_chain_state("0.04")
+            return make_chain_state("0.05")
 
         async def freqtrade_tool(
             tool_name: str, arguments: Optional[dict[str, object]] = None
         ) -> dict[str, object]:
-            return make_freqtrade_budget(open_trades=1)
+            return make_freqtrade_budget(open_trades=0)
 
         with tempfile.TemporaryDirectory() as temp_dir:
             controller = AutonomyController(
@@ -749,14 +754,8 @@ class AutonomyControllerTests(unittest.TestCase):
                 chain_tool,
                 freqtrade_tool,
             )
-            controller._bootstrap_if_needed(make_chain_state("0.04")["result"])
-            existing_execution = RuntimeExecutionRecord(
-                executionId="exec-1",
-                intentId="intent-trade-stop_trading",
-                intentType="trade",
-                stage="executing",
-            )
-            controller._state.activeExecutions = [existing_execution]
+            first_result = asyncio.run(controller.tick())
+            first_ledger = asyncio.run(controller.status())["ledger"]
 
             with patch.object(
                 AutonomyController,
@@ -769,12 +768,60 @@ class AutonomyControllerTests(unittest.TestCase):
 
             ledger = asyncio.run(controller.status())["ledger"]
 
-            self.assertEqual(result["execution"]["executionId"], "exec-1")
+            self.assertEqual(first_result["decision"]["action"], "request_funding")
+            self.assertEqual(
+                first_ledger["activeExecutions"][0]["intentId"],
+                "intent-chain-request_funding",
+            )
+            self.assertEqual(
+                result["execution"]["intentId"],
+                first_ledger["activeExecutions"][0]["intentId"],
+            )
             self.assertEqual(result["actionResult"]["action"], "reuse_execution")
-            self.assertEqual(result["intent"]["intentId"], "intent-trade-stop_trading")
-            self.assertEqual(ledger["currentWalletBalanceUsd"], 120.0)
+            self.assertEqual(
+                result["intent"]["intentId"], "intent-chain-request_funding"
+            )
+            self.assertEqual(ledger["currentWalletBalanceUsd"], 150.0)
             self.assertEqual(ledger["healthStatus"], "watch")
-            self.assertEqual(ledger["lastDecision"]["action"], "stop_trading")
+            self.assertEqual(ledger["lastDecision"]["action"], "request_funding")
+
+    def test_tick_records_completed_trade_execution_in_history(self) -> None:
+        calls: list[tuple[str, dict[str, object]]] = []
+
+        async def chain_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            calls.append((tool_name, arguments or {}))
+            return make_chain_state("0.04")
+
+        async def freqtrade_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            calls.append((tool_name, arguments or {}))
+            if tool_name == "get_budget_snapshot":
+                return make_freqtrade_budget(open_trades=1)
+            if tool_name == "stop_bot":
+                return {"result": {"ok": True}}
+            raise AssertionError(f"unexpected tool call: {tool_name}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = AutonomyController(
+                make_config(str(Path(temp_dir) / "autonomy.json")),
+                chain_tool,
+                freqtrade_tool,
+            )
+
+            result = asyncio.run(controller.tick())
+
+            ledger = asyncio.run(controller.status())["ledger"]
+
+            self.assertEqual(result["decision"]["action"], "stop_trading")
+            self.assertEqual(ledger["activeExecutions"], [])
+            self.assertEqual(
+                ledger["executionHistory"][0]["intentId"], "intent-trade-stop_trading"
+            )
+            self.assertEqual(ledger["executionHistory"][0]["status"], "completed")
+            self.assertIn(("stop_bot", {}), calls)
 
     def test_find_active_execution_returns_existing_active_execution_by_intent_id(
         self,

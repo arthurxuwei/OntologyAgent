@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Literal, Optional
+from uuid import uuid4
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -32,6 +33,10 @@ def _intent_now() -> str:
 
 def _stable_intent_id(intent_type: str, action: str) -> str:
     return f"intent-{intent_type}-{action}"
+
+
+def _new_execution_id() -> str:
+    return f"exec-{uuid4()}"
 
 
 def _round_amount(value: float, digits: int = 6) -> float:
@@ -294,15 +299,19 @@ class AutonomyController:
                 decision = await self._make_decision(context)
                 decision = self._normalize_decision(decision, context)
             action_result = await self._execute_decision(decision)
+            execution = self._persist_execution(planned_intent, decision)
             self._update_state(context, decision, action_result)
             self._save_state()
 
-            return {
+            response = {
                 "context": context,
                 "policy": policy,
                 "decision": decision.model_dump(),
                 "actionResult": action_result,
             }
+            if execution is not None:
+                response["execution"] = execution.model_dump()
+            return response
 
     async def _run_loop(self) -> None:
         if self._stop_event is None:
@@ -662,6 +671,41 @@ class AutonomyController:
         self._state.lastTickAt = utcnow_iso()
         self._state.lastError = None
         self._state.tickCount += 1
+
+    def _persist_execution(
+        self,
+        intent: RuntimeIntent,
+        decision: GuardDecision,
+    ) -> Optional[RuntimeExecutionRecord]:
+        if decision.action == "hold":
+            return None
+
+        self._state.activeExecutions = [
+            execution
+            for execution in self._state.activeExecutions
+            if execution.intentId != intent.intentId
+        ]
+
+        if decision.action == "request_funding":
+            execution = RuntimeExecutionRecord(
+                executionId=_new_execution_id(),
+                intentId=intent.intentId,
+                intentType=intent.intentType,
+                stage="executing",
+                status="active",
+            )
+            self._state.activeExecutions.append(execution)
+            return execution
+
+        execution = RuntimeExecutionRecord(
+            executionId=_new_execution_id(),
+            intentId=intent.intentId,
+            intentType=intent.intentType,
+            stage="confirmed",
+            status="completed",
+        )
+        self._state.executionHistory.append(execution)
+        return execution
 
     def _update_state(
         self,
