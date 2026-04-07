@@ -300,8 +300,19 @@ class AutonomyController:
             else:
                 decision = await self._make_decision(context)
                 decision = self._normalize_decision(decision, context)
-            action_result = await self._execute_decision(decision)
-            execution = self._persist_execution(planned_intent, decision)
+            execution: Optional[RuntimeExecutionRecord] = None
+            if decision.action == "force_exit_all":
+                execution = await self._run_trade_execution(planned_intent)
+                action_result = {
+                    "action": decision.action,
+                    "changedState": execution.status == "completed",
+                    "execution": execution.model_dump(),
+                }
+                if execution.status == "completed":
+                    self._state.botEnabled = False
+            else:
+                action_result = await self._execute_decision(decision)
+            execution = self._persist_execution(planned_intent, decision, execution)
             self._update_state(context, decision, action_result)
             self._save_state()
 
@@ -695,6 +706,7 @@ class AutonomyController:
         self,
         intent: RuntimeIntent,
         decision: GuardDecision,
+        execution_record: Optional[RuntimeExecutionRecord] = None,
     ) -> Optional[RuntimeExecutionRecord]:
         if decision.action == "hold":
             return None
@@ -704,6 +716,13 @@ class AutonomyController:
             for execution in self._state.activeExecutions
             if execution.intentId != intent.intentId
         ]
+
+        if execution_record is not None:
+            if execution_record.status == "active":
+                self._state.activeExecutions.append(execution_record)
+            else:
+                self._state.executionHistory.append(execution_record)
+            return execution_record
 
         if decision.action == "request_funding":
             execution = RuntimeExecutionRecord(
