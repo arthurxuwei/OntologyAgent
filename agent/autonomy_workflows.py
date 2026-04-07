@@ -44,6 +44,9 @@ async def execute_chain_workflow(
     tool: ToolInvoker,
     intent: RuntimeIntent,
 ) -> RuntimeExecutionRecord:
+    if not intent.action.startswith("chain_"):
+        raise RuntimeError(f"Unsupported chain workflow action: {intent.action}")
+
     payload = await tool(intent.action, intent.parameters)
     result = payload["result"]
     if not isinstance(result, dict):

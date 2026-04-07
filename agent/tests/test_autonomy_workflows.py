@@ -18,7 +18,7 @@ class AutonomyWorkflowTests(unittest.TestCase):
             tool_name: str, arguments: Optional[dict[str, object]] = None
         ) -> dict[str, object]:
             calls.append((tool_name, arguments or {}))
-            if tool_name == "request_funding":
+            if tool_name == "chain_submit_execution":
                 return {"result": {"txHash": "0xabc123"}}
             if tool_name == "chain_get_wallet_state":
                 return {
@@ -31,10 +31,10 @@ class AutonomyWorkflowTests(unittest.TestCase):
             raise AssertionError(f"unexpected tool call: {tool_name}")
 
         intent = RuntimeIntent(
-            intentId="intent-chain-request_funding",
+            intentId="intent-chain-submit_execution",
             intentType="chain",
-            action="request_funding",
-            parameters={"recommendedFundingUsd": 100},
+            action="chain_submit_execution",
+            parameters={"operation": "rebalance"},
         )
 
         execution = asyncio.run(execute_chain_workflow(tool, intent))
@@ -42,17 +42,33 @@ class AutonomyWorkflowTests(unittest.TestCase):
         self.assertEqual(
             calls,
             [
-                ("request_funding", {"recommendedFundingUsd": 100}),
+                ("chain_submit_execution", {"operation": "rebalance"}),
                 ("chain_get_wallet_state", {}),
             ],
         )
         self.assertIsInstance(execution, RuntimeExecutionRecord)
-        self.assertEqual(execution.executionId, "exec-intent-chain-request_funding")
+        self.assertEqual(execution.executionId, "exec-intent-chain-submit_execution")
         self.assertEqual(execution.intentId, intent.intentId)
         self.assertEqual(execution.intentType, "chain")
         self.assertEqual(execution.stage, "reconciled")
         self.assertEqual(execution.status, "completed")
         self.assertEqual(execution.externalId, "0xabc123")
+
+    def test_execute_chain_workflow_rejects_non_chain_action(self) -> None:
+        async def tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            raise AssertionError(f"unexpected tool call: {tool_name}")
+
+        intent = RuntimeIntent(
+            intentId="intent-chain-request_funding",
+            intentType="chain",
+            action="request_funding",
+            parameters={"recommendedFundingUsd": 100},
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "Unsupported chain workflow action"):
+            asyncio.run(execute_chain_workflow(tool, intent))
 
     def test_execute_trade_workflow_confirms_force_exit(self) -> None:
         calls: list[tuple[str, dict[str, object]]] = []
