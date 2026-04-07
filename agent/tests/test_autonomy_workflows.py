@@ -155,6 +155,46 @@ class AutonomyWorkflowTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "missing external id"):
             asyncio.run(execute_chain_workflow(tool, intent))
 
+    def test_execute_chain_workflow_rejects_missing_transfer_hash(self) -> None:
+        async def tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            if tool_name == "chain_sign_transfer":
+                return {"result": {"transaction": {"txHash": ""}}}
+            if tool_name == "chain_get_wallet_state":
+                return {"result": {"wallet": {"signerConfigured": True}}}
+            raise AssertionError(f"unexpected tool call: {tool_name}")
+
+        intent = RuntimeIntent(
+            intentId="intent-chain-sign_transfer",
+            intentType="chain",
+            action="chain_sign_transfer",
+            parameters={"to": "0xabc", "amountEth": "0.1"},
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "missing external id"):
+            asyncio.run(execute_chain_workflow(tool, intent))
+
+    def test_execute_chain_workflow_rejects_missing_execution_hash(self) -> None:
+        async def tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            if tool_name == "chain_submit_execution":
+                return {"result": {"settlement": {"status": "submitted", "txHash": ""}}}
+            if tool_name == "chain_get_wallet_state":
+                return {"result": {"wallet": {"signerConfigured": True}}}
+            raise AssertionError(f"unexpected tool call: {tool_name}")
+
+        intent = RuntimeIntent(
+            intentId="intent-chain-submit_execution",
+            intentType="chain",
+            action="chain_submit_execution",
+            parameters={"operation": "rebalance"},
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "missing external id"):
+            asyncio.run(execute_chain_workflow(tool, intent))
+
     def test_execute_trade_workflow_confirms_force_exit(self) -> None:
         calls: list[tuple[str, dict[str, object]]] = []
 
