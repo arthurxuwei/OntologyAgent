@@ -421,6 +421,51 @@ class AutonomyControllerTests(unittest.TestCase):
                 calls,
             )
 
+    def test_tick_uses_planned_stop_trading_intent_over_llm_hold(self) -> None:
+        calls: list[tuple[str, dict[str, object]]] = []
+
+        async def chain_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            calls.append((tool_name, arguments or {}))
+            return make_chain_state("0.04")
+
+        async def freqtrade_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            calls.append((tool_name, arguments or {}))
+            if tool_name == "get_budget_snapshot":
+                return make_freqtrade_budget(realized=0, unrealized=0, open_trades=1)
+            if tool_name == "stop_bot":
+                return {"result": {"ok": True}}
+            raise AssertionError(f"unexpected tool call: {tool_name}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = AutonomyController(
+                make_config(str(Path(temp_dir) / "autonomy.json")),
+                chain_tool,
+                freqtrade_tool,
+            )
+
+            async def fake_decision(
+                _self: AutonomyController, _context: dict[str, object]
+            ) -> GuardDecision:
+                return GuardDecision(
+                    action="hold",
+                    reason="LLM would otherwise hold.",
+                    riskLevel="low",
+                    recommendedFundingUsd=0,
+                )
+
+            with patch.object(AutonomyController, "_make_decision", fake_decision):
+                result = asyncio.run(controller.tick())
+
+            ledger = asyncio.run(controller.status())["ledger"]
+
+            self.assertEqual(result["decision"]["action"], "stop_trading")
+            self.assertEqual(ledger["activeIntents"][0]["action"], "stop_trading")
+            self.assertIn(("stop_bot", {}), calls)
+
     def test_tick_recommends_funding_when_balance_is_low(self) -> None:
         async def chain_tool(
             tool_name: str, arguments: Optional[dict[str, object]] = None
@@ -445,10 +490,10 @@ class AutonomyControllerTests(unittest.TestCase):
                 _self: AutonomyController, _context: dict[str, object]
             ) -> GuardDecision:
                 return GuardDecision(
-                    action="request_funding",
-                    reason="Wallet balance is below the soft threshold.",
-                    riskLevel="medium",
-                    recommendedFundingUsd=100,
+                    action="hold",
+                    reason="LLM would otherwise hold.",
+                    riskLevel="low",
+                    recommendedFundingUsd=0,
                 )
 
             with patch.object(AutonomyController, "_make_decision", fake_decision):
@@ -458,6 +503,7 @@ class AutonomyControllerTests(unittest.TestCase):
             status = asyncio.run(controller.status())
             ledger = status["ledger"]
             self.assertEqual(ledger["healthStatus"], "watch")
+            self.assertEqual(ledger["activeIntents"][0]["action"], "request_funding")
             self.assertEqual(
                 ledger["lastFundingRecommendation"]["recommendedFundingUsd"], 100
             )

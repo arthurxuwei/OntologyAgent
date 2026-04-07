@@ -417,6 +417,9 @@ class AutonomyController:
     def _plan_intent(self, observation: dict[str, Any]) -> RuntimeIntent:
         allowed_actions = set(observation["risk"].get("allowedActions", []))
         open_trade_count = int(observation["trading"].get("openTradeCount", 0))
+        recommended_funding_usd = float(
+            observation["risk"].get("recommendedFundingUsd", 0)
+        )
 
         if "force_exit_all" in allowed_actions and open_trade_count > 0:
             return RuntimeIntent(
@@ -426,6 +429,31 @@ class AutonomyController:
                 reason="Open trades are exposed while the runtime is in a critical risk state.",
                 confidence=1,
                 riskTags=["critical_risk", "protective_action"],
+                createdAt=_intent_now(),
+                stage="planned",
+            )
+
+        if "stop_trading" in allowed_actions and open_trade_count > 0:
+            return RuntimeIntent(
+                intentId=_new_intent_id(),
+                intentType="trade",
+                action="stop_trading",
+                reason="Trading should stop while the runtime remains in a protective risk state.",
+                confidence=1,
+                riskTags=["elevated_risk", "protective_action"],
+                createdAt=_intent_now(),
+                stage="planned",
+            )
+
+        if "request_funding" in allowed_actions and recommended_funding_usd > 0:
+            return RuntimeIntent(
+                intentId=_new_intent_id(),
+                intentType="chain",
+                action="request_funding",
+                parameters={"recommendedFundingUsd": recommended_funding_usd},
+                reason="Wallet balance is below the preferred operating range.",
+                confidence=1,
+                riskTags=["low_balance"],
                 createdAt=_intent_now(),
                 stage="planned",
             )
@@ -444,8 +472,14 @@ class AutonomyController:
         return GuardDecision(
             action=intent.action,
             reason=intent.reason or "Runtime intent selected this action.",
-            riskLevel="high" if intent.intentType == "trade" else "low",
-            recommendedFundingUsd=0,
+            riskLevel=(
+                "high"
+                if intent.action in {"force_exit_all", "stop_trading"}
+                else "medium"
+            ),
+            recommendedFundingUsd=float(
+                intent.parameters.get("recommendedFundingUsd", 0)
+            ),
         )
 
     async def _make_decision(self, context: dict[str, Any]) -> GuardDecision:
