@@ -417,11 +417,12 @@ class AutonomyController:
     def _plan_intent(self, observation: dict[str, Any]) -> RuntimeIntent:
         allowed_actions = set(observation["risk"].get("allowedActions", []))
         bot_enabled = bool(observation["risk"].get("botEnabled"))
+        open_trade_count = int(observation["trading"].get("openTradeCount", 0))
         recommended_funding_usd = float(
             observation["risk"].get("recommendedFundingUsd", 0)
         )
 
-        if "force_exit_all" in allowed_actions and bot_enabled:
+        if "force_exit_all" in allowed_actions and bot_enabled and open_trade_count > 0:
             return RuntimeIntent(
                 intentId=_new_intent_id(),
                 intentType="trade",
@@ -573,7 +574,12 @@ class AutonomyController:
         self._state.dryRunRealizedPnl = float(budget["dryRunRealizedPnl"])
         self._state.dryRunUnrealizedPnl = float(budget["dryRunUnrealizedPnl"])
         self._state.netWorthEstimate = float(budget["netWorthEstimate"])
-        self._state.botEnabled = bool(risk["botEnabled"])
+        if decision.action in {"stop_trading", "force_exit_all"} and action_result.get(
+            "changedState"
+        ):
+            self._state.botEnabled = False
+        else:
+            self._state.botEnabled = bool(risk["botEnabled"])
         self._state.healthStatus = risk["healthStatus"]
         self._state.lastDecision = decision.model_dump()
         self._state.lastTickAt = utcnow_iso()

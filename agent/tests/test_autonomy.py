@@ -252,6 +252,7 @@ class AutonomyControllerTests(unittest.TestCase):
             ledger = status["ledger"]
             self.assertEqual(ledger["healthStatus"], "critical")
             self.assertEqual(ledger["lastProtectiveAction"]["action"], "force_exit_all")
+            self.assertFalse(ledger["botEnabled"])
 
     def test_tick_builds_normalized_runtime_observation(self) -> None:
         async def chain_tool(
@@ -513,6 +514,110 @@ class AutonomyControllerTests(unittest.TestCase):
 
             self.assertEqual(result["decision"]["action"], "stop_trading")
             self.assertEqual(ledger["activeIntents"][0]["action"], "stop_trading")
+            self.assertIn(("stop_bot", {}), calls)
+            self.assertNotIn(
+                ("force_exit_trade", {"trade_id": "all", "order_type": "market"}),
+                calls,
+            )
+
+    def test_tick_prefers_stop_trading_over_force_exit_without_open_trades(
+        self,
+    ) -> None:
+        calls: list[tuple[str, dict[str, object]]] = []
+
+        async def chain_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            calls.append((tool_name, arguments or {}))
+            return make_chain_state("0.01")
+
+        async def freqtrade_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            calls.append((tool_name, arguments or {}))
+            if tool_name == "get_budget_snapshot":
+                return make_freqtrade_budget(realized=0, unrealized=0, open_trades=0)
+            if tool_name == "stop_bot":
+                return {"result": {"ok": True}}
+            if tool_name == "force_exit_trade":
+                return {"result": {"ok": True}}
+            raise AssertionError(f"unexpected tool call: {tool_name}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = AutonomyController(
+                make_config(str(Path(temp_dir) / "autonomy.json")),
+                chain_tool,
+                freqtrade_tool,
+            )
+            controller._bootstrap_if_needed(make_chain_state("0.01")["result"])
+            controller._state.botEnabled = True
+
+            async def fake_decision(
+                _self: AutonomyController, _context: dict[str, object]
+            ) -> GuardDecision:
+                return GuardDecision(
+                    action="hold",
+                    reason="LLM would otherwise hold.",
+                    riskLevel="low",
+                    recommendedFundingUsd=0,
+                )
+
+            with patch.object(AutonomyController, "_make_decision", fake_decision):
+                result = asyncio.run(controller.tick())
+
+            ledger = asyncio.run(controller.status())["ledger"]
+
+            self.assertEqual(result["decision"]["action"], "stop_trading")
+            self.assertEqual(ledger["activeIntents"][0]["action"], "stop_trading")
+            self.assertIn(("stop_bot", {}), calls)
+            self.assertNotIn(
+                ("force_exit_trade", {"trade_id": "all", "order_type": "market"}),
+                calls,
+            )
+
+    def test_tick_stop_trading_persists_disabled_bot_state(self) -> None:
+        calls: list[tuple[str, dict[str, object]]] = []
+
+        async def chain_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            calls.append((tool_name, arguments or {}))
+            return make_chain_state("0.04")
+
+        async def freqtrade_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            calls.append((tool_name, arguments or {}))
+            if tool_name == "get_budget_snapshot":
+                return make_freqtrade_budget(realized=0, unrealized=0, open_trades=1)
+            if tool_name == "stop_bot":
+                return {"result": {"ok": True}}
+            raise AssertionError(f"unexpected tool call: {tool_name}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = AutonomyController(
+                make_config(str(Path(temp_dir) / "autonomy.json")),
+                chain_tool,
+                freqtrade_tool,
+            )
+
+            async def fake_decision(
+                _self: AutonomyController, _context: dict[str, object]
+            ) -> GuardDecision:
+                return GuardDecision(
+                    action="hold",
+                    reason="LLM would otherwise hold.",
+                    riskLevel="low",
+                    recommendedFundingUsd=0,
+                )
+
+            with patch.object(AutonomyController, "_make_decision", fake_decision):
+                asyncio.run(controller.tick())
+
+            ledger = asyncio.run(controller.status())["ledger"]
+
+            self.assertEqual(ledger["activeIntents"][0]["action"], "stop_trading")
+            self.assertFalse(ledger["botEnabled"])
             self.assertIn(("stop_bot", {}), calls)
 
     def test_tick_recommends_funding_when_balance_is_low(self) -> None:
