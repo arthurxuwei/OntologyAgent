@@ -814,7 +814,7 @@ class AutonomyControllerTests(unittest.TestCase):
             if tool_name == "chain_get_wallet_state":
                 return make_chain_state("1.0")
             if tool_name == "chain_submit_execution":
-                return {"result": {"txHash": "0xchain123"}}
+                return {"result": {"settlement": {"txHash": "0xchain123"}}}
             raise AssertionError(f"unexpected tool call: {tool_name}")
 
         async def freqtrade_tool(

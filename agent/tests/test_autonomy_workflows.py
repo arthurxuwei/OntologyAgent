@@ -11,48 +11,71 @@ from autonomy_workflows import (
 
 
 class AutonomyWorkflowTests(unittest.TestCase):
-    def test_execute_chain_workflow_confirms_mock_execution(self) -> None:
-        calls: list[tuple[str, dict[str, object]]] = []
+    def test_execute_chain_workflow_uses_supported_external_id_shapes(self) -> None:
+        scenarios = [
+            (
+                "chain_sign_transfer",
+                {"to": "0xabc", "amountEth": "0.1"},
+                {"result": {"transaction": {"txHash": "0xsign123"}}},
+                "0xsign123",
+            ),
+            (
+                "chain_submit_execution",
+                {"operation": "rebalance"},
+                {"result": {"settlement": {"txHash": "0xexec123"}}},
+                "0xexec123",
+            ),
+            (
+                "chain_submit_user_operation",
+                {"target": "0xdef"},
+                {"result": {"settlement": {"userOpHash": "0xuserop123"}}},
+                "0xuserop123",
+            ),
+        ]
 
-        async def tool(
-            tool_name: str, arguments: Optional[dict[str, object]] = None
-        ) -> dict[str, object]:
-            calls.append((tool_name, arguments or {}))
-            if tool_name == "chain_submit_execution":
-                return {"result": {"txHash": "0xabc123"}}
-            if tool_name == "chain_get_wallet_state":
-                return {
-                    "result": {
-                        "wallet": {
-                            "signerConfigured": True,
+        for action, parameters, workflow_result, expected_external_id in scenarios:
+            with self.subTest(action=action):
+                calls: list[tuple[str, dict[str, object]]] = []
+
+                async def tool(
+                    tool_name: str, arguments: Optional[dict[str, object]] = None
+                ) -> dict[str, object]:
+                    calls.append((tool_name, arguments or {}))
+                    if tool_name == action:
+                        return workflow_result
+                    if tool_name == "chain_get_wallet_state":
+                        return {
+                            "result": {
+                                "wallet": {
+                                    "signerConfigured": True,
+                                }
+                            }
                         }
-                    }
-                }
-            raise AssertionError(f"unexpected tool call: {tool_name}")
+                    raise AssertionError(f"unexpected tool call: {tool_name}")
 
-        intent = RuntimeIntent(
-            intentId="intent-chain-submit_execution",
-            intentType="chain",
-            action="chain_submit_execution",
-            parameters={"operation": "rebalance"},
-        )
+                intent = RuntimeIntent(
+                    intentId=f"intent-{action}",
+                    intentType="chain",
+                    action=action,
+                    parameters=parameters,
+                )
 
-        execution = asyncio.run(execute_chain_workflow(tool, intent))
+                execution = asyncio.run(execute_chain_workflow(tool, intent))
 
-        self.assertEqual(
-            calls,
-            [
-                ("chain_submit_execution", {"operation": "rebalance"}),
-                ("chain_get_wallet_state", {}),
-            ],
-        )
-        self.assertIsInstance(execution, RuntimeExecutionRecord)
-        self.assertEqual(execution.executionId, "exec-intent-chain-submit_execution")
-        self.assertEqual(execution.intentId, intent.intentId)
-        self.assertEqual(execution.intentType, "chain")
-        self.assertEqual(execution.stage, "reconciled")
-        self.assertEqual(execution.status, "completed")
-        self.assertEqual(execution.externalId, "0xabc123")
+                self.assertEqual(
+                    calls,
+                    [
+                        (action, parameters),
+                        ("chain_get_wallet_state", {}),
+                    ],
+                )
+                self.assertIsInstance(execution, RuntimeExecutionRecord)
+                self.assertEqual(execution.executionId, f"exec-intent-{action}")
+                self.assertEqual(execution.intentId, intent.intentId)
+                self.assertEqual(execution.intentType, "chain")
+                self.assertEqual(execution.stage, "reconciled")
+                self.assertEqual(execution.status, "completed")
+                self.assertEqual(execution.externalId, expected_external_id)
 
     def test_execute_chain_workflow_rejects_non_chain_action(self) -> None:
         async def tool(

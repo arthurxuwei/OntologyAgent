@@ -13,6 +13,24 @@ SUPPORTED_CHAIN_WORKFLOW_ACTIONS = {
 }
 
 
+def _extract_chain_external_id(action: str, result: dict[str, Any]) -> str:
+    if action == "chain_sign_transfer":
+        transaction = result.get("transaction", {})
+        if isinstance(transaction, dict):
+            return str(transaction.get("txHash") or "")
+        return ""
+
+    settlement = result.get("settlement", {})
+    if not isinstance(settlement, dict):
+        return ""
+
+    if action == "chain_submit_execution":
+        return str(settlement.get("txHash") or "")
+    if action == "chain_submit_user_operation":
+        return str(settlement.get("userOpHash") or "")
+    return ""
+
+
 async def execute_trade_workflow(
     tool: ToolInvoker,
     intent: RuntimeIntent,
@@ -72,7 +90,7 @@ async def execute_chain_workflow(
         intentType="chain",
         stage="reconciled",
         status="completed",
-        externalId=str(result.get("txHash") or ""),
+        externalId=_extract_chain_external_id(intent.action, result),
     )
 
 
