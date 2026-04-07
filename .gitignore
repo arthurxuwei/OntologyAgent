@@ -8,3 +8,4 @@ deep-research-report.md
 freqtrade/data/
 agent/data/
 .vscode/
+.worktrees/
