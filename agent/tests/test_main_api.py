@@ -29,7 +29,24 @@ class FakeAutonomyController:
             "intervalSeconds": 60,
             "modelName": "gpt-4o-mini",
             "thresholds": {},
-            "ledger": {},
+            "ledger": {
+                "activeExecutions": [
+                    {
+                        "executionId": "exec-123",
+                        "status": "running",
+                    }
+                ],
+                "executionHistory": [
+                    {
+                        "executionId": "exec-122",
+                        "status": "completed",
+                    }
+                ],
+                "circuitBreaker": {
+                    "state": "open",
+                    "failureCount": 2,
+                },
+            },
         }
 
     async def tick(self) -> dict[str, object]:
@@ -47,14 +64,23 @@ class FakeGraph:
         return {"messages": messages}
 
 
+class FakeToolClient:
+    def __init__(self, tools: list[str]) -> None:
+        self._tools = tools
+
+    async def list_tools(self) -> list[str]:
+        return self._tools
+
+
 class MainApiTests(unittest.TestCase):
     def setUp(self) -> None:
         main.get_session_store.cache_clear()
 
     def test_agent_sessions_support_multi_turn_chat(self) -> None:
         controller = FakeAutonomyController()
-        with patch.object(main, "get_autonomy_controller", return_value=controller), patch.object(
-            main, "get_agent_graph", return_value=FakeGraph()
+        with (
+            patch.object(main, "get_autonomy_controller", return_value=controller),
+            patch.object(main, "get_agent_graph", return_value=FakeGraph()),
         ):
             with TestClient(main.app) as client:
                 create_response = client.post("/agent/sessions")
@@ -103,6 +129,49 @@ class MainApiTests(unittest.TestCase):
 
         self.assertIn(True, controller.start_calls)
         self.assertIn(True, controller.stop_calls)
+
+    def test_autonomy_status_exposes_active_execution_and_circuit_breaker(self) -> None:
+        controller = FakeAutonomyController()
+
+        with patch.object(main, "get_autonomy_controller", return_value=controller):
+            with TestClient(main.app) as client:
+                response = client.get("/autonomy/status")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(
+            body["ledger"]["activeExecutions"][0]["executionId"], "exec-123"
+        )
+        self.assertEqual(body["ledger"]["circuitBreaker"]["state"], "open")
+        self.assertEqual(body["summary"]["activeExecutionCount"], 1)
+
+    def test_health_includes_autonomy_execution_summary(self) -> None:
+        controller = FakeAutonomyController()
+
+        with (
+            patch.object(main, "get_autonomy_controller", return_value=controller),
+            patch.object(
+                main,
+                "get_chain_mcp_client",
+                return_value=FakeToolClient(["chain_get_wallet_state"]),
+            ),
+            patch.object(
+                main,
+                "get_freqtrade_mcp_client",
+                return_value=FakeToolClient(["freqtrade_status"]),
+            ),
+            patch.object(
+                main, "get_chain_wallet_state", return_value={"balanceEth": "1.0"}
+            ),
+        ):
+            with TestClient(main.app) as client:
+                response = client.get("/health")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(
+            body["autonomy"]["ledger"]["activeExecutions"][0]["executionId"], "exec-123"
+        )
 
 
 if __name__ == "__main__":
