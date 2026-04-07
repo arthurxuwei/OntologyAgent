@@ -18,7 +18,11 @@ from autonomy_models import (
     RuntimeIntent,
     RuntimeLedger,
 )
-from autonomy_workflows import classify_workflow_failure, execute_trade_workflow
+from autonomy_workflows import (
+    classify_workflow_failure,
+    execute_chain_workflow,
+    execute_trade_workflow,
+)
 
 
 ToolInvoker = Callable[[str, Optional[dict[str, Any]]], Awaitable[dict[str, Any]]]
@@ -648,6 +652,23 @@ class AutonomyController:
                 stage="failed",
                 status="failed",
                 failureCode=classify_workflow_failure("trade", error),
+                failureMessage=str(error),
+            )
+
+    async def _run_chain_execution(
+        self,
+        intent: RuntimeIntent,
+    ) -> RuntimeExecutionRecord:
+        try:
+            return await execute_chain_workflow(self._chain_tool_invoker, intent)
+        except Exception as error:
+            return RuntimeExecutionRecord(
+                executionId=f"exec-{intent.intentId}",
+                intentId=intent.intentId,
+                intentType="chain",
+                stage="failed",
+                status="failed",
+                failureCode=classify_workflow_failure("chain", error),
                 failureMessage=str(error),
             )
 

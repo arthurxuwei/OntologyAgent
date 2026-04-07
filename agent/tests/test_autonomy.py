@@ -84,6 +84,47 @@ def make_config(state_path: str) -> AutonomyConfig:
 
 
 class AutonomyControllerTests(unittest.TestCase):
+    def test_run_chain_execution_returns_failed_record_for_chain_error(self) -> None:
+        async def chain_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            return make_chain_state("1.0")
+
+        async def freqtrade_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            return make_freqtrade_budget()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = AutonomyController(
+                make_config(str(Path(temp_dir) / "autonomy.json")),
+                chain_tool,
+                freqtrade_tool,
+            )
+            intent = RuntimeIntent(
+                intentId="intent-chain-request_funding",
+                intentType="chain",
+                action="request_funding",
+                parameters={"recommendedFundingUsd": 100},
+            )
+
+            async def raising_workflow(
+                _tool: autonomy.ToolInvoker,
+                _intent: RuntimeIntent,
+            ) -> RuntimeExecutionRecord:
+                raise RuntimeError("confirmation timeout")
+
+            with patch.object(autonomy, "execute_chain_workflow", raising_workflow):
+                execution = asyncio.run(controller._run_chain_execution(intent))
+
+            self.assertEqual(execution.executionId, "exec-intent-chain-request_funding")
+            self.assertEqual(execution.intentId, intent.intentId)
+            self.assertEqual(execution.intentType, "chain")
+            self.assertEqual(execution.stage, "failed")
+            self.assertEqual(execution.status, "failed")
+            self.assertEqual(execution.failureCode, "chain_confirmation_timeout")
+            self.assertEqual(execution.failureMessage, "confirmation timeout")
+
     def test_run_trade_execution_returns_failed_record_for_trade_error(self) -> None:
         async def chain_tool(
             tool_name: str, arguments: Optional[dict[str, object]] = None
