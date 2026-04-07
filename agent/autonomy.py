@@ -18,6 +18,7 @@ from autonomy_models import (
     RuntimeIntent,
     RuntimeLedger,
 )
+from autonomy_workflows import classify_workflow_failure, execute_trade_workflow
 
 
 ToolInvoker = Callable[[str, Optional[dict[str, Any]]], Awaitable[dict[str, Any]]]
@@ -621,6 +622,23 @@ class AutonomyController:
             riskLevel="medium",
             recommendedFundingUsd=0,
         )
+
+    async def _run_trade_execution(
+        self,
+        intent: RuntimeIntent,
+    ) -> RuntimeExecutionRecord:
+        try:
+            return await execute_trade_workflow(self._freqtrade_tool_invoker, intent)
+        except Exception as error:
+            return RuntimeExecutionRecord(
+                executionId=f"exec-{intent.intentId}",
+                intentId=intent.intentId,
+                intentType="trade",
+                stage="failed",
+                status="failed",
+                failureCode=classify_workflow_failure("trade", error),
+                failureMessage=str(error),
+            )
 
     async def _execute_decision(self, decision: GuardDecision) -> dict[str, Any]:
         if decision.action == "hold":

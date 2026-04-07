@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Optional
 from unittest.mock import patch
 
+import autonomy
 from autonomy import (
     AutonomyConfig,
     AutonomyController,
@@ -83,6 +84,46 @@ def make_config(state_path: str) -> AutonomyConfig:
 
 
 class AutonomyControllerTests(unittest.TestCase):
+    def test_run_trade_execution_returns_failed_record_for_trade_error(self) -> None:
+        async def chain_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            return make_chain_state("1.0")
+
+        async def freqtrade_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            return make_freqtrade_budget()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = AutonomyController(
+                make_config(str(Path(temp_dir) / "autonomy.json")),
+                chain_tool,
+                freqtrade_tool,
+            )
+            intent = RuntimeIntent(
+                intentId="intent-trade-force_exit_all",
+                intentType="trade",
+                action="force_exit_all",
+            )
+
+            async def raising_workflow(
+                _tool: autonomy.ToolInvoker,
+                _intent: RuntimeIntent,
+            ) -> RuntimeExecutionRecord:
+                raise RuntimeError("order rejected")
+
+            with patch.object(autonomy, "execute_trade_workflow", raising_workflow):
+                execution = asyncio.run(controller._run_trade_execution(intent))
+
+            self.assertEqual(execution.executionId, "exec-intent-trade-force_exit_all")
+            self.assertEqual(execution.intentId, intent.intentId)
+            self.assertEqual(execution.intentType, "trade")
+            self.assertEqual(execution.stage, "failed")
+            self.assertEqual(execution.status, "failed")
+            self.assertEqual(execution.failureCode, "trade_order_rejected")
+            self.assertEqual(execution.failureMessage, "order rejected")
+
     def test_runtime_ledger_defaults_include_execution_tracking(self) -> None:
         ledger = GuardLedger()
 
