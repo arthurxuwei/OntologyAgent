@@ -73,9 +73,48 @@ class AutonomyWorkflowTests(unittest.TestCase):
                 self.assertEqual(execution.executionId, f"exec-intent-{action}")
                 self.assertEqual(execution.intentId, intent.intentId)
                 self.assertEqual(execution.intentType, "chain")
-                self.assertEqual(execution.stage, "reconciled")
-                self.assertEqual(execution.status, "completed")
+                self.assertEqual(execution.stage, "confirmed")
+                self.assertEqual(execution.status, "active")
                 self.assertEqual(execution.externalId, expected_external_id)
+
+    def test_execute_chain_workflow_keeps_submission_active_without_external_id_confirmation(
+        self,
+    ) -> None:
+        calls: list[tuple[str, dict[str, object]]] = []
+
+        async def tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            calls.append((tool_name, arguments or {}))
+            if tool_name == "chain_submit_execution":
+                return {
+                    "result": {
+                        "settlement": {"txHash": "0xexec123", "status": "submitted"}
+                    }
+                }
+            if tool_name == "chain_get_wallet_state":
+                return {"result": {"wallet": {"signerConfigured": True}}}
+            raise AssertionError(f"unexpected tool call: {tool_name}")
+
+        intent = RuntimeIntent(
+            intentId="intent-chain-submit_execution",
+            intentType="chain",
+            action="chain_submit_execution",
+            parameters={"operation": "rebalance"},
+        )
+
+        execution = asyncio.run(execute_chain_workflow(tool, intent))
+
+        self.assertEqual(
+            calls,
+            [
+                ("chain_submit_execution", {"operation": "rebalance"}),
+                ("chain_get_wallet_state", {}),
+            ],
+        )
+        self.assertEqual(execution.stage, "confirmed")
+        self.assertEqual(execution.status, "active")
+        self.assertEqual(execution.externalId, "0xexec123")
 
     def test_execute_chain_workflow_rejects_non_chain_action(self) -> None:
         async def tool(
