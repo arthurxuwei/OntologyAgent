@@ -322,6 +322,55 @@ class AutonomyControllerTests(unittest.TestCase):
             self.assertEqual(intent.action, "force_exit_all")
             self.assertEqual(intent.stage, "planned")
 
+    def test_tick_persists_runtime_observation_and_planned_intent(self) -> None:
+        async def chain_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            return make_chain_state("0.01")
+
+        async def freqtrade_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            if tool_name == "get_budget_snapshot":
+                return make_freqtrade_budget(
+                    realized=-40, unrealized=-20, open_trades=2
+                )
+            if tool_name == "force_exit_trade":
+                return {"result": {"ok": True}}
+            raise AssertionError(f"unexpected tool call: {tool_name}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = AutonomyController(
+                make_config(str(Path(temp_dir) / "autonomy.json")),
+                chain_tool,
+                freqtrade_tool,
+            )
+
+            async def fake_decision(
+                _self: AutonomyController, _context: dict[str, object]
+            ) -> GuardDecision:
+                return GuardDecision(
+                    action="force_exit_all",
+                    reason="Wallet balance is critically low.",
+                    riskLevel="high",
+                    recommendedFundingUsd=220,
+                )
+
+            with patch.object(AutonomyController, "_make_decision", fake_decision):
+                asyncio.run(controller.tick())
+
+            ledger = asyncio.run(controller.status())["ledger"]
+
+            self.assertEqual(
+                ledger["latestObservation"]["trading"]["openTradeCount"], 2
+            )
+            self.assertEqual(
+                ledger["latestObservation"]["chain"]["wallet"]["balanceEth"], "0.01"
+            )
+            self.assertEqual(ledger["activeIntents"][0]["intentType"], "trade")
+            self.assertEqual(ledger["activeIntents"][0]["action"], "force_exit_all")
+            self.assertEqual(ledger["activeIntents"][0]["stage"], "planned")
+
     def test_tick_recommends_funding_when_balance_is_low(self) -> None:
         async def chain_tool(
             tool_name: str, arguments: Optional[dict[str, object]] = None

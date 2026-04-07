@@ -243,6 +243,10 @@ class AutonomyController:
 
             self._bootstrap_if_needed(chain_state)
             context = self._build_context(chain_state, freqtrade_budget)
+            observation = self._build_runtime_observation(chain_state, freqtrade_budget)
+            planned_intent = self._plan_intent(observation)
+            self._state.latestObservation = observation
+            self._state.activeIntents = [planned_intent]
             decision = await self._make_decision(context)
             decision = self._normalize_decision(decision, context)
             action_result = await self._execute_decision(decision)
