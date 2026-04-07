@@ -6,6 +6,11 @@ from autonomy_models import RuntimeExecutionRecord, RuntimeIntent
 
 
 ToolInvoker = Callable[[str, Optional[dict[str, Any]]], Awaitable[dict[str, Any]]]
+SUPPORTED_CHAIN_WORKFLOW_ACTIONS = {
+    "chain_sign_transfer",
+    "chain_submit_execution",
+    "chain_submit_user_operation",
+}
 
 
 async def execute_trade_workflow(
@@ -44,7 +49,7 @@ async def execute_chain_workflow(
     tool: ToolInvoker,
     intent: RuntimeIntent,
 ) -> RuntimeExecutionRecord:
-    if not intent.action.startswith("chain_"):
+    if intent.action not in SUPPORTED_CHAIN_WORKFLOW_ACTIONS:
         raise RuntimeError(f"Unsupported chain workflow action: {intent.action}")
 
     payload = await tool(intent.action, intent.parameters)

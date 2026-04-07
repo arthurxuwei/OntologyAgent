@@ -70,6 +70,22 @@ class AutonomyWorkflowTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "Unsupported chain workflow action"):
             asyncio.run(execute_chain_workflow(tool, intent))
 
+    def test_execute_chain_workflow_rejects_unsupported_chain_action(self) -> None:
+        async def tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            raise AssertionError(f"unexpected tool call: {tool_name}")
+
+        intent = RuntimeIntent(
+            intentId="intent-chain-anything",
+            intentType="chain",
+            action="chain_anything",
+            parameters={"operation": "rebalance"},
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "Unsupported chain workflow action"):
+            asyncio.run(execute_chain_workflow(tool, intent))
+
     def test_execute_trade_workflow_confirms_force_exit(self) -> None:
         calls: list[tuple[str, dict[str, object]]] = []
 
