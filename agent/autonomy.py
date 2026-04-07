@@ -160,7 +160,9 @@ class GuardDecision(BaseModel):
         "stop_trading",
         "force_exit_all",
         "request_funding",
+        "chain_sign_transfer",
         "chain_submit_execution",
+        "chain_submit_user_operation",
     ]
     reason: str = Field(min_length=1)
     riskLevel: Literal["low", "medium", "high"] = "medium"

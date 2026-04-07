@@ -811,6 +811,36 @@ class AutonomyControllerTests(unittest.TestCase):
             self.assertEqual(ledger["executionHistory"][0]["externalId"], "0xchain123")
             self.assertIn(("chain_submit_execution", {"operation": "rebalance"}), calls)
 
+    def test_decision_from_intent_supports_whitelisted_chain_action(self) -> None:
+        async def chain_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            return make_chain_state("1.0")
+
+        async def freqtrade_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            return make_freqtrade_budget()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = AutonomyController(
+                make_config(str(Path(temp_dir) / "autonomy.json")),
+                chain_tool,
+                freqtrade_tool,
+            )
+            intent = RuntimeIntent(
+                intentId="intent-chain-sign_transfer",
+                intentType="chain",
+                action="chain_sign_transfer",
+                parameters={"to": "0x1111111111111111111111111111111111111111"},
+                reason="Sign a transfer.",
+            )
+
+            decision = controller._decision_from_intent(intent)
+
+            self.assertEqual(decision.action, "chain_sign_transfer")
+            self.assertEqual(decision.reason, "Sign a transfer.")
+
     def test_policy_denies_chain_action_outside_mock_or_testnet(self) -> None:
         async def chain_tool(
             tool_name: str, arguments: Optional[dict[str, object]] = None
