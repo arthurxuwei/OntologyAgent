@@ -458,6 +458,17 @@
                         <span class="meta-value" id="recent-chain-action">暂无</span>
                       </div>
                     </div>
+
+                    <div class="meta-box">
+                      <div class="meta-row">
+                        <span class="meta-label">Freqtrade 状态</span>
+                        <span class="meta-value" id="freqtrade-running-state">未查询</span>
+                      </div>
+                      <div class="meta-row">
+                        <span class="meta-label">Open Trades</span>
+                        <span class="meta-value" id="freqtrade-open-trades">未查询</span>
+                      </div>
+                    </div>
                   </div>
 
                   <div>
@@ -512,6 +523,8 @@
       const guardDecisionEl = document.getElementById("guard-decision");
       const chainSignerAddressEl = document.getElementById("chain-signer-address");
       const recentChainActionEl = document.getElementById("recent-chain-action");
+      const freqtradeRunningStateEl = document.getElementById("freqtrade-running-state");
+      const freqtradeOpenTradesEl = document.getElementById("freqtrade-open-trades");
       const messagesEl = document.getElementById("messages");
       const composerEl = document.getElementById("composer");
       const sendButtonEl = document.getElementById("send-button");
@@ -596,13 +609,56 @@
         recentChainActionEl.textContent = summarizeRecentChainAction(payload?.recentChainAction);
       }
 
+      function updateFreqtradeStatus(payload) {
+        const status = payload?.freqtradeStatus ?? {};
+        const openTradeCount = status?.openTradeCount;
+        const parts = [];
+
+        if (status?.runningState) {
+          parts.push(status.runningState);
+        } else if (status?.state) {
+          parts.push(String(status.state));
+        }
+
+        if (status?.runmode) {
+          parts.push(String(status.runmode));
+        }
+
+        if (status?.exchange) {
+          parts.push(String(status.exchange));
+        }
+
+        if (status?.strategy) {
+          parts.push(String(status.strategy));
+        }
+
+        if (parts.length > 0) {
+          freqtradeRunningStateEl.textContent = parts.join(" | ");
+        } else if (status?.error) {
+          freqtradeRunningStateEl.textContent = `不可用: ${status.error}`;
+        } else {
+          freqtradeRunningStateEl.textContent = "未知";
+        }
+
+        if (typeof openTradeCount === "number") {
+          freqtradeOpenTradesEl.textContent = String(openTradeCount);
+        } else if (status?.error) {
+          freqtradeOpenTradesEl.textContent = "读取失败";
+        } else {
+          freqtradeOpenTradesEl.textContent = "未查询";
+        }
+      }
+
       async function refreshHealth() {
         try {
           const payload = await requestJson("/health", { method: "GET" });
           updateChainStatus(payload);
+          updateFreqtradeStatus(payload);
         } catch (_error) {
           chainSignerAddressEl.textContent = "读取失败";
           recentChainActionEl.textContent = "读取失败";
+          freqtradeRunningStateEl.textContent = "读取失败";
+          freqtradeOpenTradesEl.textContent = "读取失败";
         }
       }
 
