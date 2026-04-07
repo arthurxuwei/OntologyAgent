@@ -1052,6 +1052,114 @@ class AutonomyControllerTests(unittest.TestCase):
                 ],
             )
 
+    def test_tick_persists_active_execution_history_and_latest_observation(
+        self,
+    ) -> None:
+        calls: list[tuple[str, dict[str, object]]] = []
+        budget_calls = 0
+
+        async def chain_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            calls.append((tool_name, arguments or {}))
+            return make_chain_state("0.01")
+
+        async def freqtrade_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            nonlocal budget_calls
+            calls.append((tool_name, arguments or {}))
+            if tool_name == "get_budget_snapshot":
+                budget_calls += 1
+                if budget_calls == 1:
+                    return make_freqtrade_budget(
+                        realized=-40, unrealized=-20, open_trades=2
+                    )
+                return make_freqtrade_budget(
+                    realized=-40, unrealized=-20, open_trades=0
+                )
+            if tool_name == "force_exit_trade":
+                return {"result": {"trade_id": "all", "ok": True}}
+            raise AssertionError(f"unexpected tool call: {tool_name}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = AutonomyController(
+                make_config(str(Path(temp_dir) / "autonomy.json")),
+                chain_tool,
+                freqtrade_tool,
+            )
+
+            result = asyncio.run(controller.tick())
+            ledger = asyncio.run(controller.status())["ledger"]
+
+            self.assertEqual(result["execution"]["stage"], "reconciled")
+            self.assertEqual(
+                ledger["latestObservation"]["chain"]["wallet"]["balanceEth"], "0.01"
+            )
+            self.assertEqual(
+                ledger["latestObservation"]["trading"]["openTradeCount"], 2
+            )
+            self.assertEqual(
+                ledger["executionHistory"][0]["intentId"],
+                "intent-trade-force_exit_all",
+            )
+            self.assertEqual(ledger["executionHistory"][0]["stage"], "reconciled")
+            self.assertEqual(
+                calls,
+                [
+                    ("chain_get_wallet_state", {}),
+                    ("get_budget_snapshot", {}),
+                    ("force_exit_trade", {"trade_id": "all", "order_type": "market"}),
+                    ("get_budget_snapshot", {}),
+                ],
+            )
+
+    def test_tick_opens_circuit_breaker_after_repeated_failures(self) -> None:
+        async def chain_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            return make_chain_state("0.01")
+
+        async def freqtrade_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            if tool_name == "get_budget_snapshot":
+                return make_freqtrade_budget(
+                    realized=-40, unrealized=-20, open_trades=2
+                )
+            if tool_name == "force_exit_trade":
+                return {"result": {"trade_id": "all", "ok": True}}
+            raise AssertionError(f"unexpected tool call: {tool_name}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = AutonomyController(
+                make_config(str(Path(temp_dir) / "autonomy.json")),
+                chain_tool,
+                freqtrade_tool,
+            )
+
+            async def raising_workflow(
+                _tool: autonomy.ToolInvoker,
+                _intent: RuntimeIntent,
+            ) -> RuntimeExecutionRecord:
+                raise RuntimeError("order rejected")
+
+            with patch.object(autonomy, "execute_trade_workflow", raising_workflow):
+                first = asyncio.run(controller.tick())
+                second = asyncio.run(controller.tick())
+                third = asyncio.run(controller.tick())
+
+            ledger = asyncio.run(controller.status())["ledger"]
+
+            self.assertEqual(first["execution"]["status"], "failed")
+            self.assertEqual(second["execution"]["status"], "failed")
+            self.assertEqual(third["execution"]["status"], "failed")
+            self.assertEqual(
+                ledger["failureCounts"]["intent-trade-force_exit_all"],
+                3,
+            )
+            self.assertEqual(ledger["circuitBreaker"]["state"], "open")
+
     def test_tick_closes_funding_execution_when_balance_recovers(self) -> None:
         chain_balances = iter(["0.05", "1.0", "0.05"])
 

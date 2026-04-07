@@ -265,8 +265,8 @@ class AutonomyController:
             self._bootstrap_if_needed(chain_state)
             context = self._build_context(chain_state, freqtrade_budget)
             observation = self._build_runtime_observation(chain_state, freqtrade_budget)
-            planned_intent = self._plan_intent(observation)
             self._state.latestObservation = observation
+            planned_intent = self._plan_intent(observation)
             self._state.activeIntents = [planned_intent]
             self._close_stale_funding_execution(planned_intent)
             policy = self._apply_policy(planned_intent, observation)
@@ -281,39 +281,37 @@ class AutonomyController:
                 )
                 self._save_state()
                 return {
-                    "context": context,
-                    "policy": policy,
+                    "observation": observation,
                     "intent": planned_intent.model_dump(),
+                    "policy": policy,
+                    "context": context,
                     "actionResult": {"action": "policy_denied", "changedState": False},
                 }
 
             existing_execution = self._find_active_execution(planned_intent.intentId)
             if existing_execution is not None:
+                decision = self._decision_from_intent(planned_intent)
                 self._refresh_state_from_context(
                     context,
-                    last_decision=self._decision_from_intent(
-                        planned_intent
-                    ).model_dump(),
+                    last_decision=decision.model_dump(),
                 )
                 self._save_state()
                 return {
-                    "context": context,
-                    "policy": policy,
+                    "observation": observation,
                     "intent": planned_intent.model_dump(),
+                    "policy": policy,
+                    "decision": decision.model_dump(),
                     "execution": existing_execution.model_dump(),
+                    "context": context,
                     "actionResult": {
                         "action": "reuse_execution",
                         "changedState": False,
                     },
                 }
 
-            if planned_intent.intentType != "noop":
-                decision = self._decision_from_intent(planned_intent)
-            else:
-                decision = await self._make_decision(context)
-                decision = self._normalize_decision(decision, context)
-            execution: Optional[RuntimeExecutionRecord] = None
-            if decision.action == "force_exit_all":
+            decision = self._decision_from_intent(planned_intent)
+            execution: Optional[RuntimeExecutionRecord]
+            if planned_intent.intentType == "trade":
                 execution = await self._run_trade_execution(planned_intent)
                 action_result = {
                     "action": decision.action,
@@ -332,20 +330,36 @@ class AutonomyController:
                     "changedState": execution.status == "completed",
                     "execution": execution.model_dump(),
                 }
+            elif planned_intent.intentType == "noop":
+                execution = RuntimeExecutionRecord(
+                    executionId=_new_execution_id(),
+                    intentId=planned_intent.intentId,
+                    intentType=planned_intent.intentType,
+                    stage="reconciled",
+                    status="completed",
+                )
+                action_result = {
+                    "action": decision.action,
+                    "changedState": False,
+                    "execution": execution.model_dump(),
+                }
             else:
                 action_result = await self._execute_decision(decision)
+                execution = None
             execution = self._persist_execution(planned_intent, decision, execution)
+            self._record_execution_outcome(execution)
             self._update_state(context, decision, action_result)
             self._save_state()
 
             response = {
-                "context": context,
+                "observation": observation,
+                "intent": planned_intent.model_dump(),
                 "policy": policy,
+                "execution": execution.model_dump() if execution is not None else None,
+                "context": context,
                 "decision": decision.model_dump(),
                 "actionResult": action_result,
             }
-            if execution is not None:
-                response["execution"] = execution.model_dump()
             return response
 
     async def _run_loop(self) -> None:
@@ -661,6 +675,15 @@ class AutonomyController:
         intent: RuntimeIntent,
     ) -> RuntimeExecutionRecord:
         try:
+            if intent.action == "stop_trading":
+                await self._tool_result(self._freqtrade_tool_invoker("stop_bot", {}))
+                return RuntimeExecutionRecord(
+                    executionId=f"exec-{intent.intentId}",
+                    intentId=intent.intentId,
+                    intentType="trade",
+                    stage="reconciled",
+                    status="completed",
+                )
             return await execute_trade_workflow(self._freqtrade_tool_invoker, intent)
         except Exception as error:
             return RuntimeExecutionRecord(
@@ -783,6 +806,24 @@ class AutonomyController:
         )
         self._state.executionHistory.append(execution)
         return execution
+
+    def _record_execution_outcome(
+        self,
+        execution: Optional[RuntimeExecutionRecord],
+    ) -> None:
+        if execution is None or execution.status != "failed":
+            return
+
+        failures = self._state.failureCounts.get(execution.intentId, 0) + 1
+        self._state.failureCounts[execution.intentId] = failures
+        if failures < 3:
+            return
+
+        self._state.circuitBreaker.state = "open"
+        self._state.circuitBreaker.reason = (
+            f"Repeated execution failures for {execution.intentId}"
+        )
+        self._state.circuitBreaker.openedAt = utcnow_iso()
 
     def _close_stale_funding_execution(self, planned_intent: RuntimeIntent) -> None:
         if planned_intent.intentId == _stable_intent_id("chain", "request_funding"):
