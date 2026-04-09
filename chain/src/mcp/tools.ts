@@ -27,6 +27,12 @@ type ChainRuntime = {
   x402FetchService: X402FetchService;
 };
 
+type ChainRuntimeOverrides = {
+  transactionReceiptService?: TransactionReceiptService;
+  userOperationStatusService?: UserOperationStatusService;
+  x402FetchService?: X402FetchService;
+};
+
 type StructuredPayload = Record<string, unknown>;
 
 function structuredText(value: unknown): string {
@@ -79,9 +85,7 @@ async function runTool<Result>(
 
 export function createChainRuntime(
   config: AppConfig = loadConfig(),
-  overrides?: {
-    x402FetchService?: X402FetchService;
-  },
+  overrides?: ChainRuntimeOverrides,
 ): ChainRuntime {
   const networkClient = config.network.mockChain ? null : new NetworkClient(config.network);
   const signer = config.signer.privateKey
@@ -99,8 +103,11 @@ export function createChainRuntime(
     walletStateService: new WalletStateService(config, policyGuard, networkClient, signer),
     signTransferService: new SignTransferService(sender, policyGuard, settlementService),
     executionService: new ExecutionService(sender, policyGuard, settlementService),
-    transactionReceiptService: new TransactionReceiptService(config, networkClient),
-    userOperationStatusService: new UserOperationStatusService(config, bundlerClient),
+    transactionReceiptService:
+      overrides?.transactionReceiptService ?? new TransactionReceiptService(config, networkClient),
+    userOperationStatusService:
+      overrides?.userOperationStatusService ??
+      new UserOperationStatusService(config, bundlerClient),
     userOperationService: new UserOperationService(bundlerClient, policyGuard, settlementService),
     x402FetchService:
       overrides?.x402FetchService ?? new X402FetchService(config, policyGuard),
