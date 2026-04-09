@@ -61,7 +61,6 @@ test("chain MCP exposes the expected tool names", async () => {
     const toolNames = response.tools.map((tool) => tool.name).sort();
     assert.deepEqual(toolNames, [
       "chain_get_transaction_receipt",
-      "chain_get_user_operation_status",
       "chain_get_wallet_state",
       "chain_sign_transfer",
       "chain_submit_execution",
@@ -137,6 +136,26 @@ test("chain_submit_user_operation works in mock mode through MCP", async () => {
     assert.notEqual(response.isError, true);
     const content = response.structuredContent as Record<string, any>;
     assert.match(content.userOperation?.userOpHash, /^0xmock_userop_/);
+  });
+});
+
+test("chain_get_transaction_receipt returns mock success receipt status through MCP", async () => {
+  await withClient(async (client) => {
+    const response = await client.callTool({
+      name: "chain_get_transaction_receipt",
+      arguments: {
+        txHash: "0xexec123",
+      },
+    });
+
+    assert.notEqual(response.isError, true);
+    const content = response.structuredContent as Record<string, any>;
+    assert.equal(content.txHash, "0xexec123");
+    assert.equal(content.found, true);
+    assert.equal(content.finalized, true);
+    assert.equal(content.success, true);
+    assert.equal(content.status, "success");
+    assert.equal(content.mode, "mock");
   });
 });
 

@@ -11,6 +11,7 @@ import { PolicyGuard } from "../policies/policy-guard.js";
 import { ExecutionService } from "../services/execution-service.js";
 import { SettlementService } from "../services/settlement-service.js";
 import { SignTransferService } from "../services/sign-transfer-service.js";
+import { TransactionReceiptService } from "../services/transaction-receipt-service.js";
 import { UserOperationService } from "../services/user-operation-service.js";
 import { WalletStateService } from "../services/wallet-state-service.js";
 import { X402FetchService } from "../services/x402-fetch-service.js";
@@ -19,6 +20,7 @@ type ChainRuntime = {
   walletStateService: WalletStateService;
   signTransferService: SignTransferService;
   executionService: ExecutionService;
+  transactionReceiptService: TransactionReceiptService;
   userOperationService: UserOperationService;
   x402FetchService: X402FetchService;
 };
@@ -94,6 +96,7 @@ export function createChainRuntime(
     walletStateService: new WalletStateService(config, policyGuard, networkClient, signer),
     signTransferService: new SignTransferService(sender, policyGuard, settlementService),
     executionService: new ExecutionService(sender, policyGuard, settlementService),
+    transactionReceiptService: new TransactionReceiptService(config, networkClient),
     userOperationService: new UserOperationService(
       new BundlerClient(config),
       policyGuard,
@@ -144,6 +147,17 @@ export function createChainMcpServer(runtime: ChainRuntime): McpServer {
     },
     async ({ to, valueEth, data }) =>
       runTool(() => runtime.executionService.execute({ to, valueEth, data })),
+  );
+
+  server.registerTool(
+    "chain_get_transaction_receipt",
+    {
+      description: "Return the current settlement status for a submitted transaction hash.",
+      inputSchema: {
+        txHash: z.string().describe("Transaction hash to look up"),
+      },
+    },
+    async ({ txHash }) => runTool(() => runtime.transactionReceiptService.execute(txHash)),
   );
 
   server.registerTool(
