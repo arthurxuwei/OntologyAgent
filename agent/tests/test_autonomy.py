@@ -1141,6 +1141,196 @@ class AutonomyControllerTests(unittest.TestCase):
             self.assertEqual(ledger["healthStatus"], "watch")
             self.assertEqual(ledger["lastDecision"]["action"], "request_funding")
 
+    def test_tick_advances_active_chain_execution_to_history_on_terminal_success(
+        self,
+    ) -> None:
+        calls: list[tuple[str, dict[str, object]]] = []
+
+        async def chain_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            calls.append((tool_name, arguments or {}))
+            if tool_name == "chain_get_wallet_state":
+                return make_chain_state("1.0")
+            if tool_name == "chain_get_transaction_receipt":
+                return {"result": {"status": "success", "finalized": True}}
+            raise AssertionError(f"unexpected tool call: {tool_name}")
+
+        async def freqtrade_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            return make_freqtrade_budget(open_trades=0)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = AutonomyController(
+                make_config(str(Path(temp_dir) / "autonomy.json")),
+                chain_tool,
+                freqtrade_tool,
+            )
+            intent = RuntimeIntent(
+                intentId="intent-chain-submit_execution",
+                intentType="chain",
+                action="chain_submit_execution",
+                parameters={"operation": "rebalance"},
+                reason="Advance an existing chain settlement.",
+            )
+            controller._bootstrap_if_needed(make_chain_state("1.0")["result"])
+            controller._state.activeExecutions = [
+                RuntimeExecutionRecord(
+                    executionId="exec-chain-active",
+                    intentId=intent.intentId,
+                    intentType=intent.intentType,
+                    stage="confirmed",
+                    status="active",
+                    externalId="0xsettlement",
+                )
+            ]
+
+            with patch.object(AutonomyController, "_plan_intent", return_value=intent):
+                result = asyncio.run(controller.tick())
+
+            ledger = asyncio.run(controller.status())["ledger"]
+
+            self.assertEqual(result["actionResult"]["action"], "advance_execution")
+            self.assertEqual(result["execution"]["status"], "completed")
+            self.assertEqual(result["execution"]["stage"], "reconciled")
+            self.assertEqual(ledger["activeExecutions"], [])
+            self.assertEqual(
+                ledger["executionHistory"][0]["executionId"], "exec-chain-active"
+            )
+            self.assertEqual(ledger["executionHistory"][0]["status"], "completed")
+            self.assertIn(
+                ("chain_get_transaction_receipt", {"txHash": "0xsettlement"}),
+                calls,
+            )
+
+    def test_tick_keeps_active_chain_execution_when_confirmation_pending(self) -> None:
+        calls: list[tuple[str, dict[str, object]]] = []
+
+        async def chain_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            calls.append((tool_name, arguments or {}))
+            if tool_name == "chain_get_wallet_state":
+                return make_chain_state("1.0")
+            if tool_name == "chain_get_transaction_receipt":
+                return {"result": {"status": "pending", "finalized": False}}
+            raise AssertionError(f"unexpected tool call: {tool_name}")
+
+        async def freqtrade_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            return make_freqtrade_budget(open_trades=0)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = AutonomyController(
+                make_config(str(Path(temp_dir) / "autonomy.json")),
+                chain_tool,
+                freqtrade_tool,
+            )
+            intent = RuntimeIntent(
+                intentId="intent-chain-submit_execution",
+                intentType="chain",
+                action="chain_submit_execution",
+                parameters={"operation": "rebalance"},
+                reason="Advance an existing chain settlement.",
+            )
+            controller._bootstrap_if_needed(make_chain_state("1.0")["result"])
+            controller._state.activeExecutions = [
+                RuntimeExecutionRecord(
+                    executionId="exec-chain-active",
+                    intentId=intent.intentId,
+                    intentType=intent.intentType,
+                    stage="confirmed",
+                    status="active",
+                    externalId="0xsettlement",
+                )
+            ]
+
+            with patch.object(AutonomyController, "_plan_intent", return_value=intent):
+                result = asyncio.run(controller.tick())
+
+            ledger = asyncio.run(controller.status())["ledger"]
+
+            self.assertEqual(result["actionResult"]["action"], "advance_execution")
+            self.assertEqual(result["execution"]["status"], "active")
+            self.assertEqual(result["execution"]["stage"], "confirmed")
+            self.assertEqual(len(ledger["activeExecutions"]), 1)
+            self.assertEqual(
+                ledger["activeExecutions"][0]["executionId"], "exec-chain-active"
+            )
+            self.assertEqual(ledger["executionHistory"], [])
+            self.assertIn(
+                ("chain_get_transaction_receipt", {"txHash": "0xsettlement"}),
+                calls,
+            )
+
+    def test_tick_advances_active_chain_execution_to_failed_on_terminal_failure(
+        self,
+    ) -> None:
+        calls: list[tuple[str, dict[str, object]]] = []
+
+        async def chain_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            calls.append((tool_name, arguments or {}))
+            if tool_name == "chain_get_wallet_state":
+                return make_chain_state("1.0")
+            if tool_name == "chain_get_transaction_receipt":
+                return {"result": {"status": "failed", "finalized": True}}
+            raise AssertionError(f"unexpected tool call: {tool_name}")
+
+        async def freqtrade_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            return make_freqtrade_budget(open_trades=0)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = AutonomyController(
+                make_config(str(Path(temp_dir) / "autonomy.json")),
+                chain_tool,
+                freqtrade_tool,
+            )
+            intent = RuntimeIntent(
+                intentId="intent-chain-submit_execution",
+                intentType="chain",
+                action="chain_submit_execution",
+                parameters={"operation": "rebalance"},
+                reason="Advance an existing chain settlement.",
+            )
+            controller._bootstrap_if_needed(make_chain_state("1.0")["result"])
+            controller._state.activeExecutions = [
+                RuntimeExecutionRecord(
+                    executionId="exec-chain-active",
+                    intentId=intent.intentId,
+                    intentType=intent.intentType,
+                    stage="confirmed",
+                    status="active",
+                    externalId="0xsettlement",
+                )
+            ]
+
+            with patch.object(AutonomyController, "_plan_intent", return_value=intent):
+                result = asyncio.run(controller.tick())
+
+            ledger = asyncio.run(controller.status())["ledger"]
+
+            self.assertEqual(result["actionResult"]["action"], "advance_execution")
+            self.assertEqual(result["execution"]["status"], "failed")
+            self.assertEqual(result["execution"]["stage"], "failed")
+            self.assertEqual(
+                result["execution"]["failureCode"], "chain_terminal_failure"
+            )
+            self.assertEqual(ledger["activeExecutions"], [])
+            self.assertEqual(
+                ledger["executionHistory"][0]["executionId"], "exec-chain-active"
+            )
+            self.assertEqual(ledger["executionHistory"][0]["status"], "failed")
+            self.assertIn(
+                ("chain_get_transaction_receipt", {"txHash": "0xsettlement"}),
+                calls,
+            )
+
     def test_tick_reused_request_funding_refreshes_recommendation(self) -> None:
         chain_balances = iter(["0.05", "0.06"])
 

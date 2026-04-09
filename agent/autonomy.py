@@ -20,6 +20,7 @@ from autonomy_models import (
 )
 from autonomy_workflows import (
     classify_workflow_failure,
+    confirm_chain_execution,
     execute_chain_workflow,
     execute_trade_workflow,
 )
@@ -293,6 +294,36 @@ class AutonomyController:
             existing_execution = self._find_active_execution(planned_intent.intentId)
             if existing_execution is not None:
                 decision = self._decision_from_intent(planned_intent)
+                if (
+                    existing_execution.intentType == "chain"
+                    and decision.action != "request_funding"
+                ):
+                    execution = await self._advance_active_chain_execution(
+                        existing_execution,
+                        planned_intent,
+                    )
+                    execution = self._persist_execution(
+                        planned_intent,
+                        decision,
+                        execution,
+                    )
+                    self._record_execution_outcome(execution)
+                    action_result = {
+                        "action": "advance_execution",
+                        "changedState": execution.status != "active",
+                        "execution": execution.model_dump(),
+                    }
+                    self._update_state(context, decision, action_result)
+                    self._save_state()
+                    return {
+                        "observation": observation,
+                        "intent": planned_intent.model_dump(),
+                        "policy": policy,
+                        "decision": decision.model_dump(),
+                        "execution": execution.model_dump(),
+                        "context": context,
+                        "actionResult": action_result,
+                    }
                 self._refresh_state_from_context(
                     context,
                     last_decision=decision.model_dump(),
@@ -735,6 +766,17 @@ class AutonomyController:
                 failureCode=classify_workflow_failure("chain", error),
                 failureMessage=str(error),
             )
+
+    async def _advance_active_chain_execution(
+        self,
+        execution: RuntimeExecutionRecord,
+        intent: RuntimeIntent,
+    ) -> RuntimeExecutionRecord:
+        return await confirm_chain_execution(
+            self._chain_tool_invoker,
+            execution,
+            intent.action,
+        )
 
     async def _execute_decision(self, decision: GuardDecision) -> dict[str, Any]:
         if decision.action == "hold":
