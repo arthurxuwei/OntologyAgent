@@ -5,6 +5,7 @@ from typing import Optional
 from autonomy_models import RuntimeExecutionRecord, RuntimeIntent
 from autonomy_workflows import (
     classify_workflow_failure,
+    confirm_chain_execution,
     execute_chain_workflow,
     execute_trade_workflow,
 )
@@ -307,6 +308,106 @@ class AutonomyWorkflowTests(unittest.TestCase):
         )
 
         self.assertEqual(failure_code, "chain_confirmation_timeout")
+
+    def test_chain_confirmation_pending_keeps_execution_active_and_confirmed(
+        self,
+    ) -> None:
+        calls: list[tuple[str, dict[str, object]]] = []
+
+        async def tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            calls.append((tool_name, arguments or {}))
+            if tool_name == "chain_get_transaction_receipt":
+                return {"result": {"receipt": {"status": "pending"}}}
+            raise AssertionError(f"unexpected tool call: {tool_name}")
+
+        execution = RuntimeExecutionRecord(
+            executionId="exec-1",
+            intentId="intent-1",
+            intentType="chain",
+            stage="confirmed",
+            status="active",
+            externalId="0xexec123",
+        )
+
+        updated = asyncio.run(
+            confirm_chain_execution(tool, execution, "chain_submit_execution")
+        )
+
+        self.assertEqual(
+            calls,
+            [("chain_get_transaction_receipt", {"txHash": "0xexec123"})],
+        )
+        self.assertEqual(updated.stage, "confirmed")
+        self.assertEqual(updated.status, "active")
+        self.assertIsNone(updated.failureCode)
+
+    def test_chain_confirmation_success_promotes_execution_to_reconciled_and_completed(
+        self,
+    ) -> None:
+        calls: list[tuple[str, dict[str, object]]] = []
+
+        async def tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            calls.append((tool_name, arguments or {}))
+            if tool_name == "chain_get_user_operation_status":
+                return {"result": {"status": {"status": "success", "finalized": True}}}
+            raise AssertionError(f"unexpected tool call: {tool_name}")
+
+        execution = RuntimeExecutionRecord(
+            executionId="exec-2",
+            intentId="intent-2",
+            intentType="chain",
+            stage="confirmed",
+            status="active",
+            externalId="0xuserop123",
+        )
+
+        updated = asyncio.run(
+            confirm_chain_execution(tool, execution, "chain_submit_user_operation")
+        )
+
+        self.assertEqual(
+            calls,
+            [("chain_get_user_operation_status", {"userOpHash": "0xuserop123"})],
+        )
+        self.assertEqual(updated.stage, "reconciled")
+        self.assertEqual(updated.status, "completed")
+        self.assertIsNone(updated.failureCode)
+
+    def test_chain_confirmation_terminal_failure_marks_execution_failed(self) -> None:
+        calls: list[tuple[str, dict[str, object]]] = []
+
+        async def tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            calls.append((tool_name, arguments or {}))
+            if tool_name == "chain_get_transaction_receipt":
+                return {"result": {"receipt": {"status": "failed", "finalized": True}}}
+            raise AssertionError(f"unexpected tool call: {tool_name}")
+
+        execution = RuntimeExecutionRecord(
+            executionId="exec-3",
+            intentId="intent-3",
+            intentType="chain",
+            stage="confirmed",
+            status="active",
+            externalId="0xfail123",
+        )
+
+        updated = asyncio.run(
+            confirm_chain_execution(tool, execution, "chain_submit_execution")
+        )
+
+        self.assertEqual(
+            calls,
+            [("chain_get_transaction_receipt", {"txHash": "0xfail123"})],
+        )
+        self.assertEqual(updated.stage, "failed")
+        self.assertEqual(updated.status, "failed")
+        self.assertEqual(updated.failureCode, "chain_terminal_failure")
 
 
 if __name__ == "__main__":

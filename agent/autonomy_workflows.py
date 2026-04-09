@@ -44,6 +44,56 @@ def _has_failed_settlement_status(result: dict[str, Any]) -> bool:
     return normalized_status.startswith("fail")
 
 
+def _confirmation_tool_name(action: str) -> str:
+    if action == "chain_submit_execution":
+        return "chain_get_transaction_receipt"
+    if action == "chain_submit_user_operation":
+        return "chain_get_user_operation_status"
+    raise RuntimeError(f"Unsupported chain confirmation action: {action}")
+
+
+async def confirm_chain_execution(
+    tool: ToolInvoker,
+    execution: RuntimeExecutionRecord,
+    action: str,
+) -> RuntimeExecutionRecord:
+    tool_name = _confirmation_tool_name(action)
+    arguments = (
+        {"txHash": execution.externalId}
+        if action == "chain_submit_execution"
+        else {"userOpHash": execution.externalId}
+    )
+    payload = await tool(tool_name, arguments)
+    result = payload["result"]
+    if not isinstance(result, dict):
+        raise RuntimeError(f"Unexpected MCP tool result shape: {payload}")
+
+    confirmation = (
+        result.get("receipt")
+        if action == "chain_submit_execution"
+        else result.get("status")
+    )
+    if not isinstance(confirmation, dict):
+        raise RuntimeError(f"Unexpected MCP tool result shape: {payload}")
+
+    status = str(confirmation.get("status") or "").strip().lower()
+    finalized = bool(confirmation.get("finalized"))
+
+    if finalized and status.startswith("success"):
+        return execution.model_copy(
+            update={"stage": "reconciled", "status": "completed"}
+        )
+    if finalized and status.startswith("fail"):
+        return execution.model_copy(
+            update={
+                "stage": "failed",
+                "status": "failed",
+                "failureCode": "chain_terminal_failure",
+            }
+        )
+    return execution.model_copy(update={"stage": "confirmed", "status": "active"})
+
+
 async def execute_trade_workflow(
     tool: ToolInvoker,
     intent: RuntimeIntent,
