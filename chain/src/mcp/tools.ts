@@ -12,6 +12,7 @@ import { ExecutionService } from "../services/execution-service.js";
 import { SettlementService } from "../services/settlement-service.js";
 import { SignTransferService } from "../services/sign-transfer-service.js";
 import { TransactionReceiptService } from "../services/transaction-receipt-service.js";
+import { UserOperationStatusService } from "../services/user-operation-status-service.js";
 import { UserOperationService } from "../services/user-operation-service.js";
 import { WalletStateService } from "../services/wallet-state-service.js";
 import { X402FetchService } from "../services/x402-fetch-service.js";
@@ -21,6 +22,7 @@ type ChainRuntime = {
   signTransferService: SignTransferService;
   executionService: ExecutionService;
   transactionReceiptService: TransactionReceiptService;
+  userOperationStatusService: UserOperationStatusService;
   userOperationService: UserOperationService;
   x402FetchService: X402FetchService;
 };
@@ -89,6 +91,7 @@ export function createChainRuntime(
       )
     : null;
   const sender = createTransactionSender(config);
+  const bundlerClient = new BundlerClient(config);
   const policyGuard = new PolicyGuard(config.policy, config.x402);
   const settlementService = new SettlementService();
 
@@ -97,11 +100,8 @@ export function createChainRuntime(
     signTransferService: new SignTransferService(sender, policyGuard, settlementService),
     executionService: new ExecutionService(sender, policyGuard, settlementService),
     transactionReceiptService: new TransactionReceiptService(config, networkClient),
-    userOperationService: new UserOperationService(
-      new BundlerClient(config),
-      policyGuard,
-      settlementService,
-    ),
+    userOperationStatusService: new UserOperationStatusService(config, bundlerClient),
+    userOperationService: new UserOperationService(bundlerClient, policyGuard, settlementService),
     x402FetchService:
       overrides?.x402FetchService ?? new X402FetchService(config, policyGuard),
   };
@@ -158,6 +158,18 @@ export function createChainMcpServer(runtime: ChainRuntime): McpServer {
       },
     },
     async ({ txHash }) => runTool(() => runtime.transactionReceiptService.execute(txHash)),
+  );
+
+  server.registerTool(
+    "chain_get_user_operation_status",
+    {
+      description: "Return the current settlement status for a submitted ERC-4337 user operation.",
+      inputSchema: {
+        userOpHash: z.string().describe("User operation hash to look up"),
+      },
+    },
+    async ({ userOpHash }) =>
+      runTool(() => runtime.userOperationStatusService.execute(userOpHash)),
   );
 
   server.registerTool(

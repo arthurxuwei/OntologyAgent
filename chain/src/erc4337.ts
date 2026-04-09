@@ -15,6 +15,14 @@ type RpcError = {
 
 type UserOperation = Record<string, unknown>;
 
+export type BundlerUserOperationStatus = {
+  status: "pending" | "success" | "failed";
+  finalized: boolean;
+  success: boolean;
+  txHash: string | null;
+  receipt: Record<string, unknown> | null;
+};
+
 export class BundlerClient {
   readonly mode: "mock" | "network";
 
@@ -27,15 +35,40 @@ export class BundlerClient {
       return `0xmock_userop_${Date.now().toString(16)}`;
     }
 
+    return this.request<string>("eth_sendUserOperation", [userOperation, this.config.network.entryPointAddress]);
+  }
+
+  async getUserOperationStatus(userOpHash: string): Promise<BundlerUserOperationStatus | null> {
+    const receipt = await this.request<Record<string, unknown> | null>("eth_getUserOperationReceipt", [userOpHash]);
+    if (receipt === null) {
+      return null;
+    }
+
+    const bundledReceipt = this.asRecord(receipt.receipt);
+    const txHash =
+      this.asString(receipt.transactionHash) ?? this.asString(bundledReceipt?.transactionHash) ?? null;
+    const receiptStatus = bundledReceipt?.status;
+    const success = receiptStatus === 1 || receiptStatus === "0x1" || receiptStatus === "1";
+
+    return {
+      status: success ? "success" : "failed",
+      finalized: true,
+      success,
+      txHash,
+      receipt: bundledReceipt ?? receipt,
+    };
+  }
+
+  private async request<T>(method: string, params: unknown[]): Promise<T> {
     if (!this.config.execution.bundlerRpcUrl) {
       throw new AppError("BUNDLER_ERROR", "BUNDLER_RPC_URL is required for ERC-4337 execution", 400);
     }
 
     const payload = {
-      jsonrpc: "2.0",
+      jsonrpc: "2.0" as const,
       id: Date.now(),
-      method: "eth_sendUserOperation",
-      params: [userOperation, this.config.network.entryPointAddress],
+      method,
+      params,
     };
 
     const response = await fetch(this.config.execution.bundlerRpcUrl, {
@@ -51,7 +84,7 @@ export class BundlerClient {
       throw new AppError("BUNDLER_ERROR", `Bundler HTTP error: ${response.status} ${text}`, 502);
     }
 
-    const rpcResponse = (await response.json()) as RpcSuccess<string> | RpcError;
+    const rpcResponse = (await response.json()) as RpcSuccess<T> | RpcError;
     if ("error" in rpcResponse) {
       throw new AppError(
         "BUNDLER_ERROR",
@@ -61,5 +94,13 @@ export class BundlerClient {
     }
 
     return rpcResponse.result;
+  }
+
+  private asRecord(value: unknown): Record<string, unknown> | null {
+    return value !== null && typeof value === "object" ? (value as Record<string, unknown>) : null;
+  }
+
+  private asString(value: unknown): string | null {
+    return typeof value === "string" ? value : null;
   }
 }

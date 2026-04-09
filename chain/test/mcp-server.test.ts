@@ -160,6 +160,26 @@ test("chain_get_transaction_receipt returns mock success receipt status through 
   });
 });
 
+test("chain_get_user_operation_status returns mock success status through MCP", async () => {
+  await withClient(async (client) => {
+    const response = await client.callTool({
+      name: "chain_get_user_operation_status",
+      arguments: {
+        userOpHash: "0xmock_userop_123",
+      },
+    });
+
+    assert.notEqual(response.isError, true);
+    const content = response.structuredContent as Record<string, any>;
+    assert.equal(content.userOpHash, "0xmock_userop_123");
+    assert.equal(content.found, true);
+    assert.equal(content.finalized, true);
+    assert.equal(content.success, true);
+    assert.equal(content.status, "success");
+    assert.equal(content.mode, "mock");
+  });
+});
+
 test("chain_x402_fetch returns x402 result through MCP", async () => {
   await withClient(
     async (client) => {
