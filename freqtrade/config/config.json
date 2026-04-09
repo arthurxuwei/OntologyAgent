@@ -40,9 +40,10 @@
   },
   "exchange": {
     "name": "binance",
-    "key": "",
-    "secret": "",
-    "ccxt_config": {},
+    "key": "0FaXDfXACz0dZHXWY1plqytugC6mCRzFv5iUlhGwa2URv5yN6OqnxBqc5IBNWX59",
+    "secret": "kq2by8R4VQRLfno7HpF3Bq6nAWTW9zUTEQ73V1P50TFs5DYw3REMiSEFIneVfFIBc",
+    "ccxt_config": {
+    },
     "ccxt_async_config": {},
     "pair_whitelist": [
       "BTC/USDT",

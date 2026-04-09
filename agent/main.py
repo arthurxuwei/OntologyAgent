@@ -518,6 +518,11 @@ async def get_budget_snapshot_tool() -> dict[str, Any]:
     return await call_freqtrade_tool("get_budget_snapshot")
 
 
+async def get_freqtrade_status_snapshot() -> dict[str, Any]:
+    result = await get_freqtrade_mcp_client().call_tool("get_trading_status", {})
+    return _unwrap_mcp_result("get_trading_status", result)
+
+
 async def sync_dry_run_wallet_tool(dryRunWallet: float) -> dict[str, Any]:
     intent = SyncDryRunWalletIntent(dryRunWallet=dryRunWallet)
     return await call_freqtrade_tool(
@@ -921,6 +926,23 @@ def health() -> dict[str, Any]:
     except Exception:
         chain_wallet = None
 
+    freqtrade_status: Optional[dict[str, Any]] = None
+    freqtrade_status_error: Optional[str] = None
+    try:
+        freqtrade_status = asyncio.run(get_freqtrade_status_snapshot())
+    except Exception as error:
+        freqtrade_status_error = str(error)
+        freqtrade_status = {
+            "runningState": "unavailable",
+            "error": freqtrade_status_error,
+        }
+
+    if freqtrade_error and not freqtrade_status_error:
+        freqtrade_status = {
+            "runningState": "unavailable",
+            "error": freqtrade_error,
+        }
+
     return {
         "service": "OntologyAgent-agent",
         "status": "ok",
@@ -932,6 +954,7 @@ def health() -> dict[str, Any]:
         "freqtradeMcpUrl": FREQTRADE_MCP_URL,
         "freqtradeTools": freqtrade_tools,
         "freqtradeError": freqtrade_error,
+        "freqtradeStatus": freqtrade_status,
         "autonomy": autonomy_status,
     }
 

@@ -180,6 +180,58 @@ class MainApiTests(unittest.TestCase):
             body["autonomy"]["ledger"]["activeExecutions"][0]["executionId"], "exec-123"
         )
 
+    def test_health_includes_chain_and_freqtrade_status_fields(self) -> None:
+        controller = FakeAutonomyController()
+
+        class FakeChainClient:
+            async def list_tools(self) -> list[str]:
+                return ["chain_sign_transfer", "chain_get_wallet_state"]
+
+        class FakeFreqtradeClient:
+            async def list_tools(self) -> list[str]:
+                return ["get_trading_status", "get_open_trades"]
+
+        with (
+            patch.object(main, "get_autonomy_controller", return_value=controller),
+            patch.object(main, "get_chain_mcp_client", return_value=FakeChainClient()),
+            patch.object(
+                main, "get_freqtrade_mcp_client", return_value=FakeFreqtradeClient()
+            ),
+            patch.object(
+                main,
+                "get_chain_wallet_state",
+                return_value={"wallet": {"address": "0xabc"}},
+            ),
+            patch.object(
+                main,
+                "get_freqtrade_status_snapshot",
+                return_value={
+                    "openTradeCount": 2,
+                    "state": "running",
+                    "runmode": "dry_run",
+                    "exchange": "binance",
+                    "strategy": "SimpleAgentStrategy",
+                },
+            ),
+            patch.object(
+                main,
+                "get_chain_activity_store",
+            ) as activity_store_factory,
+        ):
+            activity_store_factory.return_value.get.return_value = {
+                "tool": "chain_sign_transfer",
+                "summary": {"kind": "sign_transfer"},
+            }
+            with TestClient(main.app) as client:
+                response = client.get("/health")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["chainWallet"]["wallet"]["address"], "0xabc")
+        self.assertEqual(payload["recentChainAction"]["tool"], "chain_sign_transfer")
+        self.assertEqual(payload["freqtradeStatus"]["openTradeCount"], 2)
+        self.assertEqual(payload["freqtradeStatus"]["state"], "running")
+
     def test_build_tools_exposes_chain_settlement_query_tools(self) -> None:
         tool_names = {tool.name for tool in main.build_tools()}
 

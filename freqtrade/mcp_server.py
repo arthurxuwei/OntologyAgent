@@ -134,7 +134,23 @@ def extract_first_numeric(payload: Any, keys: list[str]) -> float:
 @mcp.tool()
 async def get_trading_status() -> dict[str, Any]:
     status = await rest_client.get("/status")
-    return summarize_status(status)
+    summary = summarize_status(status)
+    show_config: dict[str, Any] = {}
+    try:
+        config_payload = await rest_client.get("/show_config")
+        if isinstance(config_payload, dict):
+            show_config = config_payload
+    except Exception:
+        show_config = {}
+
+    return {
+        **summary,
+        "state": show_config.get("state"),
+        "runmode": show_config.get("runmode"),
+        "dryRun": show_config.get("dry_run"),
+        "exchange": show_config.get("exchange"),
+        "strategy": show_config.get("strategy"),
+    }
 
 
 @mcp.tool()
