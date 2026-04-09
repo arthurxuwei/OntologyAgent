@@ -89,6 +89,18 @@ class UserOperationIntent(BaseModel):
     raw: dict[str, Any] = Field(description="完整 UserOperation 原始字段")
 
 
+class TransactionReceiptIntent(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    txHash: str = Field(description="交易哈希，例如 0xabc...")
+
+
+class UserOperationStatusIntent(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    userOpHash: str = Field(description="UserOperation 哈希，例如 0xabc...")
+
+
 class X402FetchIntent(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -276,39 +288,63 @@ def _with_autonomy_runtime_summary(status: dict[str, Any]) -> dict[str, Any]:
 
 def _summarize_chain_result(tool_name: str, result: dict[str, Any]) -> dict[str, Any]:
     structured = result.get("result", result)
+    settlement = structured.get("settlement", {})
+    settlement_identifier = (
+        settlement.get("identifier") if isinstance(settlement, dict) else None
+    )
+    settlement_status = (
+        settlement.get("status") if isinstance(settlement, dict) else None
+    )
 
     if tool_name == "chain_sign_transfer":
+        transfer = structured.get("transfer", {})
         tx = structured.get("transaction", {})
         policy = structured.get("policy", {})
         return {
             "kind": "sign_transfer",
-            "to": tx.get("to"),
-            "amountEth": tx.get("amountEth"),
-            "txHash": tx.get("txHash"),
+            "to": transfer.get("to") or tx.get("to"),
+            "amountEth": transfer.get("amountEth") or tx.get("amountEth"),
+            "txHash": transfer.get("txHash")
+            or tx.get("txHash")
+            or settlement_identifier,
             "mode": structured.get("mode"),
             "decision": policy.get("decision"),
         }
 
     if tool_name == "chain_submit_execution":
         execution = structured.get("execution", {})
-        settlement = structured.get("settlement", {})
         return {
             "kind": "submit_execution",
             "to": execution.get("to"),
             "valueEth": execution.get("valueEth"),
-            "txHash": settlement.get("txHash"),
-            "status": settlement.get("status"),
-            "mode": settlement.get("mode"),
+            "txHash": settlement_identifier,
+            "status": settlement_status,
+            "mode": structured.get("mode"),
         }
 
     if tool_name == "chain_submit_user_operation":
-        settlement = structured.get("settlement", {})
         return {
             "kind": "submit_user_operation",
             "target": structured.get("target"),
-            "userOpHash": settlement.get("userOpHash"),
-            "status": settlement.get("status"),
-            "mode": settlement.get("mode"),
+            "userOpHash": settlement_identifier,
+            "status": settlement_status,
+            "mode": structured.get("mode"),
+        }
+
+    if tool_name == "chain_get_transaction_receipt":
+        return {
+            "kind": "transaction_receipt",
+            "txHash": structured.get("txHash") or structured.get("transactionHash"),
+            "status": structured.get("status"),
+            "finalized": structured.get("finalized"),
+        }
+
+    if tool_name == "chain_get_user_operation_status":
+        return {
+            "kind": "user_operation_status",
+            "userOpHash": structured.get("userOpHash"),
+            "status": structured.get("status"),
+            "finalized": structured.get("finalized"),
         }
 
     if tool_name == "chain_x402_fetch":
@@ -391,6 +427,22 @@ async def chain_submit_user_operation_tool(
             "maxCostEth": intent.maxCostEth,
             "raw": intent.raw,
         },
+    )
+
+
+async def chain_get_transaction_receipt_tool(txHash: str) -> dict[str, Any]:
+    intent = TransactionReceiptIntent(txHash=txHash)
+    return await call_chain_tool(
+        "chain_get_transaction_receipt",
+        {"txHash": intent.txHash},
+    )
+
+
+async def chain_get_user_operation_status_tool(userOpHash: str) -> dict[str, Any]:
+    intent = UserOperationStatusIntent(userOpHash=userOpHash)
+    return await call_chain_tool(
+        "chain_get_user_operation_status",
+        {"userOpHash": intent.userOpHash},
     )
 
 
@@ -555,6 +607,16 @@ CHAIN_TOOL_REGISTRY: dict[str, dict[str, Any]] = {
         "description": "提交一笔 ERC-4337 UserOperation。",
         "args_schema": UserOperationIntent,
         "coroutine": chain_submit_user_operation_tool,
+    },
+    "chain_get_transaction_receipt": {
+        "description": "查询一笔链上交易的最新 receipt 和确认状态。",
+        "args_schema": TransactionReceiptIntent,
+        "coroutine": chain_get_transaction_receipt_tool,
+    },
+    "chain_get_user_operation_status": {
+        "description": "查询一笔 UserOperation 的最新状态和确认结果。",
+        "args_schema": UserOperationStatusIntent,
+        "coroutine": chain_get_user_operation_status_tool,
     },
     "chain_x402_fetch": {
         "description": "执行一次 x402 收费资源访问流程。",

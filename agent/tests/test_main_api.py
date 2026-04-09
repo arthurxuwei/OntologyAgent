@@ -75,6 +75,7 @@ class FakeToolClient:
 class MainApiTests(unittest.TestCase):
     def setUp(self) -> None:
         main.get_session_store.cache_clear()
+        main.get_chain_activity_store.cache_clear()
 
     def test_agent_sessions_support_multi_turn_chat(self) -> None:
         controller = FakeAutonomyController()
@@ -172,6 +173,59 @@ class MainApiTests(unittest.TestCase):
         self.assertEqual(
             body["autonomy"]["ledger"]["activeExecutions"][0]["executionId"], "exec-123"
         )
+
+    def test_build_tools_exposes_chain_settlement_query_tools(self) -> None:
+        tool_names = {tool.name for tool in main.build_tools()}
+
+        self.assertIn("chain_get_transaction_receipt", tool_names)
+        self.assertIn("chain_get_user_operation_status", tool_names)
+
+    def test_health_recent_chain_action_summarizes_current_settlement_shape(
+        self,
+    ) -> None:
+        controller = FakeAutonomyController()
+
+        with (
+            patch.object(main, "get_autonomy_controller", return_value=controller),
+            patch.object(
+                main,
+                "get_chain_mcp_client",
+                return_value=FakeToolClient(["chain_get_wallet_state"]),
+            ),
+            patch.object(
+                main,
+                "get_freqtrade_mcp_client",
+                return_value=FakeToolClient(["freqtrade_status"]),
+            ),
+            patch.object(
+                main, "get_chain_wallet_state", return_value={"balanceEth": "1.0"}
+            ),
+        ):
+            main.get_chain_activity_store().set(
+                "chain_submit_execution",
+                main._summarize_chain_result(
+                    "chain_submit_execution",
+                    {
+                        "result": {
+                            "execution": {"to": "0xabc", "valueEth": "0.25"},
+                            "settlement": {
+                                "identifier": "0xsettlement",
+                                "kind": "submitted",
+                                "status": "submitted",
+                            },
+                        }
+                    },
+                ),
+            )
+
+            with TestClient(main.app) as client:
+                response = client.get("/health")
+
+        self.assertEqual(response.status_code, 200)
+        recent_chain_action = response.json()["recentChainAction"]
+        self.assertEqual(recent_chain_action["summary"]["kind"], "submit_execution")
+        self.assertEqual(recent_chain_action["summary"]["txHash"], "0xsettlement")
+        self.assertEqual(recent_chain_action["summary"]["status"], "submitted")
 
 
 if __name__ == "__main__":
