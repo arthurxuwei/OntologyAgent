@@ -268,6 +268,40 @@ class AutonomyController:
             observation = self._build_runtime_observation(chain_state, freqtrade_budget)
             self._state.latestObservation = observation
             planned_intent = self._plan_intent(observation)
+            active_chain_execution = self._find_revisitable_chain_execution()
+            if active_chain_execution is not None:
+                existing_execution, active_intent = active_chain_execution
+                decision = self._decision_from_intent(active_intent)
+                execution = await self._advance_active_chain_execution(
+                    existing_execution,
+                    active_intent,
+                )
+                execution = self._persist_execution(active_intent, decision, execution)
+                self._record_execution_outcome(execution)
+                if execution.status == "active":
+                    self._state.activeIntents = [active_intent]
+                else:
+                    self._state.activeIntents = [planned_intent]
+                    self._close_stale_funding_execution(planned_intent)
+                action_result = {
+                    "action": "advance_execution",
+                    "changedState": execution.status != "active",
+                    "execution": execution.model_dump(),
+                }
+                self._update_state(context, decision, action_result)
+                self._save_state()
+                return {
+                    "observation": observation,
+                    "intent": active_intent.model_dump(),
+                    "policy": PolicyDecision(
+                        decision="allow",
+                        reason="Active chain execution is being reconciled.",
+                    ).model_dump(),
+                    "decision": decision.model_dump(),
+                    "execution": execution.model_dump(),
+                    "context": context,
+                    "actionResult": action_result,
+                }
             self._state.activeIntents = [planned_intent]
             self._close_stale_funding_execution(planned_intent)
             decision = self._decision_from_intent(planned_intent)
@@ -625,6 +659,21 @@ class AutonomyController:
         for execution in self._state.activeExecutions:
             if execution.intentId == intent_id and execution.status == "active":
                 return execution
+        return None
+
+    def _find_revisitable_chain_execution(
+        self,
+    ) -> Optional[tuple[RuntimeExecutionRecord, RuntimeIntent]]:
+        for execution in self._state.activeExecutions:
+            if execution.intentType != "chain" or execution.status != "active":
+                continue
+            for intent in self._state.activeIntents:
+                if (
+                    intent.intentId == execution.intentId
+                    and intent.intentType == "chain"
+                    and intent.action != "request_funding"
+                ):
+                    return execution, intent
         return None
 
     def _apply_policy(

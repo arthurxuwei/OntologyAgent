@@ -1174,9 +1174,12 @@ class AutonomyControllerTests(unittest.TestCase):
                 parameters={"operation": "rebalance"},
                 reason="Advance an existing chain settlement.",
             )
-            controller._bootstrap_if_needed(make_chain_state("1.0")["result"])
-            controller._state.activeExecutions = [
-                RuntimeExecutionRecord(
+
+            async def fake_run_chain_execution(
+                _self: AutonomyController,
+                _intent: RuntimeIntent,
+            ) -> RuntimeExecutionRecord:
+                return RuntimeExecutionRecord(
                     executionId="exec-chain-active",
                     intentId=intent.intentId,
                     intentType=intent.intentType,
@@ -1184,17 +1187,28 @@ class AutonomyControllerTests(unittest.TestCase):
                     status="active",
                     externalId="0xsettlement",
                 )
-            ]
 
-            with patch.object(AutonomyController, "_plan_intent", return_value=intent):
-                result = asyncio.run(controller.tick())
+            with (
+                patch.object(AutonomyController, "_plan_intent", return_value=intent),
+                patch.object(
+                    AutonomyController,
+                    "_run_chain_execution",
+                    fake_run_chain_execution,
+                ),
+            ):
+                first_result = asyncio.run(controller.tick())
+
+            result = asyncio.run(controller.tick())
 
             ledger = asyncio.run(controller.status())["ledger"]
 
+            self.assertEqual(first_result["execution"]["status"], "active")
             self.assertEqual(result["actionResult"]["action"], "advance_execution")
+            self.assertEqual(result["intent"]["action"], "chain_submit_execution")
             self.assertEqual(result["execution"]["status"], "completed")
             self.assertEqual(result["execution"]["stage"], "reconciled")
             self.assertEqual(ledger["activeExecutions"], [])
+            self.assertEqual(ledger["activeIntents"][0]["action"], "hold")
             self.assertEqual(
                 ledger["executionHistory"][0]["executionId"], "exec-chain-active"
             )
@@ -1235,9 +1249,12 @@ class AutonomyControllerTests(unittest.TestCase):
                 parameters={"operation": "rebalance"},
                 reason="Advance an existing chain settlement.",
             )
-            controller._bootstrap_if_needed(make_chain_state("1.0")["result"])
-            controller._state.activeExecutions = [
-                RuntimeExecutionRecord(
+
+            async def fake_run_chain_execution(
+                _self: AutonomyController,
+                _intent: RuntimeIntent,
+            ) -> RuntimeExecutionRecord:
+                return RuntimeExecutionRecord(
                     executionId="exec-chain-active",
                     intentId=intent.intentId,
                     intentType=intent.intentType,
@@ -1245,17 +1262,30 @@ class AutonomyControllerTests(unittest.TestCase):
                     status="active",
                     externalId="0xsettlement",
                 )
-            ]
 
-            with patch.object(AutonomyController, "_plan_intent", return_value=intent):
-                result = asyncio.run(controller.tick())
+            with (
+                patch.object(AutonomyController, "_plan_intent", return_value=intent),
+                patch.object(
+                    AutonomyController,
+                    "_run_chain_execution",
+                    fake_run_chain_execution,
+                ),
+            ):
+                first_result = asyncio.run(controller.tick())
+
+            result = asyncio.run(controller.tick())
 
             ledger = asyncio.run(controller.status())["ledger"]
 
+            self.assertEqual(first_result["execution"]["status"], "active")
             self.assertEqual(result["actionResult"]["action"], "advance_execution")
+            self.assertEqual(result["intent"]["action"], "chain_submit_execution")
             self.assertEqual(result["execution"]["status"], "active")
             self.assertEqual(result["execution"]["stage"], "confirmed")
             self.assertEqual(len(ledger["activeExecutions"]), 1)
+            self.assertEqual(
+                ledger["activeIntents"][0]["action"], "chain_submit_execution"
+            )
             self.assertEqual(
                 ledger["activeExecutions"][0]["executionId"], "exec-chain-active"
             )
@@ -1298,9 +1328,12 @@ class AutonomyControllerTests(unittest.TestCase):
                 parameters={"operation": "rebalance"},
                 reason="Advance an existing chain settlement.",
             )
-            controller._bootstrap_if_needed(make_chain_state("1.0")["result"])
-            controller._state.activeExecutions = [
-                RuntimeExecutionRecord(
+
+            async def fake_run_chain_execution(
+                _self: AutonomyController,
+                _intent: RuntimeIntent,
+            ) -> RuntimeExecutionRecord:
+                return RuntimeExecutionRecord(
                     executionId="exec-chain-active",
                     intentId=intent.intentId,
                     intentType=intent.intentType,
@@ -1308,20 +1341,31 @@ class AutonomyControllerTests(unittest.TestCase):
                     status="active",
                     externalId="0xsettlement",
                 )
-            ]
 
-            with patch.object(AutonomyController, "_plan_intent", return_value=intent):
-                result = asyncio.run(controller.tick())
+            with (
+                patch.object(AutonomyController, "_plan_intent", return_value=intent),
+                patch.object(
+                    AutonomyController,
+                    "_run_chain_execution",
+                    fake_run_chain_execution,
+                ),
+            ):
+                first_result = asyncio.run(controller.tick())
+
+            result = asyncio.run(controller.tick())
 
             ledger = asyncio.run(controller.status())["ledger"]
 
+            self.assertEqual(first_result["execution"]["status"], "active")
             self.assertEqual(result["actionResult"]["action"], "advance_execution")
+            self.assertEqual(result["intent"]["action"], "chain_submit_execution")
             self.assertEqual(result["execution"]["status"], "failed")
             self.assertEqual(result["execution"]["stage"], "failed")
             self.assertEqual(
                 result["execution"]["failureCode"], "chain_terminal_failure"
             )
             self.assertEqual(ledger["activeExecutions"], [])
+            self.assertEqual(ledger["activeIntents"][0]["action"], "hold")
             self.assertEqual(
                 ledger["executionHistory"][0]["executionId"], "exec-chain-active"
             )
