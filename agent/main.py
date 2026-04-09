@@ -323,9 +323,14 @@ def _summarize_chain_result(tool_name: str, result: dict[str, Any]) -> dict[str,
         }
 
     if tool_name == "chain_submit_user_operation":
+        user_operation = structured.get("userOperation", {})
         return {
             "kind": "submit_user_operation",
-            "target": structured.get("target"),
+            "target": (
+                user_operation.get("target")
+                if isinstance(user_operation, dict)
+                else structured.get("target")
+            ),
             "userOpHash": settlement_identifier,
             "status": settlement_status,
             "mode": structured.get("mode"),
@@ -940,14 +945,14 @@ async def autonomy_status() -> dict[str, Any]:
 async def autonomy_start() -> dict[str, Any]:
     controller = get_autonomy_controller()
     await controller.start(force=True)
-    return await controller.status()
+    return _with_autonomy_runtime_summary(await controller.status())
 
 
 @app.post("/autonomy/stop")
 async def autonomy_stop() -> dict[str, Any]:
     controller = get_autonomy_controller()
     await controller.stop(disable=True)
-    return await controller.status()
+    return _with_autonomy_runtime_summary(await controller.status())
 
 
 @app.post("/autonomy/tick")

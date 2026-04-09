@@ -119,6 +119,9 @@ class MainApiTests(unittest.TestCase):
                 start_response = client.post("/autonomy/start")
                 self.assertEqual(start_response.status_code, 200)
                 self.assertTrue(start_response.json()["enabled"])
+                self.assertEqual(
+                    start_response.json()["summary"]["activeExecutionCount"], 1
+                )
 
                 tick_response = client.post("/autonomy/tick")
                 self.assertEqual(tick_response.status_code, 200)
@@ -127,6 +130,9 @@ class MainApiTests(unittest.TestCase):
                 stop_response = client.post("/autonomy/stop")
                 self.assertEqual(stop_response.status_code, 200)
                 self.assertFalse(stop_response.json()["enabled"])
+                self.assertEqual(
+                    stop_response.json()["summary"]["circuitState"], "open"
+                )
 
         self.assertIn(True, controller.start_calls)
         self.assertIn(True, controller.stop_calls)
@@ -226,6 +232,56 @@ class MainApiTests(unittest.TestCase):
         self.assertEqual(recent_chain_action["summary"]["kind"], "submit_execution")
         self.assertEqual(recent_chain_action["summary"]["txHash"], "0xsettlement")
         self.assertEqual(recent_chain_action["summary"]["status"], "submitted")
+
+    def test_health_recent_chain_action_summarizes_user_operation_target(self) -> None:
+        controller = FakeAutonomyController()
+
+        with (
+            patch.object(main, "get_autonomy_controller", return_value=controller),
+            patch.object(
+                main,
+                "get_chain_mcp_client",
+                return_value=FakeToolClient(["chain_get_wallet_state"]),
+            ),
+            patch.object(
+                main,
+                "get_freqtrade_mcp_client",
+                return_value=FakeToolClient(["freqtrade_status"]),
+            ),
+            patch.object(
+                main, "get_chain_wallet_state", return_value={"balanceEth": "1.0"}
+            ),
+        ):
+            main.get_chain_activity_store().set(
+                "chain_submit_user_operation",
+                main._summarize_chain_result(
+                    "chain_submit_user_operation",
+                    {
+                        "result": {
+                            "userOperation": {
+                                "target": "0xdef",
+                                "userOpHash": "0xuserop123",
+                            },
+                            "settlement": {
+                                "identifier": "0xuserop123",
+                                "kind": "user-operation",
+                                "status": "submitted",
+                            },
+                        }
+                    },
+                ),
+            )
+
+            with TestClient(main.app) as client:
+                response = client.get("/health")
+
+        self.assertEqual(response.status_code, 200)
+        recent_chain_action = response.json()["recentChainAction"]
+        self.assertEqual(
+            recent_chain_action["summary"]["kind"], "submit_user_operation"
+        )
+        self.assertEqual(recent_chain_action["summary"]["target"], "0xdef")
+        self.assertEqual(recent_chain_action["summary"]["userOpHash"], "0xuserop123")
 
 
 if __name__ == "__main__":
