@@ -75,7 +75,7 @@ async def confirm_chain_execution(
         return execution.model_copy(
             update={"stage": "reconciled", "status": "completed"}
         )
-    if finalized and status.startswith("fail"):
+    if finalized and status.startswith(("fail", "revert")):
         return execution.model_copy(
             update={
                 "stage": "failed",

@@ -409,6 +409,38 @@ class AutonomyWorkflowTests(unittest.TestCase):
         self.assertEqual(updated.status, "failed")
         self.assertEqual(updated.failureCode, "chain_terminal_failure")
 
+    def test_chain_confirmation_reverted_receipt_marks_execution_failed(self) -> None:
+        calls: list[tuple[str, dict[str, object]]] = []
+
+        async def tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            calls.append((tool_name, arguments or {}))
+            if tool_name == "chain_get_transaction_receipt":
+                return {"result": {"status": "reverted", "finalized": True}}
+            raise AssertionError(f"unexpected tool call: {tool_name}")
+
+        execution = RuntimeExecutionRecord(
+            executionId="exec-4",
+            intentId="intent-4",
+            intentType="chain",
+            stage="confirmed",
+            status="active",
+            externalId="0xreverted123",
+        )
+
+        updated = asyncio.run(
+            confirm_chain_execution(tool, execution, "chain_submit_execution")
+        )
+
+        self.assertEqual(
+            calls,
+            [("chain_get_transaction_receipt", {"txHash": "0xreverted123"})],
+        )
+        self.assertEqual(updated.stage, "failed")
+        self.assertEqual(updated.status, "failed")
+        self.assertEqual(updated.failureCode, "chain_terminal_failure")
+
 
 if __name__ == "__main__":
     unittest.main()
