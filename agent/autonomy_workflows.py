@@ -68,16 +68,8 @@ async def confirm_chain_execution(
     if not isinstance(result, dict):
         raise RuntimeError(f"Unexpected MCP tool result shape: {payload}")
 
-    confirmation = (
-        result.get("receipt")
-        if action == "chain_submit_execution"
-        else result.get("status")
-    )
-    if not isinstance(confirmation, dict):
-        raise RuntimeError(f"Unexpected MCP tool result shape: {payload}")
-
-    status = str(confirmation.get("status") or "").strip().lower()
-    finalized = bool(confirmation.get("finalized"))
+    status = str(result.get("status") or "").strip().lower()
+    finalized = bool(result.get("finalized"))
 
     if finalized and status.startswith("success"):
         return execution.model_copy(

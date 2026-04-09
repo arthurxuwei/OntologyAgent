@@ -319,7 +319,7 @@ class AutonomyWorkflowTests(unittest.TestCase):
         ) -> dict[str, object]:
             calls.append((tool_name, arguments or {}))
             if tool_name == "chain_get_transaction_receipt":
-                return {"result": {"receipt": {"status": "pending"}}}
+                return {"result": {"status": "pending", "finalized": False}}
             raise AssertionError(f"unexpected tool call: {tool_name}")
 
         execution = RuntimeExecutionRecord(
@@ -353,7 +353,7 @@ class AutonomyWorkflowTests(unittest.TestCase):
         ) -> dict[str, object]:
             calls.append((tool_name, arguments or {}))
             if tool_name == "chain_get_user_operation_status":
-                return {"result": {"status": {"status": "success", "finalized": True}}}
+                return {"result": {"status": "success", "finalized": True}}
             raise AssertionError(f"unexpected tool call: {tool_name}")
 
         execution = RuntimeExecutionRecord(
@@ -385,7 +385,7 @@ class AutonomyWorkflowTests(unittest.TestCase):
         ) -> dict[str, object]:
             calls.append((tool_name, arguments or {}))
             if tool_name == "chain_get_transaction_receipt":
-                return {"result": {"receipt": {"status": "failed", "finalized": True}}}
+                return {"result": {"status": "failed", "finalized": True}}
             raise AssertionError(f"unexpected tool call: {tool_name}")
 
         execution = RuntimeExecutionRecord(
