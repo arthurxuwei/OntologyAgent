@@ -14,20 +14,24 @@ SUPPORTED_CHAIN_WORKFLOW_ACTIONS = {
 
 
 def _extract_chain_external_id(action: str, result: dict[str, Any]) -> str:
+    settlement = result.get("settlement", {})
+    settlement_identifier = ""
+    if isinstance(settlement, dict):
+        settlement_identifier = str(settlement.get("identifier") or "")
+
     if action == "chain_sign_transfer":
+        transfer = result.get("transfer", {})
+        if isinstance(transfer, dict):
+            return str(transfer.get("txHash") or settlement_identifier or "")
         transaction = result.get("transaction", {})
         if isinstance(transaction, dict):
-            return str(transaction.get("txHash") or "")
-        return ""
-
-    settlement = result.get("settlement", {})
-    if not isinstance(settlement, dict):
-        return ""
+            return str(transaction.get("txHash") or settlement_identifier or "")
+        return settlement_identifier
 
     if action == "chain_submit_execution":
-        return str(settlement.get("txHash") or "")
+        return settlement_identifier
     if action == "chain_submit_user_operation":
-        return str(settlement.get("userOpHash") or "")
+        return settlement_identifier
     return ""
 
 
@@ -151,7 +155,7 @@ async def execute_chain_workflow(
         intentId=intent.intentId,
         intentType="chain",
         stage="confirmed",
-        status="completed",
+        status=("completed" if intent.action == "chain_sign_transfer" else "active"),
         externalId=external_id,
     )
 

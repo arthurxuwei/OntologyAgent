@@ -814,7 +814,15 @@ class AutonomyControllerTests(unittest.TestCase):
             if tool_name == "chain_get_wallet_state":
                 return make_chain_state("1.0")
             if tool_name == "chain_submit_execution":
-                return {"result": {"settlement": {"txHash": "0xchain123"}}}
+                return {
+                    "result": {
+                        "settlement": {
+                            "identifier": "0xchain123",
+                            "kind": "submitted",
+                            "status": "submitted",
+                        }
+                    }
+                }
             raise AssertionError(f"unexpected tool call: {tool_name}")
 
         async def freqtrade_tool(
@@ -859,12 +867,100 @@ class AutonomyControllerTests(unittest.TestCase):
 
             self.assertEqual(result["decision"]["action"], "chain_submit_execution")
             self.assertEqual(result["execution"]["stage"], "confirmed")
-            self.assertEqual(result["execution"]["status"], "completed")
+            self.assertEqual(result["execution"]["status"], "active")
             self.assertEqual(result["execution"]["externalId"], "0xchain123")
-            self.assertEqual(ledger["activeExecutions"], [])
-            self.assertEqual(ledger["executionHistory"][0]["stage"], "confirmed")
-            self.assertEqual(ledger["executionHistory"][0]["externalId"], "0xchain123")
+            self.assertEqual(len(ledger["activeExecutions"]), 1)
+            self.assertEqual(ledger["activeExecutions"][0]["stage"], "confirmed")
+            self.assertEqual(ledger["activeExecutions"][0]["externalId"], "0xchain123")
+            self.assertEqual(ledger["executionHistory"], [])
             self.assertIn(("chain_submit_execution", {"operation": "rebalance"}), calls)
+
+    def test_tick_keeps_new_real_chain_submission_active_then_advances_it(self) -> None:
+        calls: list[tuple[str, dict[str, object]]] = []
+
+        async def chain_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            calls.append((tool_name, arguments or {}))
+            if tool_name == "chain_get_wallet_state":
+                return make_chain_state("1.0")
+            if tool_name == "chain_submit_execution":
+                return {
+                    "result": {
+                        "settlement": {
+                            "identifier": "0xchain123",
+                            "kind": "submitted",
+                            "status": "submitted",
+                        }
+                    }
+                }
+            if tool_name == "chain_get_transaction_receipt":
+                return {"result": {"status": "success", "finalized": True}}
+            raise AssertionError(f"unexpected tool call: {tool_name}")
+
+        async def freqtrade_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            if tool_name == "get_budget_snapshot":
+                return make_freqtrade_budget(realized=0, unrealized=0, open_trades=0)
+            raise AssertionError(f"unexpected tool call: {tool_name}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = AutonomyController(
+                make_config(str(Path(temp_dir) / "autonomy.json")),
+                chain_tool,
+                freqtrade_tool,
+            )
+
+            intent = RuntimeIntent(
+                intentId="intent-chain-submit_execution",
+                intentType="chain",
+                action="chain_submit_execution",
+                parameters={"operation": "rebalance"},
+                reason="Execute a reconciled chain action.",
+            )
+
+            with (
+                patch.object(
+                    AutonomyController,
+                    "_plan_intent",
+                    return_value=intent,
+                ),
+                patch.object(
+                    AutonomyController,
+                    "_make_decision",
+                    side_effect=AssertionError(
+                        "tick should use the planned chain intent"
+                    ),
+                ),
+            ):
+                first_result = asyncio.run(controller.tick())
+                first_ledger = asyncio.run(controller.status())["ledger"]
+                second_result = asyncio.run(controller.tick())
+
+            second_ledger = asyncio.run(controller.status())["ledger"]
+
+            self.assertEqual(first_result["execution"]["status"], "active")
+            self.assertEqual(first_result["execution"]["externalId"], "0xchain123")
+            self.assertEqual(len(first_ledger["activeExecutions"]), 1)
+            self.assertEqual(first_ledger["executionHistory"], [])
+            self.assertEqual(
+                second_result["actionResult"]["action"], "advance_execution"
+            )
+            self.assertEqual(second_result["execution"]["status"], "completed")
+            self.assertEqual(second_result["execution"]["stage"], "reconciled")
+            self.assertEqual(second_ledger["activeExecutions"], [])
+            self.assertEqual(
+                second_ledger["executionHistory"][0]["externalId"], "0xchain123"
+            )
+            self.assertEqual(
+                calls.count(("chain_submit_execution", {"operation": "rebalance"})),
+                1,
+            )
+            self.assertIn(
+                ("chain_get_transaction_receipt", {"txHash": "0xchain123"}),
+                calls,
+            )
 
     def test_decision_from_intent_supports_whitelisted_chain_action(self) -> None:
         async def chain_tool(

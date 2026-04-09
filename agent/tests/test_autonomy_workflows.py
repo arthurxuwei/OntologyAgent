@@ -17,24 +17,56 @@ class AutonomyWorkflowTests(unittest.TestCase):
             (
                 "chain_sign_transfer",
                 {"to": "0xabc", "amountEth": "0.1"},
-                {"result": {"transaction": {"txHash": "0xsign123"}}},
+                {
+                    "result": {
+                        "transfer": {"txHash": "0xsign123"},
+                        "settlement": {"identifier": "0xsign123", "kind": "signed"},
+                    }
+                },
                 "0xsign123",
+                "confirmed",
+                "completed",
             ),
             (
                 "chain_submit_execution",
                 {"operation": "rebalance"},
-                {"result": {"settlement": {"txHash": "0xexec123"}}},
+                {
+                    "result": {
+                        "settlement": {
+                            "identifier": "0xexec123",
+                            "kind": "submitted",
+                        }
+                    }
+                },
                 "0xexec123",
+                "confirmed",
+                "active",
             ),
             (
                 "chain_submit_user_operation",
                 {"target": "0xdef"},
-                {"result": {"settlement": {"userOpHash": "0xuserop123"}}},
+                {
+                    "result": {
+                        "settlement": {
+                            "identifier": "0xuserop123",
+                            "kind": "user-operation",
+                        }
+                    }
+                },
                 "0xuserop123",
+                "confirmed",
+                "active",
             ),
         ]
 
-        for action, parameters, workflow_result, expected_external_id in scenarios:
+        for (
+            action,
+            parameters,
+            workflow_result,
+            expected_external_id,
+            expected_stage,
+            expected_status,
+        ) in scenarios:
             with self.subTest(action=action):
                 calls: list[tuple[str, dict[str, object]]] = []
 
@@ -74,11 +106,11 @@ class AutonomyWorkflowTests(unittest.TestCase):
                 self.assertEqual(execution.executionId, f"exec-intent-{action}")
                 self.assertEqual(execution.intentId, intent.intentId)
                 self.assertEqual(execution.intentType, "chain")
-                self.assertEqual(execution.stage, "confirmed")
-                self.assertEqual(execution.status, "completed")
+                self.assertEqual(execution.stage, expected_stage)
+                self.assertEqual(execution.status, expected_status)
                 self.assertEqual(execution.externalId, expected_external_id)
 
-    def test_execute_chain_workflow_keeps_submission_completed_without_external_id_confirmation(
+    def test_execute_chain_workflow_keeps_submitted_execution_active_for_later_confirmation(
         self,
     ) -> None:
         calls: list[tuple[str, dict[str, object]]] = []
@@ -90,7 +122,11 @@ class AutonomyWorkflowTests(unittest.TestCase):
             if tool_name == "chain_submit_execution":
                 return {
                     "result": {
-                        "settlement": {"txHash": "0xexec123", "status": "submitted"}
+                        "settlement": {
+                            "identifier": "0xexec123",
+                            "kind": "submitted",
+                            "status": "submitted",
+                        }
                     }
                 }
             if tool_name == "chain_get_wallet_state":
@@ -114,8 +150,41 @@ class AutonomyWorkflowTests(unittest.TestCase):
             ],
         )
         self.assertEqual(execution.stage, "confirmed")
-        self.assertEqual(execution.status, "completed")
+        self.assertEqual(execution.status, "active")
         self.assertEqual(execution.externalId, "0xexec123")
+
+    def test_execute_chain_workflow_keeps_submitted_user_operation_active_for_later_confirmation(
+        self,
+    ) -> None:
+        async def tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            if tool_name == "chain_submit_user_operation":
+                return {
+                    "result": {
+                        "settlement": {
+                            "identifier": "0xuserop123",
+                            "kind": "user-operation",
+                            "status": "submitted",
+                        }
+                    }
+                }
+            if tool_name == "chain_get_wallet_state":
+                return {"result": {"wallet": {"signerConfigured": True}}}
+            raise AssertionError(f"unexpected tool call: {tool_name}")
+
+        intent = RuntimeIntent(
+            intentId="intent-chain-submit_user_operation",
+            intentType="chain",
+            action="chain_submit_user_operation",
+            parameters={"target": "0xdef"},
+        )
+
+        execution = asyncio.run(execute_chain_workflow(tool, intent))
+
+        self.assertEqual(execution.stage, "confirmed")
+        self.assertEqual(execution.status, "active")
+        self.assertEqual(execution.externalId, "0xuserop123")
 
     def test_execute_chain_workflow_rejects_non_chain_action(self) -> None:
         async def tool(
@@ -156,7 +225,10 @@ class AutonomyWorkflowTests(unittest.TestCase):
             if tool_name == "chain_submit_execution":
                 return {
                     "result": {
-                        "settlement": {"txHash": "0xexec123", "status": "failed"}
+                        "settlement": {
+                            "identifier": "0xexec123",
+                            "status": "failed",
+                        }
                     }
                 }
             if tool_name == "chain_get_wallet_state":
@@ -182,7 +254,7 @@ class AutonomyWorkflowTests(unittest.TestCase):
             calls.append((tool_name, arguments or {}))
             if tool_name == "chain_submit_user_operation":
                 return {
-                    "result": {"settlement": {"status": "submitted", "userOpHash": ""}}
+                    "result": {"settlement": {"status": "submitted", "identifier": ""}}
                 }
             if tool_name == "chain_get_wallet_state":
                 return {"result": {"wallet": {"signerConfigured": True}}}
@@ -211,7 +283,12 @@ class AutonomyWorkflowTests(unittest.TestCase):
         ) -> dict[str, object]:
             calls.append((tool_name, arguments or {}))
             if tool_name == "chain_sign_transfer":
-                return {"result": {"transaction": {"txHash": ""}}}
+                return {
+                    "result": {
+                        "transfer": {"txHash": ""},
+                        "settlement": {"identifier": "", "kind": "signed"},
+                    }
+                }
             if tool_name == "chain_get_wallet_state":
                 return {"result": {"wallet": {"signerConfigured": True}}}
             raise AssertionError(f"unexpected tool call: {tool_name}")
@@ -239,7 +316,9 @@ class AutonomyWorkflowTests(unittest.TestCase):
         ) -> dict[str, object]:
             calls.append((tool_name, arguments or {}))
             if tool_name == "chain_submit_execution":
-                return {"result": {"settlement": {"status": "submitted", "txHash": ""}}}
+                return {
+                    "result": {"settlement": {"status": "submitted", "identifier": ""}}
+                }
             if tool_name == "chain_get_wallet_state":
                 return {"result": {"wallet": {"signerConfigured": True}}}
             raise AssertionError(f"unexpected tool call: {tool_name}")
