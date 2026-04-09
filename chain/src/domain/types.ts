@@ -143,6 +143,28 @@ export type UserOperationResult = {
   policy: PolicySnapshot;
 };
 
+export type TransactionReceiptStatusResult = {
+  txHash: string;
+  found: boolean;
+  finalized: boolean;
+  success: boolean;
+  status: "pending" | "success" | "reverted";
+  blockNumber: number | null;
+  receipt: Record<string, unknown> | null;
+  mode: "mock" | "network";
+};
+
+export type UserOperationStatusResult = {
+  userOpHash: string;
+  found: boolean;
+  finalized: boolean;
+  success: boolean;
+  status: "pending" | "success" | "failed";
+  txHash: string | null;
+  receipt: Record<string, unknown> | null;
+  mode: "mock" | "network";
+};
+
 export type HealthResult = {
   service: string;
   status: "ok";
