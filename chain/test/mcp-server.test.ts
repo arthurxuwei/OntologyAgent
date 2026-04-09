@@ -9,6 +9,8 @@ import { loadConfig } from "../src/config.js";
 import { createChainMcpServer, createChainRuntime } from "../src/mcp/tools.js";
 import type { X402FetchService } from "../src/services/x402-fetch-service.js";
 
+type RuntimeOverrides = Parameters<typeof createChainRuntime>[1];
+
 function createMockConfig() {
   return loadConfig({
     CHAIN_MOCK: "true",
@@ -20,9 +22,7 @@ function createMockConfig() {
 
 async function withClient(
   callback: (client: Client) => Promise<void>,
-  overrides?: {
-    x402FetchService?: X402FetchService;
-  },
+  overrides?: RuntimeOverrides,
 ) {
   const runtime = createChainRuntime(createMockConfig(), overrides);
   const client = new Client({
@@ -60,6 +60,8 @@ test("chain MCP exposes the expected tool names", async () => {
     const response = await client.listTools();
     const toolNames = response.tools.map((tool) => tool.name).sort();
     assert.deepEqual(toolNames, [
+      "chain_get_transaction_receipt",
+      "chain_get_user_operation_status",
       "chain_get_wallet_state",
       "chain_sign_transfer",
       "chain_submit_execution",
@@ -136,6 +138,131 @@ test("chain_submit_user_operation works in mock mode through MCP", async () => {
     const content = response.structuredContent as Record<string, any>;
     assert.match(content.userOperation?.userOpHash, /^0xmock_userop_/);
   });
+});
+
+test("chain_get_transaction_receipt returns mock success receipt status through MCP", async () => {
+  await withClient(async (client) => {
+    const response = await client.callTool({
+      name: "chain_get_transaction_receipt",
+      arguments: {
+        txHash: "0xexec123",
+      },
+    });
+
+    assert.notEqual(response.isError, true);
+    const content = response.structuredContent as Record<string, any>;
+    assert.equal(content.txHash, "0xexec123");
+    assert.equal(content.found, true);
+    assert.equal(content.finalized, true);
+    assert.equal(content.success, true);
+    assert.equal(content.status, "success");
+    assert.equal(content.mode, "mock");
+  });
+});
+
+test("chain_get_transaction_receipt returns pending when receipt is missing", async () => {
+  await withClient(
+    async (client) => {
+      const response = await client.callTool({
+        name: "chain_get_transaction_receipt",
+        arguments: {
+          txHash: "0xpending123",
+        },
+      });
+
+      assert.notEqual(response.isError, true);
+      const content = response.structuredContent as Record<string, any>;
+      assert.equal(content.txHash, "0xpending123");
+      assert.equal(content.found, false);
+      assert.equal(content.finalized, false);
+      assert.equal(content.success, false);
+      assert.equal(content.status, "pending");
+      assert.equal(content.receipt, null);
+      assert.equal(content.mode, "network");
+    },
+    {
+      transactionReceiptService: {
+        execute: async (txHash: string) => ({
+          txHash,
+          found: false,
+          finalized: false,
+          success: false,
+          status: "pending" as const,
+          blockNumber: null,
+          receipt: null,
+          mode: "network" as const,
+        }),
+      } as RuntimeOverrides["transactionReceiptService"],
+    },
+  );
+});
+
+test("chain_get_user_operation_status returns mock success status through MCP", async () => {
+  await withClient(async (client) => {
+    const response = await client.callTool({
+      name: "chain_get_user_operation_status",
+      arguments: {
+        userOpHash: "0xmock_userop_123",
+      },
+    });
+
+    assert.notEqual(response.isError, true);
+    const content = response.structuredContent as Record<string, any>;
+    assert.equal(content.userOpHash, "0xmock_userop_123");
+    assert.equal(content.found, true);
+    assert.equal(content.finalized, true);
+    assert.equal(content.success, true);
+    assert.equal(content.status, "success");
+    assert.equal(content.mode, "mock");
+  });
+});
+
+test("chain_get_user_operation_status returns failed terminal status", async () => {
+  await withClient(
+    async (client) => {
+      const response = await client.callTool({
+        name: "chain_get_user_operation_status",
+        arguments: {
+          userOpHash: "0xfailed_userop_123",
+        },
+      });
+
+      assert.notEqual(response.isError, true);
+      const content = response.structuredContent as Record<string, any>;
+      assert.equal(content.userOpHash, "0xfailed_userop_123");
+      assert.equal(content.found, true);
+      assert.equal(content.finalized, true);
+      assert.equal(content.success, false);
+      assert.equal(content.status, "failed");
+      assert.equal(content.txHash, "0xfailedtx123");
+      assert.deepEqual(content.receipt, {
+        userOpHash: "0xfailed_userop_123",
+        transactionHash: "0xfailedtx123",
+        blockNumber: 99,
+        status: 0,
+      });
+      assert.equal(content.mode, "network");
+    },
+    {
+      userOperationStatusService: {
+        execute: async (userOpHash: string) => ({
+          userOpHash,
+          found: true,
+          finalized: true,
+          success: false,
+          status: "failed" as const,
+          txHash: "0xfailedtx123",
+          receipt: {
+            userOpHash,
+            transactionHash: "0xfailedtx123",
+            blockNumber: 99,
+            status: 0,
+          },
+          mode: "network" as const,
+        }),
+      } as RuntimeOverrides["userOperationStatusService"],
+    },
+  );
 });
 
 test("chain_x402_fetch returns x402 result through MCP", async () => {

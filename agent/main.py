@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 from autonomy import AutonomyController, load_autonomy_config
 from chain_mcp_client import ChainMcpClient
 from freqtrade_mcp_client import FreqtradeMcpClient, FreqtradeMcpClientError
+
 app = FastAPI(title="OntologyAgent agent")
 
 SYSTEM_PROMPT = (
@@ -86,6 +87,18 @@ class UserOperationIntent(BaseModel):
         pattern=r"^\d+(\.\d+)?$",
     )
     raw: dict[str, Any] = Field(description="完整 UserOperation 原始字段")
+
+
+class TransactionReceiptIntent(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    txHash: str = Field(description="交易哈希，例如 0xabc...")
+
+
+class UserOperationStatusIntent(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    userOpHash: str = Field(description="UserOperation 哈希，例如 0xabc...")
 
 
 class X402FetchIntent(BaseModel):
@@ -198,7 +211,9 @@ class ForceEnterTradeIntent(BaseModel):
     side: Literal["long", "short"] = Field(default="long", description="方向")
     stakeAmount: float = Field(description="下单金额")
     price: Optional[float] = Field(default=None, description="limit 单价格")
-    orderType: Literal["market", "limit"] = Field(default="market", description="订单类型")
+    orderType: Literal["market", "limit"] = Field(
+        default="market", description="订单类型"
+    )
     entryTag: str = Field(default="agent_force_enter", description="可选标签")
 
 
@@ -206,7 +221,9 @@ class ForceExitTradeIntent(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     tradeId: str = Field(description="交易 ID，或 all")
-    orderType: Literal["market", "limit"] = Field(default="market", description="订单类型")
+    orderType: Literal["market", "limit"] = Field(
+        default="market", description="订单类型"
+    )
     amount: Optional[float] = Field(default=None, description="部分平仓数量")
 
 
@@ -255,41 +272,84 @@ def _unwrap_mcp_result(tool_name: str, result: dict[str, Any]) -> dict[str, Any]
     return result
 
 
+def _with_autonomy_runtime_summary(status: dict[str, Any]) -> dict[str, Any]:
+    ledger = status.get("ledger")
+    if not isinstance(ledger, dict):
+        ledger = {}
+
+    enriched_status = dict(status)
+    enriched_status["ledger"] = ledger
+    enriched_status["summary"] = {
+        "activeExecutionCount": len(ledger.get("activeExecutions", [])),
+        "circuitState": ledger.get("circuitBreaker", {}).get("state", "closed"),
+    }
+    return enriched_status
+
+
 def _summarize_chain_result(tool_name: str, result: dict[str, Any]) -> dict[str, Any]:
     structured = result.get("result", result)
+    settlement = structured.get("settlement", {})
+    settlement_identifier = (
+        settlement.get("identifier") if isinstance(settlement, dict) else None
+    )
+    settlement_status = (
+        settlement.get("status") if isinstance(settlement, dict) else None
+    )
 
     if tool_name == "chain_sign_transfer":
+        transfer = structured.get("transfer", {})
         tx = structured.get("transaction", {})
         policy = structured.get("policy", {})
         return {
             "kind": "sign_transfer",
-            "to": tx.get("to"),
-            "amountEth": tx.get("amountEth"),
-            "txHash": tx.get("txHash"),
+            "to": transfer.get("to") or tx.get("to"),
+            "amountEth": transfer.get("amountEth") or tx.get("amountEth"),
+            "txHash": transfer.get("txHash")
+            or tx.get("txHash")
+            or settlement_identifier,
             "mode": structured.get("mode"),
             "decision": policy.get("decision"),
         }
 
     if tool_name == "chain_submit_execution":
         execution = structured.get("execution", {})
-        settlement = structured.get("settlement", {})
         return {
             "kind": "submit_execution",
             "to": execution.get("to"),
             "valueEth": execution.get("valueEth"),
-            "txHash": settlement.get("txHash"),
-            "status": settlement.get("status"),
-            "mode": settlement.get("mode"),
+            "txHash": settlement_identifier,
+            "status": settlement_status,
+            "mode": structured.get("mode"),
         }
 
     if tool_name == "chain_submit_user_operation":
-        settlement = structured.get("settlement", {})
+        user_operation = structured.get("userOperation", {})
         return {
             "kind": "submit_user_operation",
-            "target": structured.get("target"),
-            "userOpHash": settlement.get("userOpHash"),
-            "status": settlement.get("status"),
-            "mode": settlement.get("mode"),
+            "target": (
+                user_operation.get("target")
+                if isinstance(user_operation, dict)
+                else structured.get("target")
+            ),
+            "userOpHash": settlement_identifier,
+            "status": settlement_status,
+            "mode": structured.get("mode"),
+        }
+
+    if tool_name == "chain_get_transaction_receipt":
+        return {
+            "kind": "transaction_receipt",
+            "txHash": structured.get("txHash") or structured.get("transactionHash"),
+            "status": structured.get("status"),
+            "finalized": structured.get("finalized"),
+        }
+
+    if tool_name == "chain_get_user_operation_status":
+        return {
+            "kind": "user_operation_status",
+            "userOpHash": structured.get("userOpHash"),
+            "status": structured.get("status"),
+            "finalized": structured.get("finalized"),
         }
 
     if tool_name == "chain_x402_fetch":
@@ -309,7 +369,9 @@ def _summarize_chain_result(tool_name: str, result: dict[str, Any]) -> dict[str,
     }
 
 
-async def call_chain_tool(tool_name: str, arguments: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+async def call_chain_tool(
+    tool_name: str, arguments: Optional[dict[str, Any]] = None
+) -> dict[str, Any]:
     try:
         result = await get_chain_mcp_client().call_tool(tool_name, arguments or {})
     except Exception as error:
@@ -320,7 +382,9 @@ async def call_chain_tool(tool_name: str, arguments: Optional[dict[str, Any]] = 
         "result": _unwrap_mcp_result(tool_name, result),
     }
     if tool_name != "chain_get_wallet_state":
-        get_chain_activity_store().set(tool_name, _summarize_chain_result(tool_name, payload))
+        get_chain_activity_store().set(
+            tool_name, _summarize_chain_result(tool_name, payload)
+        )
     return payload
 
 
@@ -371,6 +435,22 @@ async def chain_submit_user_operation_tool(
     )
 
 
+async def chain_get_transaction_receipt_tool(txHash: str) -> dict[str, Any]:
+    intent = TransactionReceiptIntent(txHash=txHash)
+    return await call_chain_tool(
+        "chain_get_transaction_receipt",
+        {"txHash": intent.txHash},
+    )
+
+
+async def chain_get_user_operation_status_tool(userOpHash: str) -> dict[str, Any]:
+    intent = UserOperationStatusIntent(userOpHash=userOpHash)
+    return await call_chain_tool(
+        "chain_get_user_operation_status",
+        {"userOpHash": intent.userOpHash},
+    )
+
+
 async def chain_x402_fetch_tool(
     url: str,
     method: str = "GET",
@@ -394,11 +474,15 @@ async def chain_x402_fetch_tool(
     return await call_chain_tool("chain_x402_fetch", payload)
 
 
-async def call_freqtrade_tool(tool_name: str, arguments: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+async def call_freqtrade_tool(
+    tool_name: str, arguments: Optional[dict[str, Any]] = None
+) -> dict[str, Any]:
     try:
         result = await get_freqtrade_mcp_client().call_tool(tool_name, arguments or {})
     except Exception as error:
-        raise RuntimeError(f"Freqtrade MCP tool failed: {tool_name}: {error}") from error
+        raise RuntimeError(
+            f"Freqtrade MCP tool failed: {tool_name}: {error}"
+        ) from error
 
     return {
         "tool": tool_name,
@@ -415,11 +499,15 @@ async def list_strategies_tool() -> dict[str, Any]:
 
 
 async def get_open_trades_tool(limit: int = 20, offset: int = 0) -> dict[str, Any]:
-    return await call_freqtrade_tool("get_open_trades", {"limit": limit, "offset": offset})
+    return await call_freqtrade_tool(
+        "get_open_trades", {"limit": limit, "offset": offset}
+    )
 
 
 async def get_closed_trades_tool(limit: int = 20, offset: int = 0) -> dict[str, Any]:
-    return await call_freqtrade_tool("get_closed_trades", {"limit": limit, "offset": offset})
+    return await call_freqtrade_tool(
+        "get_closed_trades", {"limit": limit, "offset": offset}
+    )
 
 
 async def get_performance_summary_tool() -> dict[str, Any]:
@@ -530,6 +618,16 @@ CHAIN_TOOL_REGISTRY: dict[str, dict[str, Any]] = {
         "args_schema": UserOperationIntent,
         "coroutine": chain_submit_user_operation_tool,
     },
+    "chain_get_transaction_receipt": {
+        "description": "查询一笔链上交易的最新 receipt 和确认状态。",
+        "args_schema": TransactionReceiptIntent,
+        "coroutine": chain_get_transaction_receipt_tool,
+    },
+    "chain_get_user_operation_status": {
+        "description": "查询一笔 UserOperation 的最新状态和确认结果。",
+        "args_schema": UserOperationStatusIntent,
+        "coroutine": chain_get_user_operation_status_tool,
+    },
     "chain_x402_fetch": {
         "description": "执行一次 x402 收费资源访问流程。",
         "args_schema": X402FetchIntent,
@@ -611,7 +709,9 @@ def discover_chain_tools() -> list[StructuredTool]:
     try:
         available_tools = asyncio.run(get_chain_mcp_client().list_tools())
     except Exception as error:
-        raise RuntimeError(f"CHAIN_MCP_URL is configured but tools could not be discovered: {error}") from error
+        raise RuntimeError(
+            f"CHAIN_MCP_URL is configured but tools could not be discovered: {error}"
+        ) from error
 
     tools: list[StructuredTool] = []
     for tool_name, spec in CHAIN_TOOL_REGISTRY.items():
@@ -632,7 +732,9 @@ def discover_freqtrade_tools() -> list[StructuredTool]:
     try:
         available_tools = asyncio.run(get_freqtrade_mcp_client().list_tools())
     except Exception as error:
-        raise RuntimeError(f"FREQTRADE_MCP_URL is configured but tools could not be discovered: {error}") from error
+        raise RuntimeError(
+            f"FREQTRADE_MCP_URL is configured but tools could not be discovered: {error}"
+        ) from error
 
     tools: list[StructuredTool] = []
     for tool_name, spec in FREQTRADE_TOOL_REGISTRY.items():
@@ -684,8 +786,14 @@ def build_tools() -> list[StructuredTool]:
             args_schema=EmptyIntent,
             coroutine=run_wealth_tick_tool,
         ),
-        *[_make_structured_tool(name, spec) for name, spec in CHAIN_TOOL_REGISTRY.items()],
-        *[_make_structured_tool(name, spec) for name, spec in FREQTRADE_TOOL_REGISTRY.items()],
+        *[
+            _make_structured_tool(name, spec)
+            for name, spec in CHAIN_TOOL_REGISTRY.items()
+        ],
+        *[
+            _make_structured_tool(name, spec)
+            for name, spec in FREQTRADE_TOOL_REGISTRY.items()
+        ],
     ]
 
 
@@ -800,13 +908,17 @@ def health() -> dict[str, Any]:
 
     autonomy_status: dict[str, Any]
     try:
-        autonomy_status = asyncio.run(get_autonomy_controller().status())
+        autonomy_status = _with_autonomy_runtime_summary(
+            asyncio.run(get_autonomy_controller().status())
+        )
     except Exception as error:
-        autonomy_status = {
-            "enabled": False,
-            "running": False,
-            "error": str(error),
-        }
+        autonomy_status = _with_autonomy_runtime_summary(
+            {
+                "enabled": False,
+                "running": False,
+                "error": str(error),
+            }
+        )
 
     chain_wallet: Optional[dict[str, Any]] = None
     try:
@@ -849,21 +961,21 @@ def health() -> dict[str, Any]:
 
 @app.get("/autonomy/status")
 async def autonomy_status() -> dict[str, Any]:
-    return await get_autonomy_controller().status()
+    return _with_autonomy_runtime_summary(await get_autonomy_controller().status())
 
 
 @app.post("/autonomy/start")
 async def autonomy_start() -> dict[str, Any]:
     controller = get_autonomy_controller()
     await controller.start(force=True)
-    return await controller.status()
+    return _with_autonomy_runtime_summary(await controller.status())
 
 
 @app.post("/autonomy/stop")
 async def autonomy_stop() -> dict[str, Any]:
     controller = get_autonomy_controller()
     await controller.stop(disable=True)
-    return await controller.status()
+    return _with_autonomy_runtime_summary(await controller.status())
 
 
 @app.post("/autonomy/tick")
@@ -882,19 +994,29 @@ def get_agent_session(session_id: str) -> AgentSessionStateResponse:
     try:
         session = get_session_store().get(session_id)
     except KeyError as error:
-        raise HTTPException(status_code=404, detail=f"Unknown agent session: {session_id}") from error
+        raise HTTPException(
+            status_code=404, detail=f"Unknown agent session: {session_id}"
+        ) from error
 
-    return AgentSessionStateResponse(sessionId=session.session_id, messageCount=len(session.messages))
+    return AgentSessionStateResponse(
+        sessionId=session.session_id, messageCount=len(session.messages)
+    )
 
 
 @app.post("/agent/sessions/{session_id}/messages")
-async def send_agent_session_message(session_id: str, request: AgentChatRequest) -> AgentChatResponse:
+async def send_agent_session_message(
+    session_id: str, request: AgentChatRequest
+) -> AgentChatResponse:
     try:
         session = get_session_store().get(session_id)
     except KeyError as error:
-        raise HTTPException(status_code=404, detail=f"Unknown agent session: {session_id}") from error
+        raise HTTPException(
+            status_code=404, detail=f"Unknown agent session: {session_id}"
+        ) from error
 
-    result = await _invoke_agent([*session.messages, HumanMessage(content=request.input)])
+    result = await _invoke_agent(
+        [*session.messages, HumanMessage(content=request.input)]
+    )
     messages = result.get("messages", [])
     session.messages = list(messages)
     output = _extract_final_output(session.messages)

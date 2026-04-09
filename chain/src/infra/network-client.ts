@@ -22,6 +22,10 @@ export class NetworkClient {
     return this.provider.getBalance(address);
   }
 
+  async getTransactionReceipt(address: string) {
+    return this.provider.getTransactionReceipt(address);
+  }
+
   async getFeeData(): Promise<FeeData> {
     return this.provider.getFeeData();
   }
