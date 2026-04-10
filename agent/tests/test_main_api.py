@@ -1,3 +1,6 @@
+import json
+import re
+import subprocess
 import unittest
 from unittest.mock import patch
 
@@ -5,6 +8,13 @@ from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
 
 import main
+
+
+def _extract_inline_script(html: str) -> str:
+    match = re.search(r"<script>(.*?)</script>", html, re.DOTALL)
+    if match is None:
+        raise AssertionError("expected inline script in chat page html")
+    return match.group(1)
 
 
 class FakeAutonomyController:
@@ -155,21 +165,93 @@ class MainApiTests(unittest.TestCase):
                 response = client.get("/")
 
         self.assertEqual(response.status_code, 200)
-        for marker in [
-            "function buildRuntimeViewModel",
-            "ledger.healthStatus",
-            "source.summary?.circuitState",
-            "function buildFreqtradeViewModel",
-            "status.openTradeCount",
-            "function buildChainViewModel",
-            "payload?.recentChainAction",
-            "summary.kind",
-            "summary.txHash",
-        ]:
-            self.assertIn(marker, response.text)
-        self.assertNotIn(
-            'health: ledger.healthStatus ?? source.summary?.circuitState ?? "未知"',
-            response.text,
+        script_text = _extract_inline_script(response.text)
+        payloads = {
+            "runtime": {
+                "autonomy": {
+                    "enabled": True,
+                    "running": False,
+                    "summary": {"circuitState": "open"},
+                    "ledger": {
+                        "healthStatus": "degraded",
+                        "lastDecision": {"action": "hold"},
+                    },
+                }
+            },
+            "freqtrade": {
+                "freqtradeStatus": {
+                    "state": "running",
+                    "runmode": "dry_run",
+                    "exchange": "binance",
+                    "strategy": "SimpleAgentStrategy",
+                    "openTradeCount": 2,
+                }
+            },
+            "chain": {
+                "chainWallet": {"wallet": {"address": "0xabc"}},
+                "recentChainAction": {
+                    "tool": "chain_submit_execution",
+                    "summary": {
+                        "kind": "submit_execution",
+                        "txHash": "0x123",
+                        "valueEth": "0.5",
+                    },
+                },
+            },
+        }
+        node_result = subprocess.run(
+            [
+                "node",
+                "-e",
+                "const fs = require('fs');"
+                "const scriptText = fs.readFileSync(0, 'utf8');"
+                f"const payloads = {json.dumps(payloads)};"
+                "const makeElement = () => ({"
+                "textContent: '', style: {}, disabled: false, value: '/autonomy/status',"
+                "appendChild() {}, append() {}, addEventListener() {}, focus() {},"
+                "scrollTop: 0, scrollHeight: 0"
+                "});"
+                "global.document = {"
+                "getElementById() { return makeElement(); },"
+                "querySelectorAll() { return []; },"
+                "createElement() { return makeElement(); }"
+                "};"
+                "global.fetch = async () => ({ ok: true, json: async () => ({}) });"
+                "eval(scriptText);"
+                "process.stdout.write(JSON.stringify({"
+                "runtime: buildRuntimeViewModel(payloads.runtime),"
+                "freqtrade: buildFreqtradeViewModel(payloads.freqtrade),"
+                "chain: buildChainViewModel(payloads.chain)"
+                "}));",
+            ],
+            input=script_text,
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(node_result.returncode, 0, node_result.stderr)
+        helper_output = json.loads(node_result.stdout)
+        self.assertEqual(
+            helper_output["runtime"],
+            {
+                "running": "已启用，待运行",
+                "health": "degraded",
+                "circuitState": "open",
+                "decision": "hold",
+            },
+        )
+        self.assertEqual(
+            helper_output["freqtrade"],
+            {
+                "running": "running | dry_run | binance | SimpleAgentStrategy",
+                "openTrades": "2",
+            },
+        )
+        self.assertEqual(
+            helper_output["chain"],
+            {
+                "signerAddress": "0xabc",
+                "recentAction": "submit_execution | value=0.5 ETH | tx=0x123",
+            },
         )
 
     def test_autonomy_management_endpoints_use_controller(self) -> None:
