@@ -145,6 +145,21 @@ class MainApiTests(unittest.TestCase):
             normalized_html,
         )
 
+    def test_chat_page_declares_observability_view_model_helpers(self) -> None:
+        controller = FakeAutonomyController()
+
+        with patch.object(main, "get_autonomy_controller", return_value=controller):
+            with TestClient(main.app) as client:
+                response = client.get("/")
+
+        self.assertEqual(response.status_code, 200)
+        for marker in [
+            "function buildRuntimeViewModel",
+            "function buildFreqtradeViewModel",
+            "function buildChainViewModel",
+        ]:
+            self.assertIn(marker, response.text)
+
     def test_autonomy_management_endpoints_use_controller(self) -> None:
         controller = FakeAutonomyController()
         with patch.object(main, "get_autonomy_controller", return_value=controller):

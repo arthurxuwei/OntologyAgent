@@ -640,11 +640,10 @@
       }
 
       function updateGuardSummary(payload) {
-        const source = payload.ledger ? payload : payload.result ? payload.result : payload;
-        const ledger = source.ledger ?? {};
-        guardRunningEl.textContent = source.running ? "运行中" : source.enabled ? "已启用，待运行" : "已停止";
-        guardHealthEl.textContent = ledger.healthStatus ?? "未知";
-        guardDecisionEl.textContent = ledger.lastDecision?.action ?? "暂无";
+        const viewModel = buildRuntimeViewModel(payload);
+        guardRunningEl.textContent = viewModel.running;
+        guardHealthEl.textContent = viewModel.health;
+        guardDecisionEl.textContent = viewModel.decision;
       }
 
       function updateGuardResult(title, payload, isError = false) {
@@ -670,52 +669,80 @@
         return parts.join(" | ");
       }
 
-      function updateChainStatus(payload) {
-        const wallet = payload?.chainWallet?.wallet ?? {};
-        const recentActionSummary = summarizeRecentChainAction(payload?.recentChainAction);
-        chainSignerAddressEl.textContent = wallet.address ?? "未配置";
-        recentChainActionEl.textContent = recentActionSummary;
-        recentChainActionDetailEl.textContent = recentActionSummary;
+      function buildRuntimeViewModel(payload) {
+        const source = payload?.autonomy ?? (payload?.ledger ? payload : payload?.result ? payload.result : payload) ?? {};
+        const ledger = source.ledger ?? {};
+
+        return {
+          running: source.running ? "运行中" : source.enabled ? "已启用，待运行" : "已停止",
+          health: ledger.healthStatus ?? source.summary?.circuitState ?? "未知",
+          decision: ledger.lastDecision?.action ?? "暂无",
+        };
       }
 
-      function updateFreqtradeStatus(payload) {
+      function buildFreqtradeViewModel(payload) {
         const status = payload?.freqtradeStatus ?? {};
-        const openTradeCount = status?.openTradeCount;
         const parts = [];
 
-        if (status?.runningState) {
-          parts.push(status.runningState);
-        } else if (status?.state) {
+        if (status.runningState) {
+          parts.push(String(status.runningState));
+        } else if (status.state) {
           parts.push(String(status.state));
         }
 
-        if (status?.runmode) {
+        if (status.runmode) {
           parts.push(String(status.runmode));
         }
 
-        if (status?.exchange) {
+        if (status.exchange) {
           parts.push(String(status.exchange));
         }
 
-        if (status?.strategy) {
+        if (status.strategy) {
           parts.push(String(status.strategy));
         }
 
+        let running = "未知";
         if (parts.length > 0) {
-          freqtradeRunningStateEl.textContent = parts.join(" | ");
-        } else if (status?.error) {
-          freqtradeRunningStateEl.textContent = `不可用: ${status.error}`;
-        } else {
-          freqtradeRunningStateEl.textContent = "未知";
+          running = parts.join(" | ");
+        } else if (status.error) {
+          running = `不可用: ${status.error}`;
         }
 
-        if (typeof openTradeCount === "number") {
-          freqtradeOpenTradesEl.textContent = String(openTradeCount);
-        } else if (status?.error) {
-          freqtradeOpenTradesEl.textContent = "读取失败";
-        } else {
-          freqtradeOpenTradesEl.textContent = "未查询";
+        let openTrades = "未查询";
+        if (typeof status.openTradeCount === "number") {
+          openTrades = String(status.openTradeCount);
+        } else if (status.error) {
+          openTrades = "读取失败";
         }
+
+        return {
+          running,
+          openTrades,
+        };
+      }
+
+      function buildChainViewModel(payload) {
+        const wallet = payload?.chainWallet?.wallet ?? {};
+        const recentAction = summarizeRecentChainAction(payload?.recentChainAction);
+
+        return {
+          signerAddress: wallet.address ?? "未配置",
+          recentAction,
+        };
+      }
+
+      function updateChainStatus(payload) {
+        const viewModel = buildChainViewModel(payload);
+        chainSignerAddressEl.textContent = viewModel.signerAddress;
+        recentChainActionEl.textContent = viewModel.recentAction;
+        recentChainActionDetailEl.textContent = viewModel.recentAction;
+      }
+
+      function updateFreqtradeStatus(payload) {
+        const viewModel = buildFreqtradeViewModel(payload);
+        freqtradeRunningStateEl.textContent = viewModel.running;
+        freqtradeOpenTradesEl.textContent = viewModel.openTrades;
       }
 
       async function refreshHealth() {
