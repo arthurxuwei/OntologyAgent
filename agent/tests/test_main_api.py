@@ -129,6 +129,22 @@ class MainApiTests(unittest.TestCase):
         ]:
             self.assertIn(section_heading, response.text)
 
+    def test_chat_page_console_layout_classes(self) -> None:
+        controller = FakeAutonomyController()
+
+        with patch.object(main, "get_autonomy_controller", return_value=controller):
+            with TestClient(main.app) as client:
+                response = client.get("/")
+
+        self.assertEqual(response.status_code, 200)
+        for marker in [
+            "console-shell",
+            "observability-grid",
+            "detail-grid",
+            "@media (max-width: 960px)",
+        ]:
+            self.assertIn(marker, response.text)
+
     def test_autonomy_management_endpoints_use_controller(self) -> None:
         controller = FakeAutonomyController()
         with patch.object(main, "get_autonomy_controller", return_value=controller):

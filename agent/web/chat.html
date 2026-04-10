@@ -34,7 +34,8 @@
           linear-gradient(180deg, #fbf7ef 0%, var(--bg) 100%);
       }
 
-      .shell {
+      .shell,
+      .console-shell {
         max-width: 1240px;
         margin: 0 auto;
         padding: 32px 20px 28px;
@@ -191,21 +192,24 @@
         grid-template-columns: repeat(4, minmax(0, 1fr));
       }
 
-      .console-card {
+      .console-card,
+      .panel-card {
         padding: 18px;
         display: grid;
         gap: 14px;
         align-content: start;
       }
 
-      .console-card-header {
+      .console-card-header,
+      .panel-card-header {
         display: flex;
         align-items: baseline;
         justify-content: space-between;
         gap: 12px;
       }
 
-      .console-card-header .panel-title {
+      .console-card-header .panel-title,
+      .panel-card-header .panel-title {
         margin-bottom: 0;
       }
 
@@ -376,10 +380,22 @@
       }
 
       @media (max-width: 960px) {
+        .topbar {
+          padding: 16px;
+        }
+
+        .console-layout {
+          gap: 16px;
+        }
+
         .topbar-actions,
         .observability-grid,
         .detail-grid {
           grid-template-columns: 1fr;
+        }
+
+        .chat-panel {
+          min-height: auto;
         }
 
         .message {
@@ -393,7 +409,7 @@
     </style>
   </head>
   <body>
-    <div class="shell">
+    <div class="shell console-shell">
       <section class="hero">
         <span class="eyebrow">OntologyAgent Console</span>
         <h1>和管家持续对话，同时管理理财子。</h1>
@@ -421,8 +437,8 @@
 
       <div class="console-layout">
         <section class="observability-grid">
-          <article class="card console-card">
-            <div class="console-card-header">
+          <article class="card console-card panel-card">
+            <div class="console-card-header panel-card-header">
               <h3 class="panel-title">Runtime</h3>
             </div>
             <div class="meta-box">
@@ -449,8 +465,8 @@
             </div>
           </article>
 
-          <article class="card console-card">
-            <div class="console-card-header">
+          <article class="card console-card panel-card">
+            <div class="console-card-header panel-card-header">
               <h3 class="panel-title">Freqtrade</h3>
             </div>
             <div class="meta-box">
@@ -465,8 +481,8 @@
             </div>
           </article>
 
-          <article class="card console-card">
-            <div class="console-card-header">
+          <article class="card console-card panel-card">
+            <div class="console-card-header panel-card-header">
               <h3 class="panel-title">Chain</h3>
             </div>
             <div class="meta-box">
@@ -483,8 +499,8 @@
         </section>
 
         <section class="detail-grid">
-          <article class="card console-card">
-            <div class="console-card-header">
+          <article class="card console-card panel-card">
+            <div class="console-card-header panel-card-header">
               <h3 class="panel-title">Recent Chain Action</h3>
             </div>
             <div class="meta-box">
@@ -495,15 +511,15 @@
             </div>
           </article>
 
-          <article class="card console-card">
-            <div class="console-card-header">
+          <article class="card console-card panel-card">
+            <div class="console-card-header panel-card-header">
               <h3 class="panel-title">Execution Snapshot</h3>
             </div>
             <div class="guard-result" id="guard-result">等待操作…</div>
           </article>
 
-          <article class="card console-card">
-            <div class="console-card-header">
+          <article class="card console-card panel-card">
+            <div class="console-card-header panel-card-header">
               <h3 class="panel-title">Warnings</h3>
             </div>
             <div class="meta-box">
@@ -514,8 +530,8 @@
             </div>
           </article>
 
-          <article class="card console-card">
-            <div class="console-card-header">
+          <article class="card console-card panel-card">
+            <div class="console-card-header panel-card-header">
               <h3 class="panel-title">Errors</h3>
             </div>
             <div class="meta-box">
