@@ -508,7 +508,7 @@
             <div class="console-card-header panel-card-header">
               <h3 class="panel-title">Execution Snapshot</h3>
             </div>
-            <div class="guard-result" id="execution-snapshot">等待操作…</div>
+            <div class="guard-result" id="execution-snapshot">等待健康检查…</div>
           </article>
 
           <article class="card console-card panel-card">
@@ -525,14 +525,9 @@
 
           <article class="card console-card panel-card">
             <div class="console-card-header panel-card-header">
-              <h3 class="panel-title">Errors</h3>
+              <h3 class="panel-title">Action Result</h3>
             </div>
-            <div class="meta-box">
-              <div class="meta-row">
-                <span class="meta-label">Status</span>
-                <span class="meta-value">No errors wired yet.</span>
-              </div>
-            </div>
+            <div class="guard-result" id="action-result">等待操作…</div>
           </article>
         </section>
 
@@ -582,6 +577,7 @@
       const newSessionButtonEl = document.getElementById("new-session-button");
       const connectionStatusEl = document.getElementById("connection-status");
       const executionSnapshotEl = document.getElementById("execution-snapshot");
+      const actionResultEl = document.getElementById("action-result");
       const warningsTextEl = document.getElementById("warnings-text");
       const guardActionSelectEl = document.getElementById("guard-action-select");
       const guardActionButtonEl = document.getElementById("guard-action-button");
@@ -634,9 +630,9 @@
       }
 
       function updateGuardResult(title, payload, isError = false) {
-        executionSnapshotEl.textContent =
+        actionResultEl.textContent =
           `${title}\n\n${typeof payload === "string" ? payload : JSON.stringify(payload, null, 2)}`;
-        executionSnapshotEl.style.color = isError ? "var(--danger)" : "var(--ink)";
+        actionResultEl.style.color = isError ? "var(--danger)" : "var(--ink)";
       }
 
       function summarizeRecentChainAction(action) {
@@ -720,6 +716,58 @@
         };
       }
 
+      function buildExecutionSnapshotViewModel(payload) {
+        const source = payload?.autonomy ?? (payload?.ledger ? payload : payload?.result ? payload.result : payload) ?? {};
+        const ledger = source.ledger ?? {};
+        const activeExecutions = Array.isArray(ledger.activeExecutions) ? ledger.activeExecutions : [];
+        const executionHistory = Array.isArray(ledger.executionHistory) ? ledger.executionHistory : [];
+
+        return {
+          activeExecutions: String(source.summary?.activeExecutionCount ?? activeExecutions.length),
+          executionHistory: String(executionHistory.length),
+          circuitState: source.summary?.circuitState ?? ledger.circuitBreaker?.state ?? "未知",
+          lastTickAt: ledger.lastTickAt ?? source.lastTickAt ?? "未记录",
+        };
+      }
+
+      function buildWarningsViewModel(payload) {
+        const runtime = buildRuntimeViewModel(payload);
+        const chain = buildChainViewModel(payload);
+        const source = payload?.autonomy ?? {};
+        const ledger = source.ledger ?? {};
+        const warnings = [];
+
+        function pushWarning(message) {
+          if (message && !warnings.includes(message)) {
+            warnings.push(message);
+          }
+        }
+
+        if (!["ok", "healthy"].includes(runtime.health)) {
+          pushWarning(`Runtime health: ${runtime.health}`);
+        }
+        if (runtime.circuitState !== "closed" && runtime.circuitState !== "未知") {
+          pushWarning(`Circuit breaker: ${runtime.circuitState}`);
+        }
+        if (chain.signerAddress === "未配置") {
+          pushWarning("Chain signer: 未配置");
+        }
+        if (payload?.chainError) {
+          pushWarning(`Chain error: ${payload.chainError}`);
+        }
+        if (payload?.freqtradeError) {
+          pushWarning(`Freqtrade error: ${payload.freqtradeError}`);
+        }
+        if (source.error) {
+          pushWarning(`Autonomy error: ${source.error}`);
+        }
+        if (ledger.lastError) {
+          pushWarning(`Autonomy error: ${ledger.lastError}`);
+        }
+
+        return warnings;
+      }
+
       function renderFreqtradeState(viewModel) {
         freqtradeStateEl.textContent = [
           `运行状态: ${viewModel.running}`,
@@ -735,25 +783,17 @@
         chainActivityDetailEl.textContent = viewModel.recentAction;
       }
 
+      function renderExecutionSnapshot(viewModel) {
+        executionSnapshotEl.textContent = [
+          `Active Executions: ${viewModel.activeExecutions}`,
+          `Execution History: ${viewModel.executionHistory}`,
+          `Circuit State: ${viewModel.circuitState}`,
+          `Last Tick: ${viewModel.lastTickAt}`,
+        ].join("\n");
+      }
+
       function renderWarningsPanel(payload) {
-        const runtime = buildRuntimeViewModel(payload);
-        const freqtrade = buildFreqtradeViewModel(payload);
-        const chain = buildChainViewModel(payload);
-        const warnings = [];
-
-        if (runtime.health !== "ok") {
-          warnings.push(`Runtime health: ${runtime.health}`);
-        }
-        if (runtime.circuitState !== "closed" && runtime.circuitState !== "未知") {
-          warnings.push(`Circuit breaker: ${runtime.circuitState}`);
-        }
-        if (freqtrade.running.includes("不可用") || freqtrade.openTrades === "读取失败") {
-          warnings.push(`Freqtrade: ${freqtrade.running}`);
-        }
-        if (chain.signerAddress === "未配置") {
-          warnings.push("Chain signer: 未配置");
-        }
-
+        const warnings = buildWarningsViewModel(payload);
         warningsTextEl.textContent = warnings.length > 0 ? warnings.join("\n") : "No active warnings.";
       }
 
@@ -769,18 +809,24 @@
         renderFreqtradeState(buildFreqtradeViewModel(payload));
       }
 
+      function updateExecutionSnapshot(payload) {
+        renderExecutionSnapshot(buildExecutionSnapshotViewModel(payload));
+      }
+
       async function refreshHealth() {
         try {
           const payload = await requestJson("/health", { method: "GET" });
           updateGuardSummary(payload);
           updateChainStatus(payload);
           updateFreqtradeStatus(payload);
+          updateExecutionSnapshot(payload);
           renderWarningsPanel(payload);
         } catch (_error) {
           runtimeStatusEl.textContent = "读取失败";
           chainIdentifierEl.textContent = "读取失败";
           chainActivityDetailEl.textContent = "读取失败";
           freqtradeStateEl.textContent = "读取失败";
+          executionSnapshotEl.textContent = "读取失败";
           warningsTextEl.textContent = "读取失败";
         }
       }

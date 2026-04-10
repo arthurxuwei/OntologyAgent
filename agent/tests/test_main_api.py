@@ -170,6 +170,7 @@ class MainApiTests(unittest.TestCase):
             'id="execution-snapshot"',
             'id="warnings-panel"',
             'id="warnings-text"',
+            'id="action-result"',
         ]:
             self.assertIn(marker, response.text)
 
@@ -193,6 +194,10 @@ class MainApiTests(unittest.TestCase):
                     "ledger": {
                         "healthStatus": "degraded",
                         "lastDecision": {"action": "hold"},
+                        "activeExecutions": [{"executionId": "exec-123"}],
+                        "executionHistory": [{"executionId": "exec-122"}],
+                        "circuitBreaker": {"state": "open"},
+                        "lastTickAt": "2026-04-10T10:00:00Z",
                     },
                 }
             },
@@ -215,6 +220,26 @@ class MainApiTests(unittest.TestCase):
                         "valueEth": "0.5",
                     },
                 },
+            },
+            "health": {
+                "autonomy": {
+                    "enabled": False,
+                    "running": False,
+                    "error": "autonomy unavailable",
+                    "summary": {"circuitState": "open"},
+                    "ledger": {
+                        "healthStatus": "critical",
+                        "lastError": "tick failed",
+                        "circuitBreaker": {"state": "open"},
+                    },
+                },
+                "chainError": "chain offline",
+                "freqtradeError": "freqtrade offline",
+                "freqtradeStatus": {
+                    "runningState": "unavailable",
+                    "error": "freqtrade offline",
+                },
+                "chainWallet": {"wallet": {}},
             },
         }
         node_result = subprocess.run(
@@ -239,7 +264,9 @@ class MainApiTests(unittest.TestCase):
                 "process.stdout.write(JSON.stringify({"
                 "runtime: buildRuntimeViewModel(payloads.runtime),"
                 "freqtrade: buildFreqtradeViewModel(payloads.freqtrade),"
-                "chain: buildChainViewModel(payloads.chain)"
+                "chain: buildChainViewModel(payloads.chain),"
+                "executionSnapshot: buildExecutionSnapshotViewModel(payloads.runtime),"
+                "warnings: buildWarningsViewModel(payloads.health)"
                 "}));",
             ],
             input=script_text,
@@ -270,6 +297,27 @@ class MainApiTests(unittest.TestCase):
                 "signerAddress": "0xabc",
                 "recentAction": "submit_execution | value=0.5 ETH | tx=0x123",
             },
+        )
+        self.assertEqual(
+            helper_output["executionSnapshot"],
+            {
+                "activeExecutions": "1",
+                "executionHistory": "1",
+                "circuitState": "open",
+                "lastTickAt": "2026-04-10T10:00:00Z",
+            },
+        )
+        self.assertEqual(
+            helper_output["warnings"],
+            [
+                "Runtime health: critical",
+                "Circuit breaker: open",
+                "Chain signer: 未配置",
+                "Chain error: chain offline",
+                "Freqtrade error: freqtrade offline",
+                "Autonomy error: autonomy unavailable",
+                "Autonomy error: tick failed",
+            ],
         )
 
     def test_autonomy_management_endpoints_use_controller(self) -> None:
