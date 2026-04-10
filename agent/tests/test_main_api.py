@@ -137,13 +137,12 @@ class MainApiTests(unittest.TestCase):
                 response = client.get("/")
 
         self.assertEqual(response.status_code, 200)
-        for marker in [
-            "console-shell",
-            "observability-grid",
-            "detail-grid",
-            "@media (max-width: 960px)",
-        ]:
+        for marker in ["console-shell", "observability-grid", "detail-grid"]:
             self.assertIn(marker, response.text)
+        self.assertIn("@media (max-width: 960px)", response.text)
+        self.assertIn(".composer-actions {", response.text)
+        self.assertIn("flex-direction: column;", response.text)
+        self.assertIn("align-items: stretch;", response.text)
 
     def test_autonomy_management_endpoints_use_controller(self) -> None:
         controller = FakeAutonomyController()
