@@ -518,7 +518,7 @@
             <div class="meta-box" id="warnings-panel">
               <div class="meta-row">
                 <span class="meta-label">Status</span>
-                <span class="meta-value detail-copy">等待健康检查…</span>
+                <span class="meta-value detail-copy" id="warnings-text">等待健康检查…</span>
               </div>
             </div>
           </article>
@@ -582,7 +582,7 @@
       const newSessionButtonEl = document.getElementById("new-session-button");
       const connectionStatusEl = document.getElementById("connection-status");
       const executionSnapshotEl = document.getElementById("execution-snapshot");
-      const warningsPanelEl = document.getElementById("warnings-panel");
+      const warningsTextEl = document.getElementById("warnings-text");
       const guardActionSelectEl = document.getElementById("guard-action-select");
       const guardActionButtonEl = document.getElementById("guard-action-button");
 
@@ -754,7 +754,7 @@
           warnings.push("Chain signer: 未配置");
         }
 
-        warningsPanelEl.textContent = warnings.length > 0 ? warnings.join("\n") : "No active warnings.";
+        warningsTextEl.textContent = warnings.length > 0 ? warnings.join("\n") : "No active warnings.";
       }
 
       function updateGuardSummary(payload) {
@@ -781,7 +781,7 @@
           chainIdentifierEl.textContent = "读取失败";
           chainActivityDetailEl.textContent = "读取失败";
           freqtradeStateEl.textContent = "读取失败";
-          warningsPanelEl.textContent = "读取失败";
+          warningsTextEl.textContent = "读取失败";
         }
       }
 

@@ -169,6 +169,7 @@ class MainApiTests(unittest.TestCase):
             'id="chain-identifier"',
             'id="execution-snapshot"',
             'id="warnings-panel"',
+            'id="warnings-text"',
         ]:
             self.assertIn(marker, response.text)
 
