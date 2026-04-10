@@ -155,6 +155,23 @@ class MainApiTests(unittest.TestCase):
             normalized_html,
         )
 
+    def test_chat_page_renders_runtime_freqtrade_chain_detail_targets(self) -> None:
+        controller = FakeAutonomyController()
+
+        with patch.object(main, "get_autonomy_controller", return_value=controller):
+            with TestClient(main.app) as client:
+                response = client.get("/")
+
+        self.assertEqual(response.status_code, 200)
+        for marker in [
+            'id="runtime-status"',
+            'id="freqtrade-state"',
+            'id="chain-identifier"',
+            'id="execution-snapshot"',
+            'id="warnings-panel"',
+        ]:
+            self.assertIn(marker, response.text)
+
     def test_chat_page_view_model_helpers_map_observability_payload_fields(
         self,
     ) -> None:

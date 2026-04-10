@@ -105,6 +105,10 @@
         word-break: break-word;
       }
 
+      .detail-copy {
+        white-space: pre-wrap;
+      }
+
       .button-grid {
         display: grid;
         gap: 10px;
@@ -456,16 +460,8 @@
                 <span class="meta-value" id="message-count">0</span>
               </div>
               <div class="meta-row">
-                <span class="meta-label">运行状态</span>
-                <span class="meta-value" id="guard-running">未查询</span>
-              </div>
-              <div class="meta-row">
-                <span class="meta-label">健康状态</span>
-                <span class="meta-value" id="guard-health">未查询</span>
-              </div>
-              <div class="meta-row">
-                <span class="meta-label">最近建议</span>
-                <span class="meta-value" id="guard-decision">未查询</span>
+                <span class="meta-label">状态概览</span>
+                <span class="meta-value detail-copy" id="runtime-status">未查询</span>
               </div>
             </div>
           </article>
@@ -476,12 +472,8 @@
             </div>
             <div class="meta-box">
               <div class="meta-row">
-                <span class="meta-label">运行状态</span>
-                <span class="meta-value" id="freqtrade-running-state">未查询</span>
-              </div>
-              <div class="meta-row">
-                <span class="meta-label">Open Trades</span>
-                <span class="meta-value" id="freqtrade-open-trades">未查询</span>
+                <span class="meta-label">交易状态</span>
+                <span class="meta-value detail-copy" id="freqtrade-state">未查询</span>
               </div>
             </div>
           </article>
@@ -492,12 +484,8 @@
             </div>
             <div class="meta-box">
               <div class="meta-row">
-                <span class="meta-label">Chain Signer</span>
-                <span class="meta-value" id="chain-signer-address">未查询</span>
-              </div>
-              <div class="meta-row">
-                <span class="meta-label">Recent Action</span>
-                <span class="meta-value" id="recent-chain-action">暂无</span>
+                <span class="meta-label">链上标识</span>
+                <span class="meta-value detail-copy" id="chain-identifier">未查询</span>
               </div>
             </div>
           </article>
@@ -511,7 +499,7 @@
             <div class="meta-box">
               <div class="meta-row">
                 <span class="meta-label">Summary</span>
-                <span class="meta-value" id="recent-chain-action-detail">等待健康检查…</span>
+                <span class="meta-value detail-copy" id="chain-activity-detail">等待健康检查…</span>
               </div>
             </div>
           </article>
@@ -520,17 +508,17 @@
             <div class="console-card-header panel-card-header">
               <h3 class="panel-title">Execution Snapshot</h3>
             </div>
-            <div class="guard-result" id="guard-result">等待操作…</div>
+            <div class="guard-result" id="execution-snapshot">等待操作…</div>
           </article>
 
           <article class="card console-card panel-card">
             <div class="console-card-header panel-card-header">
               <h3 class="panel-title">Warnings</h3>
             </div>
-            <div class="meta-box">
+            <div class="meta-box" id="warnings-panel">
               <div class="meta-row">
                 <span class="meta-label">Status</span>
-                <span class="meta-value">No warnings wired yet.</span>
+                <span class="meta-value detail-copy">等待健康检查…</span>
               </div>
             </div>
           </article>
@@ -584,20 +572,17 @@
 
       const sessionIdEl = document.getElementById("session-id");
       const messageCountEl = document.getElementById("message-count");
-      const guardRunningEl = document.getElementById("guard-running");
-      const guardHealthEl = document.getElementById("guard-health");
-      const guardDecisionEl = document.getElementById("guard-decision");
-      const chainSignerAddressEl = document.getElementById("chain-signer-address");
-      const recentChainActionEl = document.getElementById("recent-chain-action");
-      const recentChainActionDetailEl = document.getElementById("recent-chain-action-detail");
-      const freqtradeRunningStateEl = document.getElementById("freqtrade-running-state");
-      const freqtradeOpenTradesEl = document.getElementById("freqtrade-open-trades");
+      const runtimeStatusEl = document.getElementById("runtime-status");
+      const chainIdentifierEl = document.getElementById("chain-identifier");
+      const chainActivityDetailEl = document.getElementById("chain-activity-detail");
+      const freqtradeStateEl = document.getElementById("freqtrade-state");
       const messagesEl = document.getElementById("messages");
       const composerEl = document.getElementById("composer");
       const sendButtonEl = document.getElementById("send-button");
       const newSessionButtonEl = document.getElementById("new-session-button");
       const connectionStatusEl = document.getElementById("connection-status");
-      const guardResultEl = document.getElementById("guard-result");
+      const executionSnapshotEl = document.getElementById("execution-snapshot");
+      const warningsPanelEl = document.getElementById("warnings-panel");
       const guardActionSelectEl = document.getElementById("guard-action-select");
       const guardActionButtonEl = document.getElementById("guard-action-button");
 
@@ -639,17 +624,19 @@
         messagesEl.scrollTop = messagesEl.scrollHeight;
       }
 
-      function updateGuardSummary(payload) {
-        const viewModel = buildRuntimeViewModel(payload);
-        guardRunningEl.textContent = viewModel.running;
-        guardHealthEl.textContent = viewModel.health;
-        guardDecisionEl.textContent = viewModel.decision;
+      function renderRuntimeStatus(viewModel) {
+        runtimeStatusEl.textContent = [
+          `运行状态: ${viewModel.running}`,
+          `健康状态: ${viewModel.health}`,
+          `熔断状态: ${viewModel.circuitState}`,
+          `最近建议: ${viewModel.decision}`,
+        ].join("\n");
       }
 
       function updateGuardResult(title, payload, isError = false) {
-        guardResultEl.textContent =
+        executionSnapshotEl.textContent =
           `${title}\n\n${typeof payload === "string" ? payload : JSON.stringify(payload, null, 2)}`;
-        guardResultEl.style.color = isError ? "var(--danger)" : "var(--ink)";
+        executionSnapshotEl.style.color = isError ? "var(--danger)" : "var(--ink)";
       }
 
       function summarizeRecentChainAction(action) {
@@ -733,30 +720,68 @@
         };
       }
 
+      function renderFreqtradeState(viewModel) {
+        freqtradeStateEl.textContent = [
+          `运行状态: ${viewModel.running}`,
+          `Open Trades: ${viewModel.openTrades}`,
+        ].join("\n");
+      }
+
+      function renderChainIdentifier(viewModel) {
+        chainIdentifierEl.textContent = [
+          `Signer: ${viewModel.signerAddress}`,
+          `Recent Action: ${viewModel.recentAction}`,
+        ].join("\n");
+        chainActivityDetailEl.textContent = viewModel.recentAction;
+      }
+
+      function renderWarningsPanel(payload) {
+        const runtime = buildRuntimeViewModel(payload);
+        const freqtrade = buildFreqtradeViewModel(payload);
+        const chain = buildChainViewModel(payload);
+        const warnings = [];
+
+        if (runtime.health !== "ok") {
+          warnings.push(`Runtime health: ${runtime.health}`);
+        }
+        if (runtime.circuitState !== "closed" && runtime.circuitState !== "未知") {
+          warnings.push(`Circuit breaker: ${runtime.circuitState}`);
+        }
+        if (freqtrade.running.includes("不可用") || freqtrade.openTrades === "读取失败") {
+          warnings.push(`Freqtrade: ${freqtrade.running}`);
+        }
+        if (chain.signerAddress === "未配置") {
+          warnings.push("Chain signer: 未配置");
+        }
+
+        warningsPanelEl.textContent = warnings.length > 0 ? warnings.join("\n") : "No active warnings.";
+      }
+
+      function updateGuardSummary(payload) {
+        renderRuntimeStatus(buildRuntimeViewModel(payload));
+      }
+
       function updateChainStatus(payload) {
-        const viewModel = buildChainViewModel(payload);
-        chainSignerAddressEl.textContent = viewModel.signerAddress;
-        recentChainActionEl.textContent = viewModel.recentAction;
-        recentChainActionDetailEl.textContent = viewModel.recentAction;
+        renderChainIdentifier(buildChainViewModel(payload));
       }
 
       function updateFreqtradeStatus(payload) {
-        const viewModel = buildFreqtradeViewModel(payload);
-        freqtradeRunningStateEl.textContent = viewModel.running;
-        freqtradeOpenTradesEl.textContent = viewModel.openTrades;
+        renderFreqtradeState(buildFreqtradeViewModel(payload));
       }
 
       async function refreshHealth() {
         try {
           const payload = await requestJson("/health", { method: "GET" });
+          updateGuardSummary(payload);
           updateChainStatus(payload);
           updateFreqtradeStatus(payload);
+          renderWarningsPanel(payload);
         } catch (_error) {
-          chainSignerAddressEl.textContent = "读取失败";
-          recentChainActionEl.textContent = "读取失败";
-          recentChainActionDetailEl.textContent = "读取失败";
-          freqtradeRunningStateEl.textContent = "读取失败";
-          freqtradeOpenTradesEl.textContent = "读取失败";
+          runtimeStatusEl.textContent = "读取失败";
+          chainIdentifierEl.textContent = "读取失败";
+          chainActivityDetailEl.textContent = "读取失败";
+          freqtradeStateEl.textContent = "读取失败";
+          warningsPanelEl.textContent = "读取失败";
         }
       }
 
