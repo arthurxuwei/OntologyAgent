@@ -112,6 +112,23 @@ class MainApiTests(unittest.TestCase):
         self.assertIn("OntologyAgent Console", response.text)
         self.assertIn("/agent/sessions", response.text)
 
+    def test_chat_page_console_first_sections(self) -> None:
+        controller = FakeAutonomyController()
+
+        with patch.object(main, "get_autonomy_controller", return_value=controller):
+            with TestClient(main.app) as client:
+                response = client.get("/")
+
+        self.assertEqual(response.status_code, 200)
+        for section_heading in [
+            "Runtime",
+            "Freqtrade",
+            "Chain",
+            "Recent Chain Action",
+            "管家",
+        ]:
+            self.assertIn(section_heading, response.text)
+
     def test_autonomy_management_endpoints_use_controller(self) -> None:
         controller = FakeAutonomyController()
         with patch.object(main, "get_autonomy_controller", return_value=controller):
