@@ -139,10 +139,11 @@ class MainApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         for marker in ["console-shell", "observability-grid", "detail-grid"]:
             self.assertIn(marker, response.text)
-        self.assertIn("@media (max-width: 960px)", response.text)
-        self.assertIn(".composer-actions {", response.text)
-        self.assertIn("flex-direction: column;", response.text)
-        self.assertIn("align-items: stretch;", response.text)
+        normalized_html = " ".join(response.text.split())
+        self.assertIn(
+            "@media (max-width: 960px) { .topbar { padding: 16px; } .console-layout { gap: 16px; } .topbar-actions, .observability-grid, .detail-grid { grid-template-columns: 1fr; } .chat-panel { min-height: auto; } .composer-actions { flex-direction: column; align-items: stretch; }",
+            normalized_html,
+        )
 
     def test_autonomy_management_endpoints_use_controller(self) -> None:
         controller = FakeAutonomyController()
