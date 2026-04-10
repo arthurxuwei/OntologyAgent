@@ -145,7 +145,9 @@ class MainApiTests(unittest.TestCase):
             normalized_html,
         )
 
-    def test_chat_page_declares_observability_view_model_helpers(self) -> None:
+    def test_chat_page_view_model_helpers_map_observability_payload_fields(
+        self,
+    ) -> None:
         controller = FakeAutonomyController()
 
         with patch.object(main, "get_autonomy_controller", return_value=controller):
@@ -155,10 +157,20 @@ class MainApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         for marker in [
             "function buildRuntimeViewModel",
+            "ledger.healthStatus",
+            "source.summary?.circuitState",
             "function buildFreqtradeViewModel",
+            "status.openTradeCount",
             "function buildChainViewModel",
+            "payload?.recentChainAction",
+            "summary.kind",
+            "summary.txHash",
         ]:
             self.assertIn(marker, response.text)
+        self.assertNotIn(
+            'health: ledger.healthStatus ?? source.summary?.circuitState ?? "未知"',
+            response.text,
+        )
 
     def test_autonomy_management_endpoints_use_controller(self) -> None:
         controller = FakeAutonomyController()

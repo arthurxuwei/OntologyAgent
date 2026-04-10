@@ -675,7 +675,8 @@
 
         return {
           running: source.running ? "运行中" : source.enabled ? "已启用，待运行" : "已停止",
-          health: ledger.healthStatus ?? source.summary?.circuitState ?? "未知",
+          health: ledger.healthStatus ?? "未知",
+          circuitState: source.summary?.circuitState ?? "未知",
           decision: ledger.lastDecision?.action ?? "暂无",
         };
       }
