@@ -232,6 +232,75 @@ class MainApiTests(unittest.TestCase):
         self.assertEqual(payload["freqtradeStatus"]["openTradeCount"], 2)
         self.assertEqual(payload["freqtradeStatus"]["state"], "running")
 
+    def test_health_console_fields_include_expected_contract(self) -> None:
+        controller = FakeAutonomyController()
+
+        with (
+            patch.object(main, "get_autonomy_controller", return_value=controller),
+            patch.object(
+                main,
+                "get_chain_mcp_client",
+                return_value=FakeToolClient(["chain_get_wallet_state"]),
+            ),
+            patch.object(
+                main,
+                "get_freqtrade_mcp_client",
+                return_value=FakeToolClient(["freqtrade_status"]),
+            ),
+            patch.object(
+                main,
+                "get_chain_wallet_state",
+                return_value={"wallet": {"address": "0xabc", "balanceEth": "1.0"}},
+            ),
+            patch.object(
+                main,
+                "get_freqtrade_status_snapshot",
+                return_value={"openTradeCount": 2, "state": "running"},
+            ),
+            patch.object(
+                main,
+                "get_chain_activity_store",
+            ) as activity_store_factory,
+        ):
+            activity_store_factory.return_value.get.return_value = {
+                "tool": "chain_sign_transfer",
+                "summary": {"kind": "sign_transfer", "txHash": "0x123"},
+            }
+            with TestClient(main.app) as client:
+                response = client.get("/health")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertIn("autonomy", payload)
+        self.assertIn("freqtradeStatus", payload)
+        self.assertIn("chainWallet", payload)
+        self.assertIn("recentChainAction", payload)
+        self.assertEqual(payload["autonomy"]["summary"]["activeExecutionCount"], 1)
+        self.assertEqual(payload["freqtradeStatus"]["state"], "running")
+        self.assertEqual(payload["chainWallet"]["wallet"]["address"], "0xabc")
+        self.assertEqual(payload["recentChainAction"]["summary"]["txHash"], "0x123")
+
+    def test_autonomy_start_and_stop_summary_shape_matches_console_contract(
+        self,
+    ) -> None:
+        controller = FakeAutonomyController()
+
+        with patch.object(main, "get_autonomy_controller", return_value=controller):
+            with TestClient(main.app) as client:
+                start_response = client.post("/autonomy/start")
+                stop_response = client.post("/autonomy/stop")
+
+        self.assertEqual(start_response.status_code, 200)
+        self.assertEqual(stop_response.status_code, 200)
+        self.assertEqual(
+            start_response.json()["summary"],
+            {"activeExecutionCount": 1, "circuitState": "open"},
+        )
+        self.assertEqual(
+            stop_response.json()["summary"],
+            {"activeExecutionCount": 1, "circuitState": "open"},
+        )
+
     def test_build_tools_exposes_chain_settlement_query_tools(self) -> None:
         tool_names = {tool.name for tool in main.build_tools()}
 
