@@ -237,6 +237,17 @@ class MainApiTests(unittest.TestCase):
                     },
                 },
             },
+            "chainWrapped": {
+                "chainWallet": {"result": {"wallet": {"address": "0xdef"}}},
+                "recentChainAction": {
+                    "tool": "chain_submit_execution",
+                    "summary": {
+                        "kind": "submit_execution",
+                        "txHash": "0x456",
+                        "valueEth": "0.25",
+                    },
+                },
+            },
             "health": {
                 "autonomy": {
                     "enabled": False,
@@ -256,6 +267,15 @@ class MainApiTests(unittest.TestCase):
                     "error": "snapshot unavailable",
                 },
                 "chainWallet": {"wallet": {}},
+            },
+            "healthWrapped": {
+                "autonomy": {
+                    "enabled": False,
+                    "running": False,
+                    "summary": {"circuitState": "closed"},
+                    "ledger": {"healthStatus": "ok"},
+                },
+                "chainWallet": {"result": {"wallet": {"address": "0xdef"}}},
             },
         }
         node_result = subprocess.run(
@@ -281,8 +301,10 @@ class MainApiTests(unittest.TestCase):
                 "runtime: buildRuntimeViewModel(payloads.runtime),"
                 "freqtrade: buildFreqtradeViewModel(payloads.freqtrade),"
                 "chain: buildChainViewModel(payloads.chain),"
+                "chainWrapped: buildChainViewModel(payloads.chainWrapped),"
                 "executionSnapshot: buildExecutionSnapshotViewModel(payloads.runtime),"
-                "warnings: buildWarningsViewModel(payloads.health)"
+                "warnings: buildWarningsViewModel(payloads.health),"
+                "warningsWrapped: buildWarningsViewModel(payloads.healthWrapped)"
                 "}));",
             ],
             input=script_text,
@@ -315,6 +337,13 @@ class MainApiTests(unittest.TestCase):
             },
         )
         self.assertEqual(
+            helper_output["chainWrapped"],
+            {
+                "signerAddress": "0xdef",
+                "recentAction": "submit_execution | value=0.25 ETH | tx=0x456",
+            },
+        )
+        self.assertEqual(
             helper_output["executionSnapshot"],
             {
                 "activeExecutions": "1",
@@ -336,6 +365,7 @@ class MainApiTests(unittest.TestCase):
                 "Autonomy error: tick failed",
             ],
         )
+        self.assertEqual(helper_output["warningsWrapped"], [])
 
     def test_autonomy_management_endpoints_use_controller(self) -> None:
         controller = FakeAutonomyController()

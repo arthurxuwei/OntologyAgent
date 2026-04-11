@@ -703,7 +703,7 @@
       }
 
       function buildChainViewModel(payload) {
-        const wallet = payload?.chainWallet?.wallet ?? {};
+        const wallet = payload?.chainWallet?.wallet ?? payload?.chainWallet?.result?.wallet ?? {};
         const recentAction = summarizeRecentChainAction(payload?.recentChainAction);
 
         return {
