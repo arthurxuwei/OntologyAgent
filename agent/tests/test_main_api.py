@@ -340,6 +340,81 @@ class MainApiTests(unittest.TestCase):
         self.assertEqual(helper_output["after"], helper_output["before"])
         self.assertIn('"action": "hold"', helper_output["actionResult"])
 
+    def test_action_triggered_refresh_runs_once_more_after_in_flight_poll_settles(
+        self,
+    ) -> None:
+        controller = FakeAutonomyController()
+
+        with patch.object(main, "get_autonomy_controller", return_value=controller):
+            with TestClient(main.app) as client:
+                response = client.get("/")
+
+        self.assertEqual(response.status_code, 200)
+        script_text = _extract_inline_script(response.text)
+        node_result = subprocess.run(
+            [
+                "node",
+                "-e",
+                "const fs = require('fs');"
+                "const scriptText = fs.readFileSync(0, 'utf8');"
+                "const elements = new Map();"
+                "const makeElement = () => ({"
+                "textContent: '', style: {}, disabled: false, value: '/autonomy/status',"
+                "appendChild() {}, append() {}, addEventListener() {}, focus() {},"
+                "scrollTop: 0, scrollHeight: 0"
+                "});"
+                "global.document = {"
+                "getElementById(id) {"
+                "if (!elements.has(id)) elements.set(id, makeElement());"
+                "return elements.get(id);"
+                "},"
+                "querySelectorAll() { return []; },"
+                "createElement() { return makeElement(); },"
+                "createTextNode(text) { return text; }"
+                "};"
+                "const healthPayloads = ["
+                "{ autonomy: { enabled: true, running: true, summary: { circuitState: 'closed' }, ledger: { healthStatus: 'ok', lastDecision: { action: 'buy' } } } },"
+                "{ autonomy: { enabled: true, running: true, summary: { circuitState: 'closed' }, ledger: { healthStatus: 'ok', lastDecision: { action: 'sell' } } } }"
+                "];"
+                "let resolveFirstHealth;"
+                "let healthCalls = 0;"
+                "global.fetch = async (url) => {"
+                "if (url === '/health') {"
+                "const payload = healthPayloads[healthCalls];"
+                "healthCalls += 1;"
+                "if (healthCalls === 1) {"
+                "return { ok: true, json: async () => await new Promise((resolve) => { resolveFirstHealth = () => resolve(payload); }) };"
+                "}"
+                "return { ok: true, json: async () => payload };"
+                "}"
+                "if (url === '/autonomy/tick') { return { ok: true, json: async () => ({ ok: true }) }; }"
+                "throw new Error(`Unexpected URL: ${url}`);"
+                "};"
+                "global.setInterval = () => 0;"
+                "(async () => {"
+                "eval(scriptText);"
+                "await runGuardAction('/autonomy/tick', '执行理财子 Tick');"
+                "resolveFirstHealth();"
+                "await new Promise((resolve) => setImmediate(resolve));"
+                "await new Promise((resolve) => setImmediate(resolve));"
+                "process.stdout.write(JSON.stringify({"
+                "healthCalls,"
+                "runtimeStatus: elements.get('runtime-status').textContent"
+                "}));"
+                "})().catch((error) => { console.error(error); process.exit(1); });",
+            ],
+            input=script_text,
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(node_result.returncode, 0, node_result.stderr)
+        helper_output = json.loads(node_result.stdout)
+        self.assertEqual(helper_output["healthCalls"], 2)
+        self.assertEqual(
+            helper_output["runtimeStatus"],
+            "运行状态: 运行中\n健康状态: ok\n熔断状态: closed\n最近建议: sell",
+        )
+
     def test_chat_page_view_model_helpers_map_observability_payload_fields(
         self,
     ) -> None:

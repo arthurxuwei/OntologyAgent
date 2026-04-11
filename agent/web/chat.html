@@ -586,6 +586,7 @@
       };
       const DASHBOARD_REFRESH_INTERVAL_MS = 5000;
       let dashboardRefreshPromise = null;
+      let dashboardRefreshQueued = false;
 
       function setBusy(busy, label = "Working") {
         state.busy = busy;
@@ -821,9 +822,11 @@
 
       async function refreshDashboard() {
         if (dashboardRefreshPromise) {
+          dashboardRefreshQueued = true;
           return dashboardRefreshPromise;
         }
 
+        dashboardRefreshQueued = false;
         dashboardRefreshPromise = (async () => {
           try {
             const payload = await requestJson("/health", { method: "GET" });
@@ -844,7 +847,11 @@
           }
         })();
 
-        return dashboardRefreshPromise;
+        await dashboardRefreshPromise;
+
+        if (dashboardRefreshQueued) {
+          return refreshDashboard();
+        }
       }
 
       async function requestJson(url, options = {}) {
