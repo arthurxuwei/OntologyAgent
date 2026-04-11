@@ -237,7 +237,7 @@ class MainApiTests(unittest.TestCase):
                 "freqtradeError": "freqtrade offline",
                 "freqtradeStatus": {
                     "runningState": "unavailable",
-                    "error": "freqtrade offline",
+                    "error": "snapshot unavailable",
                 },
                 "chainWallet": {"wallet": {}},
             },
@@ -315,6 +315,7 @@ class MainApiTests(unittest.TestCase):
                 "Chain signer: 未配置",
                 "Chain error: chain offline",
                 "Freqtrade error: freqtrade offline",
+                "Freqtrade error: snapshot unavailable",
                 "Autonomy error: autonomy unavailable",
                 "Autonomy error: tick failed",
             ],

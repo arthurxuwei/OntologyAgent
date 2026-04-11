@@ -758,6 +758,9 @@
         if (payload?.freqtradeError) {
           pushWarning(`Freqtrade error: ${payload.freqtradeError}`);
         }
+        if (payload?.freqtradeStatus?.error) {
+          pushWarning(`Freqtrade error: ${payload.freqtradeStatus.error}`);
+        }
         if (source.error) {
           pushWarning(`Autonomy error: ${source.error}`);
         }
