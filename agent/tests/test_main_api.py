@@ -174,6 +174,22 @@ class MainApiTests(unittest.TestCase):
         ]:
             self.assertIn(marker, response.text)
 
+    def test_chat_page_console_action_buttons_and_refresh_helpers(self) -> None:
+        controller = FakeAutonomyController()
+
+        with patch.object(main, "get_autonomy_controller", return_value=controller):
+            with TestClient(main.app) as client:
+                response = client.get("/")
+
+        self.assertEqual(response.status_code, 200)
+        for marker in [
+            'id="start-button"',
+            'id="tick-button"',
+            'id="stop-button"',
+            "async function refreshDashboard",
+        ]:
+            self.assertIn(marker, response.text)
+
     def test_chat_page_view_model_helpers_map_observability_payload_fields(
         self,
     ) -> None:

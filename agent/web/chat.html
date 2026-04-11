@@ -434,13 +434,9 @@
 
         <div class="topbar-actions">
           <button class="primary" id="new-session-button" data-control-button>新建会话</button>
-          <select class="guard-select" id="guard-action-select" data-control-button>
-            <option value="/autonomy/status">查看理财子状态</option>
-            <option value="/autonomy/start">启动理财子</option>
-            <option value="/autonomy/tick">执行一轮理财子 Tick</option>
-            <option value="/autonomy/stop">停止理财子</option>
-          </select>
-          <button class="secondary" id="guard-action-button" data-control-button>执行理财子操作</button>
+          <button class="secondary" id="start-button" data-control-button>启动理财子</button>
+          <button class="ghost" id="tick-button" data-control-button>执行一轮理财子 Tick</button>
+          <button class="ghost" id="stop-button" data-control-button>停止理财子</button>
         </div>
       </section>
 
@@ -579,11 +575,11 @@
       const executionSnapshotEl = document.getElementById("execution-snapshot");
       const actionResultEl = document.getElementById("action-result");
       const warningsTextEl = document.getElementById("warnings-text");
-      const guardActionSelectEl = document.getElementById("guard-action-select");
-      const guardActionButtonEl = document.getElementById("guard-action-button");
+      const startButtonEl = document.getElementById("start-button");
+      const tickButtonEl = document.getElementById("tick-button");
+      const stopButtonEl = document.getElementById("stop-button");
 
       const GUARD_ACTION_LABELS = {
-        "/autonomy/status": "查看理财子状态",
         "/autonomy/start": "启动理财子",
         "/autonomy/tick": "执行理财子 Tick",
         "/autonomy/stop": "停止理财子",
@@ -816,7 +812,7 @@
         renderExecutionSnapshot(buildExecutionSnapshotViewModel(payload));
       }
 
-      async function refreshHealth() {
+      async function refreshDashboard() {
         try {
           const payload = await requestJson("/health", { method: "GET" });
           updateGuardSummary(payload);
@@ -870,7 +866,7 @@
           updateGuardResult("创建会话失败", error.message, true);
         } finally {
           setBusy(false);
-          refreshHealth();
+          refreshDashboard();
         }
       }
 
@@ -908,7 +904,7 @@
         } finally {
           setBusy(false);
           composerEl.focus();
-          refreshHealth();
+          refreshDashboard();
         }
       }
 
@@ -924,15 +920,20 @@
           updateGuardResult(`${label} 失败`, error.message, true);
         } finally {
           setBusy(false);
-          refreshHealth();
+          refreshDashboard();
         }
       }
 
       sendButtonEl.addEventListener("click", sendMessage);
       newSessionButtonEl.addEventListener("click", createSession);
-      guardActionButtonEl.addEventListener("click", () => {
-        const path = guardActionSelectEl.value;
-        runGuardAction(path, GUARD_ACTION_LABELS[path] ?? "执行 Guard 操作");
+      startButtonEl.addEventListener("click", () => {
+        runGuardAction("/autonomy/start", GUARD_ACTION_LABELS["/autonomy/start"]);
+      });
+      tickButtonEl.addEventListener("click", () => {
+        runGuardAction("/autonomy/tick", GUARD_ACTION_LABELS["/autonomy/tick"]);
+      });
+      stopButtonEl.addEventListener("click", () => {
+        runGuardAction("/autonomy/stop", GUARD_ACTION_LABELS["/autonomy/stop"]);
       });
       composerEl.addEventListener("keydown", (event) => {
         if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
@@ -941,8 +942,7 @@
         }
       });
 
-      runGuardAction("/autonomy/status", "初始化理财子状态");
-      refreshHealth();
+      refreshDashboard();
     </script>
   </body>
 </html>
