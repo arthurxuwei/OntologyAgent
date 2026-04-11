@@ -585,6 +585,7 @@
         "/autonomy/stop": "停止理财子",
       };
       const DASHBOARD_REFRESH_INTERVAL_MS = 5000;
+      let dashboardRefreshPromise = null;
 
       function setBusy(busy, label = "Working") {
         state.busy = busy;
@@ -814,21 +815,31 @@
       }
 
       async function refreshDashboard() {
-        try {
-          const payload = await requestJson("/health", { method: "GET" });
-          updateGuardSummary(payload);
-          updateChainStatus(payload);
-          updateFreqtradeStatus(payload);
-          updateExecutionSnapshot(payload);
-          renderWarningsPanel(payload);
-        } catch (_error) {
-          runtimeStatusEl.textContent = "读取失败";
-          chainIdentifierEl.textContent = "读取失败";
-          chainActivityDetailEl.textContent = "读取失败";
-          freqtradeStateEl.textContent = "读取失败";
-          executionSnapshotEl.textContent = "读取失败";
-          warningsTextEl.textContent = "读取失败";
+        if (dashboardRefreshPromise) {
+          return dashboardRefreshPromise;
         }
+
+        dashboardRefreshPromise = (async () => {
+          try {
+            const payload = await requestJson("/health", { method: "GET" });
+            updateGuardSummary(payload);
+            updateChainStatus(payload);
+            updateFreqtradeStatus(payload);
+            updateExecutionSnapshot(payload);
+            renderWarningsPanel(payload);
+          } catch (_error) {
+            runtimeStatusEl.textContent = "读取失败";
+            chainIdentifierEl.textContent = "读取失败";
+            chainActivityDetailEl.textContent = "读取失败";
+            freqtradeStateEl.textContent = "读取失败";
+            executionSnapshotEl.textContent = "读取失败";
+            warningsTextEl.textContent = "读取失败";
+          } finally {
+            dashboardRefreshPromise = null;
+          }
+        })();
+
+        return dashboardRefreshPromise;
       }
 
       async function requestJson(url, options = {}) {

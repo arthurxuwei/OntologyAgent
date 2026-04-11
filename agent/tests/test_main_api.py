@@ -201,6 +201,21 @@ class MainApiTests(unittest.TestCase):
         script_text = _extract_inline_script(response.text)
         self.assertIn("setInterval(refreshDashboard", script_text)
 
+    def test_chat_page_refresh_dashboard_skips_overlapping_fetches(self) -> None:
+        controller = FakeAutonomyController()
+
+        with patch.object(main, "get_autonomy_controller", return_value=controller):
+            with TestClient(main.app) as client:
+                response = client.get("/")
+
+        self.assertEqual(response.status_code, 200)
+        script_text = _extract_inline_script(response.text)
+        self.assertIn("let dashboardRefreshPromise = null;", script_text)
+        self.assertIn("if (dashboardRefreshPromise) {", script_text)
+        self.assertIn("return dashboardRefreshPromise;", script_text)
+        self.assertIn("dashboardRefreshPromise = (async () => {", script_text)
+        self.assertIn("dashboardRefreshPromise = null;", script_text)
+
     def test_chat_page_view_model_helpers_map_observability_payload_fields(
         self,
     ) -> None:
