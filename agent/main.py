@@ -921,9 +921,11 @@ def health() -> dict[str, Any]:
         )
 
     chain_wallet: Optional[dict[str, Any]] = None
+    chain_wallet_error: Optional[str] = None
     try:
         chain_wallet = asyncio.run(get_chain_wallet_state())
-    except Exception:
+    except Exception as error:
+        chain_wallet_error = str(error)
         chain_wallet = None
 
     freqtrade_status: Optional[dict[str, Any]] = None
@@ -950,6 +952,7 @@ def health() -> dict[str, Any]:
         "chainTools": chain_tools,
         "chainError": chain_error,
         "chainWallet": chain_wallet,
+        "chainWalletError": chain_wallet_error,
         "recentChainAction": get_chain_activity_store().get(),
         "freqtradeMcpUrl": FREQTRADE_MCP_URL,
         "freqtradeTools": freqtrade_tools,

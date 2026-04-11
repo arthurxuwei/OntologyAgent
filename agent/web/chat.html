@@ -34,7 +34,8 @@
           linear-gradient(180deg, #fbf7ef 0%, var(--bg) 100%);
       }
 
-      .shell {
+      .shell,
+      .console-shell {
         max-width: 1240px;
         margin: 0 auto;
         padding: 32px 20px 28px;
@@ -104,6 +105,10 @@
         word-break: break-word;
       }
 
+      .detail-copy {
+        white-space: pre-wrap;
+      }
+
       .button-grid {
         display: grid;
         gap: 10px;
@@ -146,18 +151,74 @@
         color: var(--ink);
       }
 
-      .chat {
+      .topbar {
+        margin-bottom: 22px;
+        padding: 18px 20px;
         display: grid;
+        gap: 16px;
       }
 
-      .workspace {
-        min-height: 72vh;
-        display: grid;
-        grid-template-columns: minmax(360px, 420px) minmax(0, 1fr);
+      .topbar-main {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        flex-wrap: wrap;
       }
 
-      .chat-main {
-        min-height: 72vh;
+      .topbar-main h2 {
+        margin: 0;
+        font-size: 20px;
+      }
+
+      .topbar-actions {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .console-layout {
+        display: grid;
+        gap: 22px;
+      }
+
+      .observability-grid,
+      .detail-grid {
+        display: grid;
+        gap: 16px;
+      }
+
+      .observability-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .detail-grid {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+      }
+
+      .console-card,
+      .panel-card {
+        padding: 18px;
+        display: grid;
+        gap: 14px;
+        align-content: start;
+      }
+
+      .console-card-header,
+      .panel-card-header {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .console-card-header .panel-title,
+      .panel-card-header .panel-title {
+        margin-bottom: 0;
+      }
+
+      .chat-panel {
+        min-height: 58vh;
         display: grid;
         grid-template-rows: auto 1fr auto;
       }
@@ -263,35 +324,6 @@
         gap: 12px;
       }
 
-      .guard-panel {
-        padding: 24px 20px;
-        border-right: 1px solid rgba(215, 201, 170, 0.7);
-        background:
-          linear-gradient(180deg, rgba(242, 229, 198, 0.35), rgba(255, 249, 239, 0.72));
-      }
-
-      .guard-shell {
-        display: grid;
-        gap: 14px;
-        padding: 18px;
-        border-radius: 18px;
-        border: 1px solid rgba(215, 201, 170, 0.9);
-        background: linear-gradient(180deg, rgba(242, 229, 198, 0.45), rgba(255, 249, 239, 0.72));
-      }
-
-      .guard-grid {
-        display: grid;
-        grid-template-columns: 1fr;
-        gap: 16px;
-      }
-
-      .guard-actions {
-        display: grid;
-        grid-template-columns: 1fr;
-        gap: 10px;
-        align-content: start;
-      }
-
       .guard-select {
         width: 100%;
         border-radius: 14px;
@@ -306,17 +338,6 @@
       .guard-select:focus {
         outline: 2px solid rgba(15, 118, 110, 0.18);
         border-color: var(--accent);
-      }
-
-      .guard-summary {
-        display: grid;
-        gap: 12px;
-      }
-
-      .guard-summary-grid {
-        display: grid;
-        grid-template-columns: 1fr;
-        gap: 12px;
       }
 
       .guard-result {
@@ -363,28 +384,31 @@
       }
 
       @media (max-width: 960px) {
-        .workspace,
-        .chat-main {
-          min-height: auto;
+        .topbar {
+          padding: 16px;
         }
 
-        .workspace {
+        .console-layout {
+          gap: 16px;
+        }
+
+        .topbar-actions,
+        .observability-grid,
+        .detail-grid {
           grid-template-columns: 1fr;
         }
 
-        .guard-panel {
-          border-right: 0;
-          border-bottom: 1px solid rgba(215, 201, 170, 0.7);
+        .chat-panel {
+          min-height: auto;
+        }
+
+        .composer-actions {
+          flex-direction: column;
+          align-items: stretch;
         }
 
         .message {
           max-width: 100%;
-        }
-
-        .guard-grid,
-        .guard-summary-grid,
-        .guard-actions {
-          grid-template-columns: 1fr;
         }
 
         .guard-result {
@@ -394,119 +418,140 @@
     </style>
   </head>
   <body>
-    <div class="shell">
+    <div class="shell console-shell">
       <section class="hero">
         <span class="eyebrow">OntologyAgent Console</span>
         <h1>和管家持续对话，同时管理理财子。</h1>
       </section>
 
-      <div class="card chat">
-        <div class="workspace">
-          <section class="guard-panel">
-            <div class="guard-shell">
-              <div>
-                <h3 class="panel-title">理财子控制台</h3>
+      <section class="card topbar">
+        <div class="topbar-main">
+          <div>
+            <h2>Console Controls</h2>
+          </div>
+          <div class="status-pill" id="connection-status">Ready</div>
+        </div>
+
+        <div class="topbar-actions">
+          <button class="primary" id="new-session-button" data-control-button>新建会话</button>
+          <button class="secondary" id="start-button" data-control-button>启动理财子</button>
+          <button class="ghost" id="tick-button" data-control-button>执行一轮理财子 Tick</button>
+          <button class="ghost" id="stop-button" data-control-button>停止理财子</button>
+        </div>
+      </section>
+
+      <div class="console-layout">
+        <section class="observability-grid">
+          <article class="card console-card panel-card">
+            <div class="console-card-header panel-card-header">
+              <h3 class="panel-title">Runtime</h3>
+            </div>
+            <div class="meta-box">
+              <div class="meta-row">
+                <span class="meta-label">Session ID</span>
+                <span class="meta-value" id="session-id">未创建</span>
               </div>
-
-              <div class="guard-grid">
-                <div class="guard-actions">
-                  <button class="primary" id="new-session-button" data-control-button>新建会话</button>
-                  <select class="guard-select" id="guard-action-select" data-control-button>
-                    <option value="/autonomy/status">查看理财子状态</option>
-                    <option value="/autonomy/start">启动理财子</option>
-                    <option value="/autonomy/tick">执行一轮理财子 Tick</option>
-                    <option value="/autonomy/stop">停止理财子</option>
-                  </select>
-                  <button class="secondary" id="guard-action-button" data-control-button>执行理财子操作</button>
-                </div>
-
-                <div class="guard-summary">
-                  <div class="guard-summary-grid">
-                    <div class="meta-box">
-                      <div class="meta-row">
-                        <span class="meta-label">Session ID</span>
-                        <span class="meta-value" id="session-id">未创建</span>
-                      </div>
-                      <div class="meta-row">
-                        <span class="meta-label">消息数</span>
-                        <span class="meta-value" id="message-count">0</span>
-                      </div>
-                    </div>
-
-                    <div class="meta-box">
-                      <div class="meta-row">
-                        <span class="meta-label">运行状态</span>
-                        <span class="meta-value" id="guard-running">未查询</span>
-                      </div>
-                      <div class="meta-row">
-                        <span class="meta-label">健康状态</span>
-                        <span class="meta-value" id="guard-health">未查询</span>
-                      </div>
-                      <div class="meta-row">
-                        <span class="meta-label">最近建议</span>
-                        <span class="meta-value" id="guard-decision">未查询</span>
-                      </div>
-                    </div>
-
-                    <div class="meta-box">
-                      <div class="meta-row">
-                        <span class="meta-label">Chain Signer</span>
-                        <span class="meta-value" id="chain-signer-address">未查询</span>
-                      </div>
-                      <div class="meta-row">
-                        <span class="meta-label">最近链上动作</span>
-                        <span class="meta-value" id="recent-chain-action">暂无</span>
-                      </div>
-                    </div>
-
-                    <div class="meta-box">
-                      <div class="meta-row">
-                        <span class="meta-label">Freqtrade 状态</span>
-                        <span class="meta-value" id="freqtrade-running-state">未查询</span>
-                      </div>
-                      <div class="meta-row">
-                        <span class="meta-label">Open Trades</span>
-                        <span class="meta-value" id="freqtrade-open-trades">未查询</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div>
-                    <span class="meta-label">最近理财子返回</span>
-                    <div class="guard-result" id="guard-result">等待操作…</div>
-                  </div>
-                </div>
+              <div class="meta-row">
+                <span class="meta-label">消息数</span>
+                <span class="meta-value" id="message-count">0</span>
+              </div>
+              <div class="meta-row">
+                <span class="meta-label">状态概览</span>
+                <span class="meta-value detail-copy" id="runtime-status">未查询</span>
               </div>
             </div>
+          </article>
+
+          <article class="card console-card panel-card">
+            <div class="console-card-header panel-card-header">
+              <h3 class="panel-title">Freqtrade</h3>
+            </div>
+            <div class="meta-box">
+              <div class="meta-row">
+                <span class="meta-label">交易状态</span>
+                <span class="meta-value detail-copy" id="freqtrade-state">未查询</span>
+              </div>
+            </div>
+          </article>
+
+          <article class="card console-card panel-card">
+            <div class="console-card-header panel-card-header">
+              <h3 class="panel-title">Chain</h3>
+            </div>
+            <div class="meta-box">
+              <div class="meta-row">
+                <span class="meta-label">链上标识</span>
+                <span class="meta-value detail-copy" id="chain-identifier">未查询</span>
+              </div>
+            </div>
+          </article>
+        </section>
+
+        <section class="detail-grid">
+          <article class="card console-card panel-card">
+            <div class="console-card-header panel-card-header">
+              <h3 class="panel-title">Recent Chain Action</h3>
+            </div>
+            <div class="meta-box">
+              <div class="meta-row">
+                <span class="meta-label">Summary</span>
+                <span class="meta-value detail-copy" id="chain-activity-detail">等待健康检查…</span>
+              </div>
+            </div>
+          </article>
+
+          <article class="card console-card panel-card">
+            <div class="console-card-header panel-card-header">
+              <h3 class="panel-title">Execution Snapshot</h3>
+            </div>
+            <div class="guard-result" id="execution-snapshot">等待健康检查…</div>
+          </article>
+
+          <article class="card console-card panel-card">
+            <div class="console-card-header panel-card-header">
+              <h3 class="panel-title">Warnings</h3>
+            </div>
+            <div class="meta-box" id="warnings-panel">
+              <div class="meta-row">
+                <span class="meta-label">Status</span>
+                <span class="meta-value detail-copy" id="warnings-text">等待健康检查…</span>
+              </div>
+            </div>
+          </article>
+
+          <article class="card console-card panel-card">
+            <div class="console-card-header panel-card-header">
+              <h3 class="panel-title">Action Result</h3>
+            </div>
+            <div class="guard-result" id="action-result">等待操作…</div>
+          </article>
+        </section>
+
+        <section class="card chat-panel">
+          <header class="chat-header">
+            <div>
+              <h2>管家</h2>
+            </div>
+          </header>
+
+          <section class="messages" id="messages">
+            <article class="message agent intro-message">
+              <span class="message-label">Agent</span>
+              页面已准备好。先创建一个 session，然后就可以开始聊天了。
+            </article>
           </section>
 
-          <section class="chat-main">
-            <header class="chat-header">
-              <div>
-                <h2>管家</h2>
-              </div>
-              <div class="status-pill" id="connection-status">Ready</div>
-            </header>
-
-            <section class="messages" id="messages">
-              <article class="message agent intro-message">
-                <span class="message-label">Agent</span>
-                页面已准备好。先创建一个 session，然后就可以开始聊天了。
-              </article>
-            </section>
-
-            <section class="composer">
-              <textarea
-                id="composer"
-                placeholder="输入你的问题，比如：先查看理财子状态，再告诉我当前适合继续交易还是先补充资金。"
-              ></textarea>
-              <div class="composer-actions">
-                <span class="hint">支持多轮会话。左侧理财子负责风控与保护，右侧用于和管家持续交互。</span>
-                <button class="primary" id="send-button">发送消息</button>
-              </div>
-            </section>
+          <section class="composer">
+            <textarea
+              id="composer"
+              placeholder="输入你的问题，比如：先查看理财子状态，再告诉我当前适合继续交易还是先补充资金。"
+            ></textarea>
+            <div class="composer-actions">
+              <span class="hint">支持多轮会话。上方控制台用于观测与控制，底部区域用于和管家持续交互。</span>
+              <button class="primary" id="send-button">发送消息</button>
+            </div>
           </section>
-        </div>
+        </section>
       </div>
 
     <script>
@@ -518,28 +563,30 @@
 
       const sessionIdEl = document.getElementById("session-id");
       const messageCountEl = document.getElementById("message-count");
-      const guardRunningEl = document.getElementById("guard-running");
-      const guardHealthEl = document.getElementById("guard-health");
-      const guardDecisionEl = document.getElementById("guard-decision");
-      const chainSignerAddressEl = document.getElementById("chain-signer-address");
-      const recentChainActionEl = document.getElementById("recent-chain-action");
-      const freqtradeRunningStateEl = document.getElementById("freqtrade-running-state");
-      const freqtradeOpenTradesEl = document.getElementById("freqtrade-open-trades");
+      const runtimeStatusEl = document.getElementById("runtime-status");
+      const chainIdentifierEl = document.getElementById("chain-identifier");
+      const chainActivityDetailEl = document.getElementById("chain-activity-detail");
+      const freqtradeStateEl = document.getElementById("freqtrade-state");
       const messagesEl = document.getElementById("messages");
       const composerEl = document.getElementById("composer");
       const sendButtonEl = document.getElementById("send-button");
       const newSessionButtonEl = document.getElementById("new-session-button");
       const connectionStatusEl = document.getElementById("connection-status");
-      const guardResultEl = document.getElementById("guard-result");
-      const guardActionSelectEl = document.getElementById("guard-action-select");
-      const guardActionButtonEl = document.getElementById("guard-action-button");
+      const executionSnapshotEl = document.getElementById("execution-snapshot");
+      const actionResultEl = document.getElementById("action-result");
+      const warningsTextEl = document.getElementById("warnings-text");
+      const startButtonEl = document.getElementById("start-button");
+      const tickButtonEl = document.getElementById("tick-button");
+      const stopButtonEl = document.getElementById("stop-button");
 
       const GUARD_ACTION_LABELS = {
-        "/autonomy/status": "查看理财子状态",
         "/autonomy/start": "启动理财子",
         "/autonomy/tick": "执行理财子 Tick",
         "/autonomy/stop": "停止理财子",
       };
+      const DASHBOARD_REFRESH_INTERVAL_MS = 5000;
+      let dashboardRefreshPromise = null;
+      let dashboardRefreshQueued = false;
 
       function setBusy(busy, label = "Working") {
         state.busy = busy;
@@ -572,18 +619,19 @@
         messagesEl.scrollTop = messagesEl.scrollHeight;
       }
 
-      function updateGuardSummary(payload) {
-        const source = payload.ledger ? payload : payload.result ? payload.result : payload;
-        const ledger = source.ledger ?? {};
-        guardRunningEl.textContent = source.running ? "运行中" : source.enabled ? "已启用，待运行" : "已停止";
-        guardHealthEl.textContent = ledger.healthStatus ?? "未知";
-        guardDecisionEl.textContent = ledger.lastDecision?.action ?? "暂无";
+      function renderRuntimeStatus(viewModel) {
+        runtimeStatusEl.textContent = [
+          `运行状态: ${viewModel.running}`,
+          `健康状态: ${viewModel.health}`,
+          `熔断状态: ${viewModel.circuitState}`,
+          `最近建议: ${viewModel.decision}`,
+        ].join("\n");
       }
 
       function updateGuardResult(title, payload, isError = false) {
-        guardResultEl.textContent =
+        actionResultEl.textContent =
           `${title}\n\n${typeof payload === "string" ? payload : JSON.stringify(payload, null, 2)}`;
-        guardResultEl.style.color = isError ? "var(--danger)" : "var(--ink)";
+        actionResultEl.style.color = isError ? "var(--danger)" : "var(--ink)";
       }
 
       function summarizeRecentChainAction(action) {
@@ -603,62 +651,206 @@
         return parts.join(" | ");
       }
 
-      function updateChainStatus(payload) {
-        const wallet = payload?.chainWallet?.wallet ?? {};
-        chainSignerAddressEl.textContent = wallet.address ?? "未配置";
-        recentChainActionEl.textContent = summarizeRecentChainAction(payload?.recentChainAction);
+      function buildRuntimeViewModel(payload) {
+        const source = payload?.autonomy ?? (payload?.ledger ? payload : payload?.result ? payload.result : payload) ?? {};
+        const ledger = source.ledger ?? {};
+
+        return {
+          running: source.running ? "运行中" : source.enabled ? "已启用，待运行" : "已停止",
+          health: ledger.healthStatus ?? "未知",
+          circuitState: source.summary?.circuitState ?? "未知",
+          decision: ledger.lastDecision?.action ?? "暂无",
+        };
       }
 
-      function updateFreqtradeStatus(payload) {
+      function buildFreqtradeViewModel(payload) {
         const status = payload?.freqtradeStatus ?? {};
-        const openTradeCount = status?.openTradeCount;
         const parts = [];
 
-        if (status?.runningState) {
-          parts.push(status.runningState);
-        } else if (status?.state) {
+        if (status.runningState) {
+          parts.push(String(status.runningState));
+        } else if (status.state) {
           parts.push(String(status.state));
         }
 
-        if (status?.runmode) {
+        if (status.runmode) {
           parts.push(String(status.runmode));
         }
 
-        if (status?.exchange) {
+        if (status.exchange) {
           parts.push(String(status.exchange));
         }
 
-        if (status?.strategy) {
+        if (status.strategy) {
           parts.push(String(status.strategy));
         }
 
+        let running = "未知";
         if (parts.length > 0) {
-          freqtradeRunningStateEl.textContent = parts.join(" | ");
-        } else if (status?.error) {
-          freqtradeRunningStateEl.textContent = `不可用: ${status.error}`;
-        } else {
-          freqtradeRunningStateEl.textContent = "未知";
+          running = parts.join(" | ");
+        } else if (status.error) {
+          running = `不可用: ${status.error}`;
         }
 
-        if (typeof openTradeCount === "number") {
-          freqtradeOpenTradesEl.textContent = String(openTradeCount);
-        } else if (status?.error) {
-          freqtradeOpenTradesEl.textContent = "读取失败";
-        } else {
-          freqtradeOpenTradesEl.textContent = "未查询";
+        let openTrades = "未查询";
+        if (typeof status.openTradeCount === "number") {
+          openTrades = String(status.openTradeCount);
+        } else if (status.error) {
+          openTrades = "读取失败";
         }
+
+        return {
+          running,
+          openTrades,
+        };
       }
 
-      async function refreshHealth() {
-        try {
-          const payload = await requestJson("/health", { method: "GET" });
-          updateChainStatus(payload);
-          updateFreqtradeStatus(payload);
-        } catch (_error) {
-          chainSignerAddressEl.textContent = "读取失败";
-          recentChainActionEl.textContent = "读取失败";
-          freqtradeRunningStateEl.textContent = "读取失败";
-          freqtradeOpenTradesEl.textContent = "读取失败";
+      function buildChainViewModel(payload) {
+        const wallet = payload?.chainWallet?.wallet ?? payload?.chainWallet?.result?.wallet ?? {};
+        const recentAction = summarizeRecentChainAction(payload?.recentChainAction);
+        const signerAddress = payload?.chainWalletError
+          ? "读取失败"
+          : wallet.address ?? "未配置";
+
+        return {
+          signerAddress,
+          recentAction,
+        };
+      }
+
+      function buildExecutionSnapshotViewModel(payload) {
+        const source = payload?.autonomy ?? (payload?.ledger ? payload : payload?.result ? payload.result : payload) ?? {};
+        const ledger = source.ledger ?? {};
+        const activeExecutions = Array.isArray(ledger.activeExecutions) ? ledger.activeExecutions : [];
+        const executionHistory = Array.isArray(ledger.executionHistory) ? ledger.executionHistory : [];
+
+        return {
+          activeExecutions: String(source.summary?.activeExecutionCount ?? activeExecutions.length),
+          executionHistory: String(executionHistory.length),
+          circuitState: source.summary?.circuitState ?? ledger.circuitBreaker?.state ?? "未知",
+          lastTickAt: ledger.lastTickAt ?? source.lastTickAt ?? "未记录",
+        };
+      }
+
+      function buildWarningsViewModel(payload) {
+        const runtime = buildRuntimeViewModel(payload);
+        const chain = buildChainViewModel(payload);
+        const source = payload?.autonomy ?? {};
+        const ledger = source.ledger ?? {};
+        const warnings = [];
+
+        function pushWarning(message) {
+          if (message && !warnings.includes(message)) {
+            warnings.push(message);
+          }
+        }
+
+        if (!["ok", "healthy"].includes(runtime.health)) {
+          pushWarning(`Runtime health: ${runtime.health}`);
+        }
+        if (runtime.circuitState !== "closed" && runtime.circuitState !== "未知") {
+          pushWarning(`Circuit breaker: ${runtime.circuitState}`);
+        }
+        if (payload?.chainWalletError) {
+          pushWarning(`Chain wallet error: ${payload.chainWalletError}`);
+        } else if (chain.signerAddress === "未配置") {
+          pushWarning("Chain signer: 未配置");
+        }
+        if (payload?.chainError) {
+          pushWarning(`Chain error: ${payload.chainError}`);
+        }
+        if (payload?.freqtradeError) {
+          pushWarning(`Freqtrade error: ${payload.freqtradeError}`);
+        }
+        if (payload?.freqtradeStatus?.error) {
+          pushWarning(`Freqtrade error: ${payload.freqtradeStatus.error}`);
+        }
+        if (source.error) {
+          pushWarning(`Autonomy error: ${source.error}`);
+        }
+        if (ledger.lastError) {
+          pushWarning(`Autonomy error: ${ledger.lastError}`);
+        }
+
+        return warnings;
+      }
+
+      function renderFreqtradeState(viewModel) {
+        freqtradeStateEl.textContent = [
+          `运行状态: ${viewModel.running}`,
+          `Open Trades: ${viewModel.openTrades}`,
+        ].join("\n");
+      }
+
+      function renderChainIdentifier(viewModel) {
+        chainIdentifierEl.textContent = [
+          `Signer: ${viewModel.signerAddress}`,
+          `Recent Action: ${viewModel.recentAction}`,
+        ].join("\n");
+        chainActivityDetailEl.textContent = viewModel.recentAction;
+      }
+
+      function renderExecutionSnapshot(viewModel) {
+        executionSnapshotEl.textContent = [
+          `Active Executions: ${viewModel.activeExecutions}`,
+          `Execution History: ${viewModel.executionHistory}`,
+          `Circuit State: ${viewModel.circuitState}`,
+          `Last Tick: ${viewModel.lastTickAt}`,
+        ].join("\n");
+      }
+
+      function renderWarningsPanel(payload) {
+        const warnings = buildWarningsViewModel(payload);
+        warningsTextEl.textContent = warnings.length > 0 ? warnings.join("\n") : "No active warnings.";
+      }
+
+      function updateGuardSummary(payload) {
+        renderRuntimeStatus(buildRuntimeViewModel(payload));
+      }
+
+      function updateChainStatus(payload) {
+        renderChainIdentifier(buildChainViewModel(payload));
+      }
+
+      function updateFreqtradeStatus(payload) {
+        renderFreqtradeState(buildFreqtradeViewModel(payload));
+      }
+
+      function updateExecutionSnapshot(payload) {
+        renderExecutionSnapshot(buildExecutionSnapshotViewModel(payload));
+      }
+
+      async function refreshDashboard() {
+        if (dashboardRefreshPromise) {
+          dashboardRefreshQueued = true;
+          return dashboardRefreshPromise;
+        }
+
+        dashboardRefreshQueued = false;
+        dashboardRefreshPromise = (async () => {
+          try {
+            const payload = await requestJson("/health", { method: "GET" });
+            updateGuardSummary(payload);
+            updateChainStatus(payload);
+            updateFreqtradeStatus(payload);
+            updateExecutionSnapshot(payload);
+            renderWarningsPanel(payload);
+          } catch (_error) {
+            runtimeStatusEl.textContent = "读取失败";
+            chainIdentifierEl.textContent = "读取失败";
+            chainActivityDetailEl.textContent = "读取失败";
+            freqtradeStateEl.textContent = "读取失败";
+            executionSnapshotEl.textContent = "读取失败";
+            warningsTextEl.textContent = "读取失败";
+          } finally {
+            dashboardRefreshPromise = null;
+          }
+        })();
+
+        await dashboardRefreshPromise;
+
+        if (dashboardRefreshQueued) {
+          return refreshDashboard();
         }
       }
 
@@ -679,7 +871,8 @@
         }
 
         if (!response.ok) {
-          const detail = payload?.detail ?? JSON.stringify(payload) ?? response.statusText;
+          const statusDetail = `HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ""}`;
+          const detail = payload?.detail ?? (payload === null ? null : JSON.stringify(payload)) ?? statusDetail;
           throw new Error(detail);
         }
 
@@ -698,7 +891,7 @@
           updateGuardResult("创建会话失败", error.message, true);
         } finally {
           setBusy(false);
-          refreshHealth();
+          refreshDashboard();
         }
       }
 
@@ -736,7 +929,7 @@
         } finally {
           setBusy(false);
           composerEl.focus();
-          refreshHealth();
+          refreshDashboard();
         }
       }
 
@@ -746,21 +939,25 @@
           const payload = await requestJson(path, {
             method: path === "/autonomy/status" ? "GET" : "POST",
           });
-          updateGuardSummary(payload);
           updateGuardResult(`${label} 完成`, payload);
         } catch (error) {
           updateGuardResult(`${label} 失败`, error.message, true);
         } finally {
           setBusy(false);
-          refreshHealth();
+          refreshDashboard();
         }
       }
 
       sendButtonEl.addEventListener("click", sendMessage);
       newSessionButtonEl.addEventListener("click", createSession);
-      guardActionButtonEl.addEventListener("click", () => {
-        const path = guardActionSelectEl.value;
-        runGuardAction(path, GUARD_ACTION_LABELS[path] ?? "执行 Guard 操作");
+      startButtonEl.addEventListener("click", () => {
+        runGuardAction("/autonomy/start", GUARD_ACTION_LABELS["/autonomy/start"]);
+      });
+      tickButtonEl.addEventListener("click", () => {
+        runGuardAction("/autonomy/tick", GUARD_ACTION_LABELS["/autonomy/tick"]);
+      });
+      stopButtonEl.addEventListener("click", () => {
+        runGuardAction("/autonomy/stop", GUARD_ACTION_LABELS["/autonomy/stop"]);
       });
       composerEl.addEventListener("keydown", (event) => {
         if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
@@ -769,8 +966,8 @@
         }
       });
 
-      runGuardAction("/autonomy/status", "初始化理财子状态");
-      refreshHealth();
+      refreshDashboard();
+      setInterval(refreshDashboard, DASHBOARD_REFRESH_INTERVAL_MS);
     </script>
   </body>
 </html>
