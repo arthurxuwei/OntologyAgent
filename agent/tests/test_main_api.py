@@ -216,6 +216,57 @@ class MainApiTests(unittest.TestCase):
         self.assertIn("dashboardRefreshPromise = (async () => {", script_text)
         self.assertIn("dashboardRefreshPromise = null;", script_text)
 
+    def test_request_json_uses_http_status_when_error_body_is_not_json(self) -> None:
+        controller = FakeAutonomyController()
+
+        with patch.object(main, "get_autonomy_controller", return_value=controller):
+            with TestClient(main.app) as client:
+                response = client.get("/")
+
+        self.assertEqual(response.status_code, 200)
+        script_text = _extract_inline_script(response.text)
+        node_result = subprocess.run(
+            [
+                "node",
+                "-e",
+                "const fs = require('fs');"
+                "const scriptText = fs.readFileSync(0, 'utf8');"
+                "const makeElement = () => ({"
+                "textContent: '', style: {}, disabled: false, value: '/autonomy/status',"
+                "appendChild() {}, append() {}, addEventListener() {}, focus() {},"
+                "scrollTop: 0, scrollHeight: 0"
+                "});"
+                "global.document = {"
+                "getElementById() { return makeElement(); },"
+                "querySelectorAll() { return []; },"
+                "createElement() { return makeElement(); },"
+                "createTextNode(text) { return text; }"
+                "};"
+                "global.fetch = async () => ({"
+                "ok: false,"
+                "status: 502,"
+                "statusText: 'Bad Gateway',"
+                "json: async () => { throw new Error('invalid json'); }"
+                "});"
+                "global.setInterval = () => 0;"
+                "(async () => {"
+                "eval(scriptText);"
+                "try {"
+                "await requestJson('/health', { method: 'GET' });"
+                "process.stdout.write(JSON.stringify({ message: null }));"
+                "} catch (error) {"
+                "process.stdout.write(JSON.stringify({ message: error.message }));"
+                "}"
+                "})().catch((error) => { console.error(error); process.exit(1); });",
+            ],
+            input=script_text,
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(node_result.returncode, 0, node_result.stderr)
+        helper_output = json.loads(node_result.stdout)
+        self.assertEqual(helper_output["message"], "HTTP 502 Bad Gateway")
+
     def test_tick_action_does_not_overwrite_runtime_card_before_health_refresh(
         self,
     ) -> None:

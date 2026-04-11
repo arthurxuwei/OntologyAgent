@@ -864,7 +864,8 @@
         }
 
         if (!response.ok) {
-          const detail = payload?.detail ?? JSON.stringify(payload) ?? response.statusText;
+          const statusDetail = `HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ""}`;
+          const detail = payload?.detail ?? (payload === null ? null : JSON.stringify(payload)) ?? statusDetail;
           throw new Error(detail);
         }
 
