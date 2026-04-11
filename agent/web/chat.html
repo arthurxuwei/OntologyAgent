@@ -931,7 +931,6 @@
           const payload = await requestJson(path, {
             method: path === "/autonomy/status" ? "GET" : "POST",
           });
-          updateGuardSummary(payload);
           updateGuardResult(`${label} 完成`, payload);
         } catch (error) {
           updateGuardResult(`${label} 失败`, error.message, true);

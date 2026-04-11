@@ -216,6 +216,79 @@ class MainApiTests(unittest.TestCase):
         self.assertIn("dashboardRefreshPromise = (async () => {", script_text)
         self.assertIn("dashboardRefreshPromise = null;", script_text)
 
+    def test_tick_action_does_not_overwrite_runtime_card_before_health_refresh(
+        self,
+    ) -> None:
+        controller = FakeAutonomyController()
+
+        with patch.object(main, "get_autonomy_controller", return_value=controller):
+            with TestClient(main.app) as client:
+                response = client.get("/")
+
+        self.assertEqual(response.status_code, 200)
+        script_text = _extract_inline_script(response.text)
+        node_result = subprocess.run(
+            [
+                "node",
+                "-e",
+                "const fs = require('fs');"
+                "const scriptText = fs.readFileSync(0, 'utf8');"
+                "const elements = new Map();"
+                "const makeElement = () => ({"
+                "textContent: '', style: {}, disabled: false, value: '/autonomy/status',"
+                "appendChild() {}, append() {}, addEventListener() {}, focus() {},"
+                "scrollTop: 0, scrollHeight: 0"
+                "});"
+                "global.document = {"
+                "getElementById(id) {"
+                "if (!elements.has(id)) elements.set(id, makeElement());"
+                "return elements.get(id);"
+                "},"
+                "querySelectorAll() { return []; },"
+                "createElement() { return makeElement(); },"
+                "createTextNode(text) { return text; }"
+                "};"
+                "const healthPayload = {"
+                "autonomy: { enabled: true, running: true, summary: { circuitState: 'closed' }, ledger: { healthStatus: 'ok', lastDecision: { action: 'buy' } } }"
+                "};"
+                "const tickPayload = {"
+                "context: { wallet: { balanceEth: '1.0' } },"
+                "decision: { action: 'hold' },"
+                "actionResult: { action: 'hold', changedState: false }"
+                "};"
+                "let healthCalls = 0;"
+                "global.fetch = async (url) => {"
+                "if (url === '/health') {"
+                "healthCalls += 1;"
+                "if (healthCalls === 1) { return { ok: true, json: async () => healthPayload }; }"
+                "return { ok: true, json: async () => await new Promise(() => {}) };"
+                "}"
+                "if (url === '/autonomy/tick') { return { ok: true, json: async () => tickPayload }; }"
+                "throw new Error(`Unexpected URL: ${url}`);"
+                "};"
+                "global.setInterval = () => 0;"
+                "(async () => {"
+                "eval(scriptText);"
+                "await refreshDashboard();"
+                "const before = elements.get('runtime-status').textContent;"
+                "await runGuardAction('/autonomy/tick', '执行理财子 Tick');"
+                "const after = elements.get('runtime-status').textContent;"
+                "process.stdout.write(JSON.stringify({ before, after, actionResult: elements.get('action-result').textContent }));"
+                "})().catch((error) => { console.error(error); process.exit(1); });",
+            ],
+            input=script_text,
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(node_result.returncode, 0, node_result.stderr)
+        helper_output = json.loads(node_result.stdout)
+        self.assertEqual(
+            helper_output["before"],
+            "运行状态: 运行中\n健康状态: ok\n熔断状态: closed\n最近建议: buy",
+        )
+        self.assertEqual(helper_output["after"], helper_output["before"])
+        self.assertIn('"action": "hold"', helper_output["actionResult"])
+
     def test_chat_page_view_model_helpers_map_observability_payload_fields(
         self,
     ) -> None:
