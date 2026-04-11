@@ -584,6 +584,7 @@
         "/autonomy/tick": "执行理财子 Tick",
         "/autonomy/stop": "停止理财子",
       };
+      const DASHBOARD_REFRESH_INTERVAL_MS = 5000;
 
       function setBusy(busy, label = "Working") {
         state.busy = busy;
@@ -943,6 +944,7 @@
       });
 
       refreshDashboard();
+      setInterval(refreshDashboard, DASHBOARD_REFRESH_INTERVAL_MS);
     </script>
   </body>
 </html>

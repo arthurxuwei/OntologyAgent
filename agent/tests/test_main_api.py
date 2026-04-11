@@ -190,6 +190,17 @@ class MainApiTests(unittest.TestCase):
         ]:
             self.assertIn(marker, response.text)
 
+    def test_chat_page_registers_periodic_dashboard_refresh(self) -> None:
+        controller = FakeAutonomyController()
+
+        with patch.object(main, "get_autonomy_controller", return_value=controller):
+            with TestClient(main.app) as client:
+                response = client.get("/")
+
+        self.assertEqual(response.status_code, 200)
+        script_text = _extract_inline_script(response.text)
+        self.assertIn("setInterval(refreshDashboard", script_text)
+
     def test_chat_page_view_model_helpers_map_observability_payload_fields(
         self,
     ) -> None:
@@ -296,6 +307,7 @@ class MainApiTests(unittest.TestCase):
                 "createElement() { return makeElement(); }"
                 "};"
                 "global.fetch = async () => ({ ok: true, json: async () => ({}) });"
+                "global.setInterval = () => 0;"
                 "eval(scriptText);"
                 "process.stdout.write(JSON.stringify({"
                 "runtime: buildRuntimeViewModel(payloads.runtime),"
