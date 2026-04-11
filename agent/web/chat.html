@@ -707,9 +707,12 @@
       function buildChainViewModel(payload) {
         const wallet = payload?.chainWallet?.wallet ?? payload?.chainWallet?.result?.wallet ?? {};
         const recentAction = summarizeRecentChainAction(payload?.recentChainAction);
+        const signerAddress = payload?.chainWalletError
+          ? "读取失败"
+          : wallet.address ?? "未配置";
 
         return {
-          signerAddress: wallet.address ?? "未配置",
+          signerAddress,
           recentAction,
         };
       }
@@ -747,7 +750,9 @@
         if (runtime.circuitState !== "closed" && runtime.circuitState !== "未知") {
           pushWarning(`Circuit breaker: ${runtime.circuitState}`);
         }
-        if (chain.signerAddress === "未配置") {
+        if (payload?.chainWalletError) {
+          pushWarning(`Chain wallet error: ${payload.chainWalletError}`);
+        } else if (chain.signerAddress === "未配置") {
           pushWarning("Chain signer: 未配置");
         }
         if (payload?.chainError) {

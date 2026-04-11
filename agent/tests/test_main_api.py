@@ -287,6 +287,7 @@ class MainApiTests(unittest.TestCase):
                     },
                 },
                 "chainError": "chain offline",
+                "chainWalletError": "wallet unavailable",
                 "freqtradeError": "freqtrade offline",
                 "freqtradeStatus": {
                     "runningState": "unavailable",
@@ -329,6 +330,7 @@ class MainApiTests(unittest.TestCase):
                 "freqtrade: buildFreqtradeViewModel(payloads.freqtrade),"
                 "chain: buildChainViewModel(payloads.chain),"
                 "chainWrapped: buildChainViewModel(payloads.chainWrapped),"
+                "chainFailed: buildChainViewModel(payloads.health),"
                 "executionSnapshot: buildExecutionSnapshotViewModel(payloads.runtime),"
                 "warnings: buildWarningsViewModel(payloads.health),"
                 "warningsWrapped: buildWarningsViewModel(payloads.healthWrapped)"
@@ -371,6 +373,13 @@ class MainApiTests(unittest.TestCase):
             },
         )
         self.assertEqual(
+            helper_output["chainFailed"],
+            {
+                "signerAddress": "读取失败",
+                "recentAction": "暂无",
+            },
+        )
+        self.assertEqual(
             helper_output["executionSnapshot"],
             {
                 "activeExecutions": "1",
@@ -384,7 +393,7 @@ class MainApiTests(unittest.TestCase):
             [
                 "Runtime health: critical",
                 "Circuit breaker: open",
-                "Chain signer: 未配置",
+                "Chain wallet error: wallet unavailable",
                 "Chain error: chain offline",
                 "Freqtrade error: freqtrade offline",
                 "Freqtrade error: snapshot unavailable",
@@ -561,6 +570,35 @@ class MainApiTests(unittest.TestCase):
         self.assertEqual(payload["freqtradeStatus"]["state"], "running")
         self.assertEqual(payload["chainWallet"]["wallet"]["address"], "0xabc")
         self.assertEqual(payload["recentChainAction"]["summary"]["txHash"], "0x123")
+
+    def test_health_reports_chain_wallet_error_when_wallet_lookup_fails(self) -> None:
+        controller = FakeAutonomyController()
+
+        with (
+            patch.object(main, "get_autonomy_controller", return_value=controller),
+            patch.object(
+                main,
+                "get_chain_mcp_client",
+                return_value=FakeToolClient(["chain_get_wallet_state"]),
+            ),
+            patch.object(
+                main,
+                "get_freqtrade_mcp_client",
+                return_value=FakeToolClient(["freqtrade_status"]),
+            ),
+            patch.object(
+                main,
+                "get_chain_wallet_state",
+                side_effect=RuntimeError("wallet unavailable"),
+            ),
+        ):
+            with TestClient(main.app) as client:
+                response = client.get("/health")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertIsNone(payload["chainWallet"])
+        self.assertEqual(payload["chainWalletError"], "wallet unavailable")
 
     def test_autonomy_start_and_stop_summary_shape_matches_console_contract(
         self,
