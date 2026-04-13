@@ -262,6 +262,60 @@ class MainApiTests(unittest.TestCase):
             "模型返回了空回复，请重试或更换模型配置。",
         )
 
+    def test_empty_non_ai_tail_with_older_ai_preserves_old_reply_and_appends_fallback(
+        self,
+    ) -> None:
+        controller = FakeAutonomyController()
+        graph = RecordingGraph(
+            [
+                AIMessage(content="seed assistant reply"),
+                main.HumanMessage(content=[{"type": "text", "text": "   "}]),
+                AIMessage(content="third turn reply"),
+            ]
+        )
+
+        with (
+            patch.object(main, "get_autonomy_controller", return_value=controller),
+            patch.object(main, "get_agent_graph", return_value=graph),
+        ):
+            with TestClient(main.app) as client:
+                create_response = client.post("/agent/sessions")
+                session_id = create_response.json()["sessionId"]
+
+                seed_response = client.post(
+                    f"/agent/sessions/{session_id}/messages",
+                    json={"input": "先来一个正常回复"},
+                )
+                first_response = client.post(
+                    f"/agent/sessions/{session_id}/messages",
+                    json={"input": "第二轮以非 assistant 空尾结束"},
+                )
+                second_response = client.post(
+                    f"/agent/sessions/{session_id}/messages",
+                    json={"input": "第三轮继续"},
+                )
+
+        self.assertEqual(seed_response.status_code, 200)
+        self.assertEqual(seed_response.json()["output"], "seed assistant reply")
+        self.assertEqual(first_response.status_code, 200)
+        self.assertEqual(
+            first_response.json()["output"], "模型返回了空回复，请重试或更换模型配置。"
+        )
+        self.assertEqual(second_response.status_code, 200)
+        self.assertEqual(second_response.json()["output"], "third turn reply")
+        persisted_assistant_turns = [
+            message
+            for message in graph.calls[2]
+            if getattr(message, "type", None) == "ai"
+        ]
+        self.assertEqual(
+            [
+                getattr(message, "content", None)
+                for message in persisted_assistant_turns
+            ],
+            ["seed assistant reply", "模型返回了空回复，请重试或更换模型配置。"],
+        )
+
     def test_normal_model_reply_does_not_emit_empty_reply_warning(self) -> None:
         controller = FakeAutonomyController()
 

@@ -847,14 +847,7 @@ def _normalize_message_content(content: Any) -> str:
 
 
 def _extract_final_output(messages: list[Any]) -> str:
-    final_message = None
-    for message in reversed(messages):
-        if getattr(message, "type", None) == "ai":
-            final_message = message
-            break
-
-    if final_message is None and messages:
-        final_message = messages[-1]
+    final_message = messages[-1] if messages else None
 
     normalized_output = _normalize_message_content(
         getattr(final_message, "content", "No response from agent.")
@@ -881,14 +874,12 @@ def _align_final_message_output(messages: list[Any], output: str) -> list[Any]:
         return messages
 
     aligned_messages = list(messages)
-    for index in range(len(aligned_messages) - 1, -1, -1):
-        message = aligned_messages[index]
-        if getattr(message, "type", None) != "ai":
-            continue
+    if aligned_messages and getattr(aligned_messages[-1], "type", None) == "ai":
+        message = aligned_messages[-1]
         if hasattr(message, "model_copy"):
-            aligned_messages[index] = message.model_copy(update={"content": output})
+            aligned_messages[-1] = message.model_copy(update={"content": output})
         else:
-            aligned_messages[index] = AIMessage(content=output)
+            aligned_messages[-1] = AIMessage(content=output)
         return aligned_messages
 
     aligned_messages.append(AIMessage(content=output))
