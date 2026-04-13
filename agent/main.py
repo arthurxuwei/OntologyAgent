@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import threading
 from datetime import datetime, timezone
@@ -12,7 +13,7 @@ from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import StructuredTool
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
@@ -23,6 +24,7 @@ from chain_mcp_client import ChainMcpClient
 from freqtrade_mcp_client import FreqtradeMcpClient, FreqtradeMcpClientError
 
 app = FastAPI(title="OntologyAgent agent")
+logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = (
     "你是一个金融助理。链上相关动作只能通过 chain MCP 工具完成；"
@@ -46,6 +48,7 @@ NO_CACHE_HEADERS = {
     "Pragma": "no-cache",
     "Expires": "0",
 }
+EMPTY_FINAL_OUTPUT_FALLBACK = "模型返回了空回复，请重试或更换模型配置。"
 
 
 def get_openai_base_url() -> Optional[str]:
@@ -826,6 +829,9 @@ def get_agent_graph() -> Any:
 
 
 def _normalize_message_content(content: Any) -> str:
+    if content is None:
+        return ""
+
     if isinstance(content, str):
         return content
 
@@ -838,27 +844,67 @@ def _normalize_message_content(content: Any) -> str:
                 text = item.get("text")
                 if isinstance(text, str):
                     parts.append(text)
-        return "\n".join(parts).strip()
+        return "".join(parts)
 
     return str(content)
 
 
+def _is_empty_message_content(content: Any) -> bool:
+    return not _normalize_message_content(content).strip()
+
+
 def _extract_final_output(messages: list[Any]) -> str:
-    final_message = None
-    for message in reversed(messages):
-        if getattr(message, "type", None) == "ai":
-            final_message = message
-            break
+    final_message = messages[-1] if messages else None
+    final_message_type = getattr(final_message, "type", None)
+    final_message_python_type = type(final_message).__name__ if final_message else None
+    response_metadata = getattr(final_message, "response_metadata", None)
+    additional_kwargs = getattr(final_message, "additional_kwargs", None)
 
-    if final_message is None and messages:
-        final_message = messages[-1]
+    final_content = getattr(final_message, "content", None)
+    normalized_output = _normalize_message_content(final_content)
+    if final_message_type == "ai" and not _is_empty_message_content(final_content):
+        return normalized_output
 
-    output = _normalize_message_content(
-        getattr(final_message, "content", "No response from agent.")
+    if not _is_empty_message_content(final_content):
+        return EMPTY_FINAL_OUTPUT_FALLBACK
+
+    logger.warning(
+        "Agent returned empty final output: model=%s base_url=%s final_message_type=%s final_message_python_type=%s final_content=%r response_metadata=%r response_metadata_id=%s response_metadata_finish_reason=%s additional_kwargs=%r additional_kwargs_keys=%s message_count=%d tail_message_types=%s",
+        os.getenv("BRAIN_AGENT_MODEL", "gpt-4o-mini"),
+        get_openai_base_url(),
+        final_message_type,
+        final_message_python_type,
+        final_content,
+        response_metadata,
+        response_metadata.get("id") if isinstance(response_metadata, dict) else None,
+        response_metadata.get("finish_reason")
+        if isinstance(response_metadata, dict)
+        else None,
+        additional_kwargs,
+        sorted(additional_kwargs.keys())
+        if isinstance(additional_kwargs, dict)
+        else None,
+        len(messages),
+        [getattr(message, "type", type(message).__name__) for message in messages[-5:]],
     )
-    if output:
-        return output
-    return "模型返回了空回复，请重试或更换模型配置。"
+    return EMPTY_FINAL_OUTPUT_FALLBACK
+
+
+def _align_final_message_output(messages: list[Any], output: str) -> list[Any]:
+    if output != EMPTY_FINAL_OUTPUT_FALLBACK:
+        return messages
+
+    aligned_messages = list(messages)
+    if aligned_messages and getattr(aligned_messages[-1], "type", None) == "ai":
+        message = aligned_messages[-1]
+        if hasattr(message, "model_copy"):
+            aligned_messages[-1] = message.model_copy(update={"content": output})
+        else:
+            aligned_messages[-1] = AIMessage(content=output)
+        return aligned_messages
+
+    aligned_messages.append(AIMessage(content=output))
+    return aligned_messages
 
 
 async def _invoke_agent(messages: list[Any]) -> dict[str, Any]:
@@ -1024,8 +1070,8 @@ async def send_agent_session_message(
         [*session.messages, HumanMessage(content=request.input)]
     )
     messages = result.get("messages", [])
-    session.messages = list(messages)
-    output = _extract_final_output(session.messages)
+    output = _extract_final_output(list(messages))
+    session.messages = _align_final_message_output(list(messages), output)
 
     return AgentChatResponse(
         sessionId=session.session_id,
