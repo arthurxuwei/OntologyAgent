@@ -263,7 +263,7 @@ class MainApiTests(unittest.TestCase):
             "模型返回了空回复，请重试或更换模型配置。",
         )
 
-    def test_empty_non_ai_tail_with_older_ai_reuses_old_reply_without_warning(
+    def test_empty_non_ai_tail_with_older_ai_preserves_old_reply_and_appends_fallback(
         self,
     ) -> None:
         controller = FakeAutonomyController()
@@ -278,7 +278,7 @@ class MainApiTests(unittest.TestCase):
         with (
             patch.object(main, "get_autonomy_controller", return_value=controller),
             patch.object(main, "get_agent_graph", return_value=graph),
-            patch.object(main.logger, "warning") as warning_mock,
+            self.assertLogs(main.logger.name, level="WARNING") as logs,
         ):
             with TestClient(main.app) as client:
                 create_response = client.post("/agent/sessions")
@@ -300,7 +300,9 @@ class MainApiTests(unittest.TestCase):
         self.assertEqual(seed_response.status_code, 200)
         self.assertEqual(seed_response.json()["output"], "seed assistant reply")
         self.assertEqual(first_response.status_code, 200)
-        self.assertEqual(first_response.json()["output"], "seed assistant reply")
+        self.assertEqual(
+            first_response.json()["output"], "模型返回了空回复，请重试或更换模型配置。"
+        )
         self.assertEqual(second_response.status_code, 200)
         self.assertEqual(second_response.json()["output"], "third turn reply")
         persisted_assistant_turns = [
@@ -313,9 +315,9 @@ class MainApiTests(unittest.TestCase):
                 getattr(message, "content", None)
                 for message in persisted_assistant_turns
             ],
-            ["seed assistant reply"],
+            ["seed assistant reply", "模型返回了空回复，请重试或更换模型配置。"],
         )
-        warning_mock.assert_not_called()
+        self.assertIn("final_message_type=human", "\n".join(logs.output))
 
     def test_non_empty_non_ai_tail_does_not_leak_raw_content_as_assistant_reply(
         self,
