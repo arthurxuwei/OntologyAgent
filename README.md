@@ -31,6 +31,30 @@ docker compose up -d --build
 - `freqtrade` REST API：`http://localhost:8080/api/v1`
 - `freqtrade` MCP：`http://localhost:8090/mcp/`
 
+## Worktree 注意事项
+
+如果你是在 `.worktrees/...` 目录里执行 `docker compose`，Compose 默认会读取**当前目录**下的 `.env`，不会自动回退到主仓库根目录的 `.env`。
+
+这会导致一些关键变量在容器里变成空值，例如：
+
+- `PRIVATE_KEY`
+- `OPENAI_API_KEY`
+- `OPENAI_BASE_URL`
+
+进一步可能出现：
+
+- `chain` signer 未配置
+- `agent` 模型配置缺失
+- 主工作区和 worktree 启动行为不一致
+
+推荐在 worktree 中显式指定主仓库根目录的 `.env`：
+
+```bash
+docker compose --env-file "$(dirname "$(git rev-parse --git-common-dir)")/.env" up -d
+```
+
+这样可以确保 Compose 使用当前仓库根目录的环境变量，而不是 worktree 目录下不存在或不完整的 `.env`。
+
 ## MCP 架构
 
 当前设计里：
