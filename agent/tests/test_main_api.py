@@ -2,7 +2,6 @@ import json
 import os
 import re
 import subprocess
-import time
 import unittest
 from unittest.mock import patch
 
@@ -161,6 +160,13 @@ class DelayedFirstChunkStreamingGraph:
         yield "values", {"messages": [*messages, AIMessage(content="你")]}
 
 
+class FirstIterationFailureStreamingGraph:
+    async def astream(self, payload: dict[str, object], stream_mode: str):
+        assert stream_mode == ["messages", "values"]
+        raise RuntimeError("first iteration failed")
+        yield  # pragma: no cover
+
+
 class FakeToolClient:
     def __init__(self, tools: list[str]) -> None:
         self._tools = tools
@@ -238,17 +244,20 @@ class MainApiTests(unittest.TestCase):
                 session.session_id, main.AgentChatRequest(input="你好")
             )
 
-        async def read_first_chunk(response: object) -> str:
-            return await anext(response.body_iterator)  # type: ignore[attr-defined]
+        async def read_first_two_chunks(response: object) -> tuple[str, str]:
+            first = await anext(response.body_iterator)  # type: ignore[attr-defined]
+            second = await anext(response.body_iterator)  # type: ignore[attr-defined]
+            return first, second
 
         with patch.object(main, "get_agent_graph", return_value=graph):
-            started_at = time.monotonic()
             response = main.asyncio.run(invoke_stream())
-            elapsed = time.monotonic() - started_at
-            first_chunk = main.asyncio.run(read_first_chunk(response))
+            first_chunk, second_chunk = main.asyncio.run(
+                read_first_two_chunks(response)
+            )
 
-        self.assertLess(elapsed, 0.2)
         self.assertIn("event: start", first_chunk)
+        self.assertIn("event: delta", second_chunk)
+        self.assertIn('"delta": "你"', second_chunk)
 
     def test_agent_session_stream_setup_failure_returns_503(self) -> None:
         controller = FakeAutonomyController()
@@ -271,6 +280,30 @@ class MainApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.json(), {"detail": "graph unavailable"})
+
+    def test_agent_session_stream_first_iteration_failure_returns_400(self) -> None:
+        controller = FakeAutonomyController()
+
+        with (
+            patch.object(main, "get_autonomy_controller", return_value=controller),
+            patch.object(
+                main,
+                "get_agent_graph",
+                return_value=FirstIterationFailureStreamingGraph(),
+            ),
+        ):
+            with TestClient(main.app) as client:
+                create_response = client.post("/agent/sessions")
+                self.assertEqual(create_response.status_code, 200)
+                session_id = create_response.json()["sessionId"]
+
+                response = client.post(
+                    f"/agent/sessions/{session_id}/messages/stream",
+                    json={"input": "你好"},
+                )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json(), {"detail": "first iteration failed"})
 
     def test_agent_session_stream_final_output_matches_final_message_semantics(
         self,
