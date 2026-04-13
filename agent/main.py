@@ -889,7 +889,9 @@ def _align_final_message_output(messages: list[Any], output: str) -> list[Any]:
             aligned_messages[index] = message.model_copy(update={"content": output})
         else:
             aligned_messages[index] = AIMessage(content=output)
-        break
+        return aligned_messages
+
+    aligned_messages.append(AIMessage(content=output))
     return aligned_messages
 
 

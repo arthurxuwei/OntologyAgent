@@ -89,7 +89,7 @@ class EmptyReplyGraph:
 
 
 class RecordingGraph:
-    def __init__(self, replies: list[AIMessage]) -> None:
+    def __init__(self, replies: list[object]) -> None:
         self._replies = replies
         self.calls: list[list[object]] = []
 
@@ -219,6 +219,46 @@ class MainApiTests(unittest.TestCase):
         self.assertEqual(len(persisted_assistant_turns), 1)
         self.assertEqual(
             getattr(persisted_assistant_turns[0], "content", None),
+            "模型返回了空回复，请重试或更换模型配置。",
+        )
+
+    def test_empty_non_ai_tail_session_history_appends_fallback_text_on_next_turn(
+        self,
+    ) -> None:
+        controller = FakeAutonomyController()
+        graph = RecordingGraph(
+            [
+                main.HumanMessage(content=[{"type": "text", "text": "   "}]),
+                AIMessage(content="second turn reply"),
+            ]
+        )
+
+        with (
+            patch.object(main, "get_autonomy_controller", return_value=controller),
+            patch.object(main, "get_agent_graph", return_value=graph),
+        ):
+            with TestClient(main.app) as client:
+                create_response = client.post("/agent/sessions")
+                session_id = create_response.json()["sessionId"]
+
+                first_response = client.post(
+                    f"/agent/sessions/{session_id}/messages",
+                    json={"input": "第一轮无 assistant 消息"},
+                )
+                second_response = client.post(
+                    f"/agent/sessions/{session_id}/messages",
+                    json={"input": "第二轮继续"},
+                )
+
+        self.assertEqual(first_response.status_code, 200)
+        self.assertEqual(
+            first_response.json()["output"], "模型返回了空回复，请重试或更换模型配置。"
+        )
+        self.assertEqual(second_response.status_code, 200)
+        self.assertEqual(second_response.json()["output"], "second turn reply")
+        self.assertEqual(getattr(graph.calls[1][-2], "type", None), "ai")
+        self.assertEqual(
+            getattr(graph.calls[1][-2], "content", None),
             "模型返回了空回复，请重试或更换模型配置。",
         )
 
