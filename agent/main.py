@@ -912,33 +912,20 @@ def _sse_event(event: str, data: dict[str, Any]) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-async def _stream_agent_output(messages: list[Any]) -> AsyncIterator[tuple[str, Any]]:
-    return await _open_agent_stream(messages)
+def _stream_agent_output(messages: list[Any]) -> AsyncIterator[tuple[str, Any]]:
+    return _open_agent_stream(messages)
 
 
-async def _open_agent_stream(messages: list[Any]) -> AsyncIterator[tuple[str, Any]]:
+def _open_agent_stream(messages: list[Any]) -> AsyncIterator[tuple[str, Any]]:
     try:
         graph = get_agent_graph()
     except RuntimeError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
 
     try:
-        stream = graph.astream(
-            {"messages": messages}, stream_mode=["messages", "values"]
-        )
-        first_item = await anext(stream)
-    except StopAsyncIteration:
-        first_item = None
+        return graph.astream({"messages": messages}, stream_mode=["messages", "values"])
     except Exception as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
-
-    async def replay() -> AsyncIterator[tuple[str, Any]]:
-        if first_item is not None:
-            yield first_item
-        async for item in stream:
-            yield item
-
-    return replay()
 
 
 def _consume_stream_item(
@@ -1145,7 +1132,7 @@ async def stream_agent_session_message(
 
     input_message = HumanMessage(content=request.input)
     pending_messages = [*session.messages, input_message]
-    stream = await _stream_agent_output(pending_messages)
+    stream = _stream_agent_output(pending_messages)
 
     async def event_stream():
         yield _sse_event(

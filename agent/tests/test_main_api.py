@@ -258,6 +258,7 @@ class MainApiTests(unittest.TestCase):
         self.assertIn("event: start", first_chunk)
         self.assertIn("event: delta", second_chunk)
         self.assertIn('"delta": "你"', second_chunk)
+        self.assertEqual(getattr(session, "messages", None), [])
 
     def test_agent_session_stream_setup_failure_returns_503(self) -> None:
         controller = FakeAutonomyController()
@@ -281,7 +282,7 @@ class MainApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.json(), {"detail": "graph unavailable"})
 
-    def test_agent_session_stream_first_iteration_failure_returns_400(self) -> None:
+    def test_agent_session_stream_first_iteration_failure_emits_error(self) -> None:
         controller = FakeAutonomyController()
 
         with (
@@ -297,13 +298,23 @@ class MainApiTests(unittest.TestCase):
                 self.assertEqual(create_response.status_code, 200)
                 session_id = create_response.json()["sessionId"]
 
-                response = client.post(
+                with client.stream(
+                    "POST",
                     f"/agent/sessions/{session_id}/messages/stream",
                     json={"input": "你好"},
-                )
+                ) as response:
+                    self.assertEqual(response.status_code, 200)
+                    body = "".join(response.iter_text())
 
-        self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.json(), {"detail": "first iteration failed"})
+                self.assertIn("event: start", body)
+                self.assertIn("event: error", body)
+                self.assertNotIn("event: delta", body)
+                self.assertNotIn("event: final", body)
+
+                state_response = client.get(f"/agent/sessions/{session_id}")
+
+        self.assertEqual(state_response.status_code, 200)
+        self.assertEqual(state_response.json()["messageCount"], 0)
 
     def test_agent_session_stream_final_output_matches_final_message_semantics(
         self,
