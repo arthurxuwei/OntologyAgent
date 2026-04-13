@@ -2,6 +2,7 @@ import json
 import os
 import re
 import subprocess
+import time
 import unittest
 from unittest.mock import patch
 
@@ -151,6 +152,15 @@ class DivergingStreamingGraph:
         return {"messages": messages}
 
 
+class DelayedFirstChunkStreamingGraph:
+    async def astream(self, payload: dict[str, object], stream_mode: str):
+        assert stream_mode == ["messages", "values"]
+        await main.asyncio.sleep(0.25)
+        messages = list(payload["messages"])  # type: ignore[index]
+        yield "messages", (AIMessageChunk(content="你"), {"node": "agent"})
+        yield "values", {"messages": [*messages, AIMessage(content="你")]}
+
+
 class FakeToolClient:
     def __init__(self, tools: list[str]) -> None:
         self._tools = tools
@@ -218,6 +228,27 @@ class MainApiTests(unittest.TestCase):
                 self.assertGreaterEqual(body.count("event: delta"), 2)
                 self.assertIn("event: final", body)
                 self.assertIn('"output": "你好"', body)
+
+    def test_stream_emits_start_before_first_model_chunk(self) -> None:
+        graph = DelayedFirstChunkStreamingGraph()
+        session = main.get_session_store().create()
+
+        async def invoke_stream() -> object:
+            return await main.stream_agent_session_message(
+                session.session_id, main.AgentChatRequest(input="你好")
+            )
+
+        async def read_first_chunk(response: object) -> str:
+            return await anext(response.body_iterator)  # type: ignore[attr-defined]
+
+        with patch.object(main, "get_agent_graph", return_value=graph):
+            started_at = time.monotonic()
+            response = main.asyncio.run(invoke_stream())
+            elapsed = time.monotonic() - started_at
+            first_chunk = main.asyncio.run(read_first_chunk(response))
+
+        self.assertLess(elapsed, 0.2)
+        self.assertIn("event: start", first_chunk)
 
     def test_agent_session_stream_setup_failure_returns_503(self) -> None:
         controller = FakeAutonomyController()
