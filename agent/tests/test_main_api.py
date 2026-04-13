@@ -248,6 +248,29 @@ class MainApiTests(unittest.TestCase):
         )
         self.assertIn("final_message_type=ai", "\n".join(logs.output))
 
+    def test_non_empty_string_ai_reply_preserves_whitespace_and_skips_warning(
+        self,
+    ) -> None:
+        controller = FakeAutonomyController()
+        graph = RecordingGraph([AIMessage(content="  hello\n")])
+
+        with (
+            patch.object(main, "get_autonomy_controller", return_value=controller),
+            patch.object(main, "get_agent_graph", return_value=graph),
+            patch.object(main.logger, "warning") as warning_mock,
+        ):
+            with TestClient(main.app) as client:
+                create_response = client.post("/agent/sessions")
+                session_id = create_response.json()["sessionId"]
+                response = client.post(
+                    f"/agent/sessions/{session_id}/messages",
+                    json={"input": "保留模型原始空白"},
+                )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["output"], "  hello\n")
+        warning_mock.assert_not_called()
+
     def test_empty_non_ai_tail_session_history_appends_fallback_text_on_next_turn(
         self,
     ) -> None:

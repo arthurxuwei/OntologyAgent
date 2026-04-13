@@ -830,7 +830,7 @@ def get_agent_graph() -> Any:
 
 def _normalize_message_content(content: Any) -> str:
     if isinstance(content, str):
-        return content.strip()
+        return content
 
     if isinstance(content, list):
         parts: list[str] = []
@@ -846,18 +846,21 @@ def _normalize_message_content(content: Any) -> str:
     return str(content)
 
 
+def _is_empty_message_content(content: Any) -> bool:
+    return not _normalize_message_content(content).strip()
+
+
 def _extract_final_output(messages: list[Any]) -> str:
     final_message = messages[-1] if messages else None
     final_message_type = getattr(final_message, "type", None)
     final_message_python_type = type(final_message).__name__ if final_message else None
 
-    normalized_output = _normalize_message_content(
-        getattr(final_message, "content", "No response from agent.")
-    )
-    if final_message_type == "ai" and normalized_output:
+    final_content = getattr(final_message, "content", "No response from agent.")
+    normalized_output = _normalize_message_content(final_content)
+    if final_message_type == "ai" and not _is_empty_message_content(final_content):
         return normalized_output
 
-    if normalized_output:
+    if not _is_empty_message_content(final_content):
         return EMPTY_FINAL_OUTPUT_FALLBACK
 
     logger.warning(
