@@ -559,6 +559,7 @@
         sessionId: null,
         messageCount: 0,
         busy: false,
+        streamingAgentMessageEl: null,
       };
 
       const sessionIdEl = document.getElementById("session-id");
@@ -614,9 +615,122 @@
         heading.textContent = label;
         article.appendChild(heading);
 
-        article.append(document.createTextNode(content));
+        const body = document.createElement("span");
+        body.textContent = content;
+        article.appendChild(body);
+        article._messageLabelEl = heading;
+        article._messageBodyEl = body;
         messagesEl.appendChild(article);
         messagesEl.scrollTop = messagesEl.scrollHeight;
+        return article;
+      }
+
+      function appendOrUpdateStreamingAgentMessage(content, isError = false) {
+        if (!state.streamingAgentMessageEl) {
+          state.streamingAgentMessageEl = addMessage("agent", "Agent", content);
+          return;
+        }
+
+        const article = state.streamingAgentMessageEl;
+        article.className = `message ${isError ? "system" : "agent"}`;
+        const heading = article._messageLabelEl;
+        if (heading) {
+          heading.textContent = isError ? "System" : "Agent";
+        }
+        if (article._messageBodyEl) {
+          article._messageBodyEl.textContent = content;
+        }
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+      }
+
+      async function streamAgentMessage(sessionId, input) {
+        const response = await fetch(`/agent/sessions/${sessionId}/messages/stream`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ input }),
+        });
+
+        if (!response.ok) {
+          let detail = `HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ""}`;
+          try {
+            const payload = await response.json();
+            detail = payload?.detail ?? JSON.stringify(payload);
+          } catch (_error) {
+            // Fall back to the HTTP status when the error body is not JSON.
+          }
+          throw new Error(detail);
+        }
+
+        if (!response.body) {
+          throw new Error("Streaming response body unavailable");
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        async function handleEventBlock(block) {
+          const lines = block.split("\n");
+          let eventName = "message";
+          const dataLines = [];
+
+          for (const line of lines) {
+            if (line.startsWith("event:")) {
+              eventName = line.slice(6).trim();
+            } else if (line.startsWith("data:")) {
+              dataLines.push(line.slice(5).trim());
+            }
+          }
+
+          if (dataLines.length === 0) {
+            return;
+          }
+
+          const payload = JSON.parse(dataLines.join("\n"));
+          if (eventName === "start") {
+            appendOrUpdateStreamingAgentMessage("正在生成回复...");
+            return;
+          }
+          if (eventName === "delta") {
+            const currentContent = state.streamingAgentMessageEl?._messageBodyEl?.textContent ?? "";
+            appendOrUpdateStreamingAgentMessage(currentContent + (payload.delta ?? ""));
+            return;
+          }
+          if (eventName === "final") {
+            setSession(payload.sessionId, payload.messageCount);
+            appendOrUpdateStreamingAgentMessage(payload.output ?? "");
+            state.streamingAgentMessageEl = null;
+            return;
+          }
+          if (eventName === "error") {
+            appendOrUpdateStreamingAgentMessage(`流式回复失败：${payload.error ?? "未知错误"}`, true);
+            state.streamingAgentMessageEl = null;
+            return;
+          }
+        }
+
+        while (true) {
+          const { value, done } = await reader.read();
+          buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+
+          const eventBlocks = buffer.split("\n\n");
+          buffer = eventBlocks.pop() ?? "";
+          for (const block of eventBlocks) {
+            if (block.trim()) {
+              await handleEventBlock(block);
+            }
+          }
+
+          if (done) {
+            break;
+          }
+        }
+
+        if (buffer.trim()) {
+          await handleEventBlock(buffer);
+        }
       }
 
       function renderRuntimeStatus(viewModel) {
@@ -918,12 +1032,7 @@
         setBusy(true, "Agent thinking");
 
         try {
-          const payload = await requestJson(`/agent/sessions/${sessionId}/messages`, {
-            method: "POST",
-            body: JSON.stringify({ input }),
-          });
-          setSession(payload.sessionId, payload.messageCount);
-          addMessage("agent", "Agent", payload.output);
+          await streamAgentMessage(sessionId, input);
         } catch (error) {
           addMessage("system", "System", `发送失败：${error.message}`);
         } finally {

@@ -861,6 +861,18 @@ class MainApiTests(unittest.TestCase):
         ]:
             self.assertIn(marker, response.text)
 
+    def test_chat_page_includes_streaming_chat_helpers(self) -> None:
+        controller = FakeAutonomyController()
+
+        with patch.object(main, "get_autonomy_controller", return_value=controller):
+            with TestClient(main.app) as client:
+                response = client.get("/")
+
+        self.assertEqual(response.status_code, 200)
+        script_text = _extract_inline_script(response.text)
+        self.assertIn("async function streamAgentMessage", script_text)
+        self.assertIn("function appendOrUpdateStreamingAgentMessage", script_text)
+
     def test_chat_page_registers_periodic_dashboard_refresh(self) -> None:
         controller = FakeAutonomyController()
 
