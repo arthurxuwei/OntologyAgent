@@ -9,3 +9,4 @@ freqtrade/data/
 agent/data/
 .vscode/
 .worktrees/
+.playwright-mcp/
