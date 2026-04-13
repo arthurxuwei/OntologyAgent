@@ -74,6 +74,13 @@ class FakeGraph:
         return {"messages": messages}
 
 
+class EmptyReplyGraph:
+    async def ainvoke(self, payload: dict[str, object]) -> dict[str, object]:
+        messages = list(payload["messages"])  # type: ignore[index]
+        messages.append(AIMessage(content=""))
+        return {"messages": messages}
+
+
 class FakeToolClient:
     def __init__(self, tools: list[str]) -> None:
         self._tools = tools
@@ -111,6 +118,28 @@ class MainApiTests(unittest.TestCase):
                 state_response = client.get(f"/agent/sessions/{session_id}")
                 self.assertEqual(state_response.status_code, 200)
                 self.assertEqual(state_response.json()["sessionId"], session_id)
+
+    def test_agent_sessions_return_fallback_text_for_empty_model_reply(self) -> None:
+        controller = FakeAutonomyController()
+        with (
+            patch.object(main, "get_autonomy_controller", return_value=controller),
+            patch.object(main, "get_agent_graph", return_value=EmptyReplyGraph()),
+        ):
+            with TestClient(main.app) as client:
+                create_response = client.post("/agent/sessions")
+                self.assertEqual(create_response.status_code, 200)
+                session_id = create_response.json()["sessionId"]
+
+                send_response = client.post(
+                    f"/agent/sessions/{session_id}/messages",
+                    json={"input": "hello"},
+                )
+
+        self.assertEqual(send_response.status_code, 200)
+        self.assertEqual(
+            send_response.json()["output"],
+            "模型返回了空回复，请重试或更换模型配置。",
+        )
 
     def test_chat_page_is_served(self) -> None:
         controller = FakeAutonomyController()

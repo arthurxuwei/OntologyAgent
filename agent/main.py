@@ -853,9 +853,12 @@ def _extract_final_output(messages: list[Any]) -> str:
     if final_message is None and messages:
         final_message = messages[-1]
 
-    return _normalize_message_content(
+    output = _normalize_message_content(
         getattr(final_message, "content", "No response from agent.")
     )
+    if output:
+        return output
+    return "模型返回了空回复，请重试或更换模型配置。"
 
 
 async def _invoke_agent(messages: list[Any]) -> dict[str, Any]:
