@@ -294,6 +294,27 @@ class MainApiTests(unittest.TestCase):
         self.assertEqual(response.json()["output"], "  hello\n")
         warning_mock.assert_not_called()
 
+    def test_multi_block_list_ai_reply_does_not_inject_newlines(self) -> None:
+        controller = FakeAutonomyController()
+        graph = RecordingGraph([AIMessage(content=[{"text": "hel"}, {"text": "lo"}])])
+
+        with (
+            patch.object(main, "get_autonomy_controller", return_value=controller),
+            patch.object(main, "get_agent_graph", return_value=graph),
+            patch.object(main.logger, "warning") as warning_mock,
+        ):
+            with TestClient(main.app) as client:
+                create_response = client.post("/agent/sessions")
+                session_id = create_response.json()["sessionId"]
+                response = client.post(
+                    f"/agent/sessions/{session_id}/messages",
+                    json={"input": "多段文本不要插入换行"},
+                )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["output"], "hello")
+        warning_mock.assert_not_called()
+
     def test_empty_non_ai_tail_session_history_appends_fallback_text_on_next_turn(
         self,
     ) -> None:
