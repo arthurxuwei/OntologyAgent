@@ -13,7 +13,7 @@ from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import StructuredTool
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
@@ -48,6 +48,7 @@ NO_CACHE_HEADERS = {
     "Pragma": "no-cache",
     "Expires": "0",
 }
+EMPTY_FINAL_OUTPUT_FALLBACK = "模型返回了空回复，请重试或更换模型配置。"
 
 
 def get_openai_base_url() -> Optional[str]:
@@ -872,7 +873,24 @@ def _extract_final_output(messages: list[Any]) -> str:
         len(messages),
         [getattr(message, "type", type(message).__name__) for message in messages[-5:]],
     )
-    return "模型返回了空回复，请重试或更换模型配置。"
+    return EMPTY_FINAL_OUTPUT_FALLBACK
+
+
+def _align_final_message_output(messages: list[Any], output: str) -> list[Any]:
+    if output != EMPTY_FINAL_OUTPUT_FALLBACK:
+        return messages
+
+    aligned_messages = list(messages)
+    for index in range(len(aligned_messages) - 1, -1, -1):
+        message = aligned_messages[index]
+        if getattr(message, "type", None) != "ai":
+            continue
+        if hasattr(message, "model_copy"):
+            aligned_messages[index] = message.model_copy(update={"content": output})
+        else:
+            aligned_messages[index] = AIMessage(content=output)
+        break
+    return aligned_messages
 
 
 async def _invoke_agent(messages: list[Any]) -> dict[str, Any]:
@@ -1038,8 +1056,8 @@ async def send_agent_session_message(
         [*session.messages, HumanMessage(content=request.input)]
     )
     messages = result.get("messages", [])
-    session.messages = list(messages)
-    output = _extract_final_output(session.messages)
+    output = _extract_final_output(list(messages))
+    session.messages = _align_final_message_output(list(messages), output)
 
     return AgentChatResponse(
         sessionId=session.session_id,

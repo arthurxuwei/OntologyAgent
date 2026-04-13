@@ -88,6 +88,18 @@ class EmptyReplyGraph:
         return {"messages": messages}
 
 
+class RecordingGraph:
+    def __init__(self, replies: list[AIMessage]) -> None:
+        self._replies = replies
+        self.calls: list[list[object]] = []
+
+    async def ainvoke(self, payload: dict[str, object]) -> dict[str, object]:
+        messages = list(payload["messages"])  # type: ignore[index]
+        self.calls.append(list(messages))
+        messages.append(self._replies[len(self.calls) - 1])
+        return {"messages": messages}
+
+
 class FakeToolClient:
     def __init__(self, tools: list[str]) -> None:
         self._tools = tools
@@ -161,6 +173,73 @@ class MainApiTests(unittest.TestCase):
         self.assertIn("gpt-4.1-mini-empty-test", joined_logs)
         self.assertIn("https://empty-reply.test/v1", joined_logs)
         self.assertIn("chatcmpl-empty-123", joined_logs)
+
+    def test_empty_model_reply_session_history_uses_fallback_text_on_next_turn(
+        self,
+    ) -> None:
+        controller = FakeAutonomyController()
+        graph = RecordingGraph(
+            [
+                AIMessage(
+                    content=[{"type": "text", "text": "   "}],
+                    response_metadata={"id": "chatcmpl-empty-123"},
+                ),
+                AIMessage(content="second turn reply"),
+            ]
+        )
+
+        with (
+            patch.object(main, "get_autonomy_controller", return_value=controller),
+            patch.object(main, "get_agent_graph", return_value=graph),
+        ):
+            with TestClient(main.app) as client:
+                create_response = client.post("/agent/sessions")
+                session_id = create_response.json()["sessionId"]
+
+                first_response = client.post(
+                    f"/agent/sessions/{session_id}/messages",
+                    json={"input": "第一轮为什么没回复？"},
+                )
+                second_response = client.post(
+                    f"/agent/sessions/{session_id}/messages",
+                    json={"input": "第二轮继续"},
+                )
+
+        self.assertEqual(first_response.status_code, 200)
+        self.assertEqual(
+            first_response.json()["output"], "模型返回了空回复，请重试或更换模型配置。"
+        )
+        self.assertEqual(second_response.status_code, 200)
+        self.assertEqual(second_response.json()["output"], "second turn reply")
+        persisted_assistant_turns = [
+            message
+            for message in graph.calls[1]
+            if getattr(message, "type", None) == "ai"
+        ]
+        self.assertEqual(len(persisted_assistant_turns), 1)
+        self.assertEqual(
+            getattr(persisted_assistant_turns[0], "content", None),
+            "模型返回了空回复，请重试或更换模型配置。",
+        )
+
+    def test_normal_model_reply_does_not_emit_empty_reply_warning(self) -> None:
+        controller = FakeAutonomyController()
+
+        with (
+            patch.object(main, "get_autonomy_controller", return_value=controller),
+            patch.object(main, "get_agent_graph", return_value=FakeGraph()),
+            self.assertNoLogs(main.logger.name, level="WARNING"),
+        ):
+            with TestClient(main.app) as client:
+                create_response = client.post("/agent/sessions")
+                session_id = create_response.json()["sessionId"]
+                response = client.post(
+                    f"/agent/sessions/{session_id}/messages",
+                    json={"input": "正常回复测试"},
+                )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["output"], "interactive reply")
 
     def test_chat_page_is_served(self) -> None:
         controller = FakeAutonomyController()
