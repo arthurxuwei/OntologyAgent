@@ -849,6 +849,7 @@ def _normalize_message_content(content: Any) -> str:
 def _extract_final_output(messages: list[Any]) -> str:
     final_message = messages[-1] if messages else None
     final_message_type = getattr(final_message, "type", None)
+    final_message_python_type = type(final_message).__name__ if final_message else None
 
     normalized_output = _normalize_message_content(
         getattr(final_message, "content", "No response from agent.")
@@ -857,10 +858,11 @@ def _extract_final_output(messages: list[Any]) -> str:
         return normalized_output
 
     logger.warning(
-        "Agent returned empty final output: model=%s base_url=%s final_message_type=%s final_content=%r response_metadata=%r additional_kwargs=%r message_count=%d tail_message_types=%s",
+        "Agent returned empty final output: model=%s base_url=%s final_message_type=%s final_message_python_type=%s final_content=%r response_metadata=%r additional_kwargs=%r message_count=%d tail_message_types=%s",
         os.getenv("BRAIN_AGENT_MODEL", "gpt-4o-mini"),
         get_openai_base_url(),
         final_message_type,
+        final_message_python_type,
         getattr(final_message, "content", None),
         getattr(final_message, "response_metadata", None),
         getattr(final_message, "additional_kwargs", None),

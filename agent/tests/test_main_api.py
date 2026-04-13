@@ -173,6 +173,7 @@ class MainApiTests(unittest.TestCase):
         self.assertIn("gpt-4.1-mini-empty-test", joined_logs)
         self.assertIn("https://empty-reply.test/v1", joined_logs)
         self.assertIn("chatcmpl-empty-123", joined_logs)
+        self.assertIn("final_message_python_type=AIMessage", joined_logs)
 
     def test_empty_model_reply_session_history_uses_fallback_text_on_next_turn(
         self,
@@ -365,7 +366,7 @@ class MainApiTests(unittest.TestCase):
         with (
             patch.object(main, "get_autonomy_controller", return_value=controller),
             patch.object(main, "get_agent_graph", return_value=FakeGraph()),
-            self.assertNoLogs(main.logger.name, level="WARNING"),
+            patch.object(main.logger, "warning") as warning_mock,
         ):
             with TestClient(main.app) as client:
                 create_response = client.post("/agent/sessions")
@@ -377,6 +378,7 @@ class MainApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["output"], "interactive reply")
+        warning_mock.assert_not_called()
 
     def test_chat_page_is_served(self) -> None:
         controller = FakeAutonomyController()
