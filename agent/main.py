@@ -869,16 +869,18 @@ def _extract_final_output(messages: list[Any]) -> str:
         return EMPTY_FINAL_OUTPUT_FALLBACK
 
     logger.warning(
-        "Agent returned empty final output: model=%s base_url=%s final_message_type=%s final_message_python_type=%s final_content=%r response_metadata_id=%s response_metadata_finish_reason=%s additional_kwargs_keys=%s message_count=%d tail_message_types=%s",
+        "Agent returned empty final output: model=%s base_url=%s final_message_type=%s final_message_python_type=%s final_content=%r response_metadata=%r response_metadata_id=%s response_metadata_finish_reason=%s additional_kwargs=%r additional_kwargs_keys=%s message_count=%d tail_message_types=%s",
         os.getenv("BRAIN_AGENT_MODEL", "gpt-4o-mini"),
         get_openai_base_url(),
         final_message_type,
         final_message_python_type,
         final_content,
+        response_metadata,
         response_metadata.get("id") if isinstance(response_metadata, dict) else None,
         response_metadata.get("finish_reason")
         if isinstance(response_metadata, dict)
         else None,
+        additional_kwargs,
         sorted(additional_kwargs.keys())
         if isinstance(additional_kwargs, dict)
         else None,

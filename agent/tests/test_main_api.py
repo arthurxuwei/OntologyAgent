@@ -177,6 +177,13 @@ class MainApiTests(unittest.TestCase):
         self.assertIn("response_metadata_id=chatcmpl-empty-123", joined_logs)
         self.assertIn("response_metadata_finish_reason=stop", joined_logs)
         self.assertIn("additional_kwargs_keys=['provider']", joined_logs)
+        self.assertIn(
+            "response_metadata={'id': 'chatcmpl-empty-123', 'finish_reason': 'stop'}",
+            joined_logs,
+        )
+        self.assertIn(
+            "additional_kwargs={'provider': 'test-openai-compatible'}", joined_logs
+        )
 
     def test_extract_final_output_empty_messages_logs_warning_and_returns_fallback(
         self,
