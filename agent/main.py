@@ -917,15 +917,8 @@ def _stream_agent_output(messages: list[Any]) -> AsyncIterator[tuple[str, Any]]:
 
 
 def _open_agent_stream(messages: list[Any]) -> AsyncIterator[tuple[str, Any]]:
-    try:
-        graph = get_agent_graph()
-    except RuntimeError as error:
-        raise HTTPException(status_code=503, detail=str(error)) from error
-
-    try:
-        return graph.astream({"messages": messages}, stream_mode=["messages", "values"])
-    except Exception as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
+    graph = get_agent_graph()
+    return graph.astream({"messages": messages}, stream_mode=["messages", "values"])
 
 
 def _consume_stream_item(
@@ -1132,7 +1125,6 @@ async def stream_agent_session_message(
 
     input_message = HumanMessage(content=request.input)
     pending_messages = [*session.messages, input_message]
-    stream = _stream_agent_output(pending_messages)
 
     async def event_stream():
         yield _sse_event(
@@ -1142,6 +1134,7 @@ async def stream_agent_session_message(
         deltas: list[str] = []
         latest_messages: Optional[list[Any]] = None
         try:
+            stream = _stream_agent_output(pending_messages)
             async for item in stream:
                 delta, latest_messages = _consume_stream_item(item, latest_messages)
                 if delta is not None:
