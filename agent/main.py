@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import threading
 from datetime import datetime, timezone
@@ -23,6 +24,7 @@ from chain_mcp_client import ChainMcpClient
 from freqtrade_mcp_client import FreqtradeMcpClient, FreqtradeMcpClientError
 
 app = FastAPI(title="OntologyAgent agent")
+logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = (
     "你是一个金融助理。链上相关动作只能通过 chain MCP 工具完成；"
@@ -853,9 +855,24 @@ def _extract_final_output(messages: list[Any]) -> str:
     if final_message is None and messages:
         final_message = messages[-1]
 
-    return _normalize_message_content(
+    normalized_output = _normalize_message_content(
         getattr(final_message, "content", "No response from agent.")
     )
+    if normalized_output:
+        return normalized_output
+
+    logger.warning(
+        "Agent returned empty final output: model=%s base_url=%s final_message_type=%s final_content=%r response_metadata=%r additional_kwargs=%r message_count=%d tail_message_types=%s",
+        os.getenv("BRAIN_AGENT_MODEL", "gpt-4o-mini"),
+        get_openai_base_url(),
+        getattr(final_message, "type", None),
+        getattr(final_message, "content", None),
+        getattr(final_message, "response_metadata", None),
+        getattr(final_message, "additional_kwargs", None),
+        len(messages),
+        [getattr(message, "type", type(message).__name__) for message in messages[-5:]],
+    )
+    return "模型返回了空回复，请重试或更换模型配置。"
 
 
 async def _invoke_agent(messages: list[Any]) -> dict[str, Any]:

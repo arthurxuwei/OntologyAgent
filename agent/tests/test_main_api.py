@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import subprocess
 import unittest
@@ -74,6 +75,19 @@ class FakeGraph:
         return {"messages": messages}
 
 
+class EmptyReplyGraph:
+    async def ainvoke(self, payload: dict[str, object]) -> dict[str, object]:
+        messages = list(payload["messages"])  # type: ignore[index]
+        messages.append(
+            AIMessage(
+                content=[{"type": "text", "text": "   "}],
+                response_metadata={"id": "chatcmpl-empty-123", "finish_reason": "stop"},
+                additional_kwargs={"provider": "test-openai-compatible"},
+            )
+        )
+        return {"messages": messages}
+
+
 class FakeToolClient:
     def __init__(self, tools: list[str]) -> None:
         self._tools = tools
@@ -111,6 +125,42 @@ class MainApiTests(unittest.TestCase):
                 state_response = client.get(f"/agent/sessions/{session_id}")
                 self.assertEqual(state_response.status_code, 200)
                 self.assertEqual(state_response.json()["sessionId"], session_id)
+
+    def test_empty_model_reply_diagnostics_logs_warning_and_returns_fallback_text(
+        self,
+    ) -> None:
+        controller = FakeAutonomyController()
+
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "BRAIN_AGENT_MODEL": "gpt-4.1-mini-empty-test",
+                    "OPENAI_BASE_URL": "https://empty-reply.test/v1",
+                },
+                clear=False,
+            ),
+            patch.object(main, "get_autonomy_controller", return_value=controller),
+            patch.object(main, "get_agent_graph", return_value=EmptyReplyGraph()),
+            self.assertLogs(main.logger.name, level="WARNING") as logs,
+        ):
+            with TestClient(main.app) as client:
+                create_response = client.post("/agent/sessions")
+                session_id = create_response.json()["sessionId"]
+                response = client.post(
+                    f"/agent/sessions/{session_id}/messages",
+                    json={"input": "为什么没有回复？"},
+                )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json()["output"], "模型返回了空回复，请重试或更换模型配置。"
+        )
+        joined_logs = "\n".join(logs.output)
+        self.assertIn("Agent returned empty final output", joined_logs)
+        self.assertIn("gpt-4.1-mini-empty-test", joined_logs)
+        self.assertIn("https://empty-reply.test/v1", joined_logs)
+        self.assertIn("chatcmpl-empty-123", joined_logs)
 
     def test_chat_page_is_served(self) -> None:
         controller = FakeAutonomyController()
