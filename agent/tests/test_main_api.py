@@ -174,6 +174,43 @@ class MainApiTests(unittest.TestCase):
         self.assertIn("https://empty-reply.test/v1", joined_logs)
         self.assertIn("chatcmpl-empty-123", joined_logs)
         self.assertIn("final_message_python_type=AIMessage", joined_logs)
+        self.assertIn("response_metadata_id=chatcmpl-empty-123", joined_logs)
+        self.assertIn("response_metadata_finish_reason=stop", joined_logs)
+        self.assertIn("additional_kwargs_keys=['provider']", joined_logs)
+
+    def test_extract_final_output_empty_messages_logs_warning_and_returns_fallback(
+        self,
+    ) -> None:
+        with self.assertLogs(main.logger.name, level="WARNING") as logs:
+            output = main._extract_final_output([])
+
+        self.assertEqual(output, "模型返回了空回复，请重试或更换模型配置。")
+        joined_logs = "\n".join(logs.output)
+        self.assertIn("Agent returned empty final output", joined_logs)
+        self.assertIn("message_count=0", joined_logs)
+        self.assertIn("final_message_type=None", joined_logs)
+
+    def test_agent_run_empty_model_reply_logs_warning_and_returns_fallback(
+        self,
+    ) -> None:
+        controller = FakeAutonomyController()
+
+        with (
+            patch.object(main, "get_autonomy_controller", return_value=controller),
+            patch.object(main, "get_agent_graph", return_value=EmptyReplyGraph()),
+            self.assertLogs(main.logger.name, level="WARNING") as logs,
+        ):
+            with TestClient(main.app) as client:
+                response = client.post(
+                    "/agent/run",
+                    json={"input": "直接运行为什么没有回复？"},
+                )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json()["output"], "模型返回了空回复，请重试或更换模型配置。"
+        )
+        self.assertIn("Agent returned empty final output", "\n".join(logs.output))
 
     def test_empty_model_reply_session_history_uses_fallback_text_on_next_turn(
         self,

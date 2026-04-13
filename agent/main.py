@@ -829,6 +829,9 @@ def get_agent_graph() -> Any:
 
 
 def _normalize_message_content(content: Any) -> str:
+    if content is None:
+        return ""
+
     if isinstance(content, str):
         return content
 
@@ -854,8 +857,10 @@ def _extract_final_output(messages: list[Any]) -> str:
     final_message = messages[-1] if messages else None
     final_message_type = getattr(final_message, "type", None)
     final_message_python_type = type(final_message).__name__ if final_message else None
+    response_metadata = getattr(final_message, "response_metadata", None)
+    additional_kwargs = getattr(final_message, "additional_kwargs", None)
 
-    final_content = getattr(final_message, "content", "No response from agent.")
+    final_content = getattr(final_message, "content", None)
     normalized_output = _normalize_message_content(final_content)
     if final_message_type == "ai" and not _is_empty_message_content(final_content):
         return normalized_output
@@ -864,14 +869,19 @@ def _extract_final_output(messages: list[Any]) -> str:
         return EMPTY_FINAL_OUTPUT_FALLBACK
 
     logger.warning(
-        "Agent returned empty final output: model=%s base_url=%s final_message_type=%s final_message_python_type=%s final_content=%r response_metadata=%r additional_kwargs=%r message_count=%d tail_message_types=%s",
+        "Agent returned empty final output: model=%s base_url=%s final_message_type=%s final_message_python_type=%s final_content=%r response_metadata_id=%s response_metadata_finish_reason=%s additional_kwargs_keys=%s message_count=%d tail_message_types=%s",
         os.getenv("BRAIN_AGENT_MODEL", "gpt-4o-mini"),
         get_openai_base_url(),
         final_message_type,
         final_message_python_type,
-        getattr(final_message, "content", None),
-        getattr(final_message, "response_metadata", None),
-        getattr(final_message, "additional_kwargs", None),
+        final_content,
+        response_metadata.get("id") if isinstance(response_metadata, dict) else None,
+        response_metadata.get("finish_reason")
+        if isinstance(response_metadata, dict)
+        else None,
+        sorted(additional_kwargs.keys())
+        if isinstance(additional_kwargs, dict)
+        else None,
         len(messages),
         [getattr(message, "type", type(message).__name__) for message in messages[-5:]],
     )
