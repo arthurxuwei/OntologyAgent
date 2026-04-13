@@ -841,7 +841,7 @@ def _normalize_message_content(content: Any) -> str:
                 text = item.get("text")
                 if isinstance(text, str):
                     parts.append(text)
-        return "\n".join(parts).strip()
+        return "\n".join(parts)
 
     return str(content)
 
