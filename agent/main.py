@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import threading
@@ -12,7 +13,7 @@ from typing import Any, Literal, Optional
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import StructuredTool
 from langchain_openai import ChatOpenAI
@@ -907,6 +908,20 @@ def _align_final_message_output(messages: list[Any], output: str) -> list[Any]:
     return aligned_messages
 
 
+def _sse_event(event: str, data: dict[str, Any]) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+async def _stream_agent_output(messages: list[Any]):
+    graph = get_agent_graph()
+    async for chunk, _metadata in graph.astream(
+        {"messages": messages}, stream_mode="messages"
+    ):
+        text = _normalize_message_content(getattr(chunk, "content", None))
+        if text:
+            yield text
+
+
 async def _invoke_agent(messages: list[Any]) -> dict[str, Any]:
     try:
         graph = get_agent_graph()
@@ -1079,6 +1094,50 @@ async def send_agent_session_message(
         output=output,
         messageCount=len(session.messages),
     )
+
+
+@app.post("/agent/sessions/{session_id}/messages/stream")
+async def stream_agent_session_message(
+    session_id: str, request: AgentChatRequest
+) -> StreamingResponse:
+    try:
+        session = get_session_store().get(session_id)
+    except KeyError as error:
+        raise HTTPException(
+            status_code=404, detail=f"Unknown agent session: {session_id}"
+        ) from error
+
+    input_message = HumanMessage(content=request.input)
+    pending_messages = [*session.messages, input_message]
+
+    async def event_stream():
+        yield _sse_event(
+            "start", {"sessionId": session.session_id, "input": request.input}
+        )
+
+        deltas: list[str] = []
+        try:
+            async for delta in _stream_agent_output(pending_messages):
+                deltas.append(delta)
+                yield _sse_event("delta", {"delta": delta})
+        except Exception as error:
+            yield _sse_event(
+                "error", {"sessionId": session.session_id, "error": str(error)}
+            )
+            return
+
+        output = _extract_final_output([AIMessage(content="".join(deltas))])
+        session.messages = [*session.messages, input_message, AIMessage(content=output)]
+        yield _sse_event(
+            "final",
+            {
+                "sessionId": session.session_id,
+                "output": output,
+                "messageCount": len(session.messages),
+            },
+        )
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 @app.post("/agent/run")

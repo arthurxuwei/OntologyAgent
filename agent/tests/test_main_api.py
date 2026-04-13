@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, AIMessageChunk
 
 import main
 
@@ -100,6 +100,28 @@ class RecordingGraph:
         return {"messages": messages}
 
 
+class StreamingGraph:
+    def __init__(self) -> None:
+        self.calls: list[list[object]] = []
+
+    async def astream(self, payload: dict[str, object], stream_mode: str):
+        self.calls.append(list(payload["messages"]))  # type: ignore[index]
+        assert stream_mode == "messages"
+        yield AIMessageChunk(content="你"), {"node": "agent"}
+        yield AIMessageChunk(content="好"), {"node": "agent"}
+
+
+class FailingStreamingGraph:
+    def __init__(self) -> None:
+        self.calls: list[list[object]] = []
+
+    async def astream(self, payload: dict[str, object], stream_mode: str):
+        self.calls.append(list(payload["messages"]))  # type: ignore[index]
+        assert stream_mode == "messages"
+        yield AIMessageChunk(content="你"), {"node": "agent"}
+        raise RuntimeError("stream exploded")
+
+
 class FakeToolClient:
     def __init__(self, tools: list[str]) -> None:
         self._tools = tools
@@ -137,6 +159,68 @@ class MainApiTests(unittest.TestCase):
                 state_response = client.get(f"/agent/sessions/{session_id}")
                 self.assertEqual(state_response.status_code, 200)
                 self.assertEqual(state_response.json()["sessionId"], session_id)
+
+    def test_stream_emits_start_delta_final_events(self) -> None:
+        controller = FakeAutonomyController()
+        graph = StreamingGraph()
+
+        with (
+            patch.object(main, "get_autonomy_controller", return_value=controller),
+            patch.object(main, "get_agent_graph", return_value=graph),
+        ):
+            with TestClient(main.app) as client:
+                create_response = client.post("/agent/sessions")
+                self.assertEqual(create_response.status_code, 200)
+                session_id = create_response.json()["sessionId"]
+
+                with client.stream(
+                    "POST",
+                    f"/agent/sessions/{session_id}/messages/stream",
+                    json={"input": "你好"},
+                ) as response:
+                    self.assertEqual(response.status_code, 200)
+                    self.assertEqual(
+                        response.headers["content-type"],
+                        "text/event-stream; charset=utf-8",
+                    )
+                    body = "".join(response.iter_text())
+
+                self.assertIn("event: start", body)
+                self.assertGreaterEqual(body.count("event: delta"), 2)
+                self.assertIn("event: final", body)
+                self.assertIn('"output": "你好"', body)
+
+    def test_agent_session_stream_emits_error_and_does_not_persist_partial_reply(
+        self,
+    ) -> None:
+        controller = FakeAutonomyController()
+        graph = FailingStreamingGraph()
+
+        with (
+            patch.object(main, "get_autonomy_controller", return_value=controller),
+            patch.object(main, "get_agent_graph", return_value=graph),
+        ):
+            with TestClient(main.app) as client:
+                create_response = client.post("/agent/sessions")
+                self.assertEqual(create_response.status_code, 200)
+                session_id = create_response.json()["sessionId"]
+
+                with client.stream(
+                    "POST",
+                    f"/agent/sessions/{session_id}/messages/stream",
+                    json={"input": "你好"},
+                ) as response:
+                    self.assertEqual(response.status_code, 200)
+                    body = "".join(response.iter_text())
+
+                self.assertIn("event: start", body)
+                self.assertIn("event: delta", body)
+                self.assertIn("event: error", body)
+                self.assertNotIn("event: final", body)
+
+                state_response = client.get(f"/agent/sessions/{session_id}")
+                self.assertEqual(state_response.status_code, 200)
+                self.assertEqual(state_response.json()["messageCount"], 0)
 
     def test_empty_model_reply_diagnostics_logs_warning_and_returns_fallback_text(
         self,
