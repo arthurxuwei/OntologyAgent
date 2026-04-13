@@ -830,7 +830,7 @@ def get_agent_graph() -> Any:
 
 def _normalize_message_content(content: Any) -> str:
     if isinstance(content, str):
-        return content
+        return content.strip()
 
     if isinstance(content, list):
         parts: list[str] = []
@@ -856,6 +856,9 @@ def _extract_final_output(messages: list[Any]) -> str:
     )
     if final_message_type == "ai" and normalized_output:
         return normalized_output
+
+    if normalized_output:
+        return EMPTY_FINAL_OUTPUT_FALLBACK
 
     logger.warning(
         "Agent returned empty final output: model=%s base_url=%s final_message_type=%s final_message_python_type=%s final_content=%r response_metadata=%r additional_kwargs=%r message_count=%d tail_message_types=%s",

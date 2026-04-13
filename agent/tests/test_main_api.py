@@ -223,6 +223,31 @@ class MainApiTests(unittest.TestCase):
             "模型返回了空回复，请重试或更换模型配置。",
         )
 
+    def test_whitespace_only_string_ai_reply_logs_warning_and_returns_fallback(
+        self,
+    ) -> None:
+        controller = FakeAutonomyController()
+        graph = RecordingGraph([AIMessage(content="   ")])
+
+        with (
+            patch.object(main, "get_autonomy_controller", return_value=controller),
+            patch.object(main, "get_agent_graph", return_value=graph),
+            self.assertLogs(main.logger.name, level="WARNING") as logs,
+        ):
+            with TestClient(main.app) as client:
+                create_response = client.post("/agent/sessions")
+                session_id = create_response.json()["sessionId"]
+                response = client.post(
+                    f"/agent/sessions/{session_id}/messages",
+                    json={"input": "空白 assistant 回复"},
+                )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json()["output"], "模型返回了空回复，请重试或更换模型配置。"
+        )
+        self.assertIn("final_message_type=ai", "\n".join(logs.output))
+
     def test_empty_non_ai_tail_session_history_appends_fallback_text_on_next_turn(
         self,
     ) -> None:
@@ -333,7 +358,7 @@ class MainApiTests(unittest.TestCase):
         with (
             patch.object(main, "get_autonomy_controller", return_value=controller),
             patch.object(main, "get_agent_graph", return_value=graph),
-            self.assertLogs(main.logger.name, level="WARNING") as logs,
+            patch.object(main.logger, "warning") as warning_mock,
         ):
             with TestClient(main.app) as client:
                 create_response = client.post("/agent/sessions")
@@ -360,7 +385,7 @@ class MainApiTests(unittest.TestCase):
             getattr(graph.calls[1][-2], "content", None),
             "模型返回了空回复，请重试或更换模型配置。",
         )
-        self.assertIn("final_message_type=human", "\n".join(logs.output))
+        warning_mock.assert_not_called()
 
     def test_normal_model_reply_does_not_emit_empty_reply_warning(self) -> None:
         controller = FakeAutonomyController()
