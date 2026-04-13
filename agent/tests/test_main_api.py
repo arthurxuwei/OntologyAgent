@@ -316,6 +316,49 @@ class MainApiTests(unittest.TestCase):
             ["seed assistant reply", "模型返回了空回复，请重试或更换模型配置。"],
         )
 
+    def test_non_empty_non_ai_tail_does_not_leak_raw_content_as_assistant_reply(
+        self,
+    ) -> None:
+        controller = FakeAutonomyController()
+        graph = RecordingGraph(
+            [
+                main.HumanMessage(content="tool or human tail content"),
+                AIMessage(content="second turn reply"),
+            ]
+        )
+
+        with (
+            patch.object(main, "get_autonomy_controller", return_value=controller),
+            patch.object(main, "get_agent_graph", return_value=graph),
+            self.assertLogs(main.logger.name, level="WARNING") as logs,
+        ):
+            with TestClient(main.app) as client:
+                create_response = client.post("/agent/sessions")
+                session_id = create_response.json()["sessionId"]
+
+                first_response = client.post(
+                    f"/agent/sessions/{session_id}/messages",
+                    json={"input": "最后一条不是 assistant"},
+                )
+                second_response = client.post(
+                    f"/agent/sessions/{session_id}/messages",
+                    json={"input": "第二轮继续"},
+                )
+
+        self.assertEqual(first_response.status_code, 200)
+        self.assertEqual(
+            first_response.json()["output"], "模型返回了空回复，请重试或更换模型配置。"
+        )
+        self.assertEqual(second_response.status_code, 200)
+        self.assertEqual(second_response.json()["output"], "second turn reply")
+        self.assertNotIn("tool or human tail content", first_response.json()["output"])
+        self.assertEqual(getattr(graph.calls[1][-2], "type", None), "ai")
+        self.assertEqual(
+            getattr(graph.calls[1][-2], "content", None),
+            "模型返回了空回复，请重试或更换模型配置。",
+        )
+        self.assertIn("final_message_type=human", "\n".join(logs.output))
+
     def test_normal_model_reply_does_not_emit_empty_reply_warning(self) -> None:
         controller = FakeAutonomyController()
 
