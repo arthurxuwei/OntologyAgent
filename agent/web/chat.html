@@ -287,6 +287,13 @@
         background: #fffdf8;
       }
 
+      .message.agent[data-streaming-state="loading"]::after {
+        content: "正在生成回复...";
+        display: block;
+        margin-top: 8px;
+        color: var(--muted);
+      }
+
       .message.intro-message {
         max-width: 380px;
         padding: 8px 10px;
@@ -628,6 +635,8 @@
       function appendOrUpdateStreamingAgentMessage(content, isError = false) {
         if (!state.streamingAgentMessageEl) {
           state.streamingAgentMessageEl = addMessage("agent", "Agent", content);
+          const article = state.streamingAgentMessageEl;
+          article.dataset.streamingState = "loading";
           return;
         }
 
@@ -640,6 +649,7 @@
         if (article._messageBodyEl) {
           article._messageBodyEl.textContent = content;
         }
+        article.dataset.streamingState = isError ? "error" : "idle";
         messagesEl.scrollTop = messagesEl.scrollHeight;
       }
 
@@ -690,7 +700,7 @@
 
           const payload = JSON.parse(dataLines.join("\n"));
           if (eventName === "start") {
-            appendOrUpdateStreamingAgentMessage("正在生成回复...");
+            appendOrUpdateStreamingAgentMessage("");
             return;
           }
           if (eventName === "delta") {

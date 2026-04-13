@@ -873,6 +873,21 @@ class MainApiTests(unittest.TestCase):
         self.assertIn("async function streamAgentMessage", script_text)
         self.assertIn("function appendOrUpdateStreamingAgentMessage", script_text)
 
+    def test_chat_page_streaming_placeholder_state_is_separate_from_message_body(
+        self,
+    ) -> None:
+        controller = FakeAutonomyController()
+
+        with patch.object(main, "get_autonomy_controller", return_value=controller):
+            with TestClient(main.app) as client:
+                response = client.get("/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('[data-streaming-state="loading"]::after', response.text)
+        script_text = _extract_inline_script(response.text)
+        self.assertIn('article.dataset.streamingState = "loading"', script_text)
+        self.assertIn('appendOrUpdateStreamingAgentMessage("")', script_text)
+
     def test_chat_page_registers_periodic_dashboard_refresh(self) -> None:
         controller = FakeAutonomyController()
 
