@@ -106,9 +106,10 @@ class StreamingGraph:
 
     async def astream(self, payload: dict[str, object], stream_mode: str):
         self.calls.append(list(payload["messages"]))  # type: ignore[index]
-        assert stream_mode == "messages"
-        yield AIMessageChunk(content="你"), {"node": "agent"}
-        yield AIMessageChunk(content="好"), {"node": "agent"}
+        assert stream_mode == ["messages", "values"]
+        yield "messages", (AIMessageChunk(content="你"), {"node": "agent"})
+        yield "messages", (AIMessageChunk(content="好"), {"node": "agent"})
+        yield "values", {"messages": [*self.calls[-1], AIMessage(content="你好")]}
 
 
 class FailingStreamingGraph:
@@ -117,9 +118,37 @@ class FailingStreamingGraph:
 
     async def astream(self, payload: dict[str, object], stream_mode: str):
         self.calls.append(list(payload["messages"]))  # type: ignore[index]
-        assert stream_mode == "messages"
-        yield AIMessageChunk(content="你"), {"node": "agent"}
+        assert stream_mode == ["messages", "values"]
+        yield "messages", (AIMessageChunk(content="你"), {"node": "agent"})
         raise RuntimeError("stream exploded")
+
+
+class DivergingStreamingGraph:
+    def __init__(self) -> None:
+        self.stream_calls: list[list[object]] = []
+        self.invoke_calls: list[list[object]] = []
+
+    async def astream(self, payload: dict[str, object], stream_mode: str):
+        self.stream_calls.append(list(payload["messages"]))  # type: ignore[index]
+        assert stream_mode == ["messages", "values"]
+        yield "messages", (AIMessageChunk(content="先查工具"), {"node": "agent"})
+        yield "messages", (AIMessageChunk(content="，稍等"), {"node": "agent"})
+        yield (
+            "values",
+            {
+                "messages": [
+                    *self.stream_calls[-1],
+                    AIMessage(content="工具调用中间态"),
+                    AIMessage(content="最终答案"),
+                ]
+            },
+        )
+
+    async def ainvoke(self, payload: dict[str, object]) -> dict[str, object]:
+        messages = list(payload["messages"])  # type: ignore[index]
+        self.invoke_calls.append(list(messages))
+        messages.append(AIMessage(content="second turn reply"))
+        return {"messages": messages}
 
 
 class FakeToolClient:
@@ -189,6 +218,73 @@ class MainApiTests(unittest.TestCase):
                 self.assertGreaterEqual(body.count("event: delta"), 2)
                 self.assertIn("event: final", body)
                 self.assertIn('"output": "你好"', body)
+
+    def test_agent_session_stream_setup_failure_returns_503(self) -> None:
+        controller = FakeAutonomyController()
+
+        with (
+            patch.object(main, "get_autonomy_controller", return_value=controller),
+            patch.object(
+                main, "get_agent_graph", side_effect=RuntimeError("graph unavailable")
+            ),
+        ):
+            with TestClient(main.app) as client:
+                create_response = client.post("/agent/sessions")
+                self.assertEqual(create_response.status_code, 200)
+                session_id = create_response.json()["sessionId"]
+
+                response = client.post(
+                    f"/agent/sessions/{session_id}/messages/stream",
+                    json={"input": "你好"},
+                )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json(), {"detail": "graph unavailable"})
+
+    def test_agent_session_stream_final_output_matches_final_message_semantics(
+        self,
+    ) -> None:
+        controller = FakeAutonomyController()
+        graph = DivergingStreamingGraph()
+
+        with (
+            patch.object(main, "get_autonomy_controller", return_value=controller),
+            patch.object(main, "get_agent_graph", return_value=graph),
+        ):
+            with TestClient(main.app) as client:
+                create_response = client.post("/agent/sessions")
+                self.assertEqual(create_response.status_code, 200)
+                session_id = create_response.json()["sessionId"]
+
+                with client.stream(
+                    "POST",
+                    f"/agent/sessions/{session_id}/messages/stream",
+                    json={"input": "第一轮"},
+                ) as response:
+                    self.assertEqual(response.status_code, 200)
+                    body = "".join(response.iter_text())
+
+                self.assertIn('"output": "最终答案"', body)
+                self.assertNotIn('"output": "先查工具，稍等"', body)
+
+                second_response = client.post(
+                    f"/agent/sessions/{session_id}/messages",
+                    json={"input": "第二轮继续"},
+                )
+
+        self.assertEqual(second_response.status_code, 200)
+        persisted_assistant_turns = [
+            message
+            for message in graph.invoke_calls[0]
+            if getattr(message, "type", None) == "ai"
+        ]
+        self.assertEqual(
+            [
+                getattr(message, "content", None)
+                for message in persisted_assistant_turns
+            ],
+            ["工具调用中间态", "最终答案"],
+        )
 
     def test_agent_session_stream_emits_error_and_does_not_persist_partial_reply(
         self,

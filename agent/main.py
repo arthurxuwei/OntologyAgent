@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Literal, Optional
+from typing import Any, AsyncIterator, Literal, Optional
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException
@@ -912,14 +912,48 @@ def _sse_event(event: str, data: dict[str, Any]) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-async def _stream_agent_output(messages: list[Any]):
-    graph = get_agent_graph()
-    async for chunk, _metadata in graph.astream(
-        {"messages": messages}, stream_mode="messages"
-    ):
+async def _stream_agent_output(messages: list[Any]) -> AsyncIterator[tuple[str, Any]]:
+    return await _open_agent_stream(messages)
+
+
+async def _open_agent_stream(messages: list[Any]) -> AsyncIterator[tuple[str, Any]]:
+    try:
+        graph = get_agent_graph()
+    except RuntimeError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+
+    stream = graph.astream({"messages": messages}, stream_mode=["messages", "values"])
+    try:
+        first_item = await anext(stream)
+    except StopAsyncIteration:
+        first_item = None
+    except Exception as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+    async def replay() -> AsyncIterator[tuple[str, Any]]:
+        if first_item is not None:
+            yield first_item
+        async for item in stream:
+            yield item
+
+    return replay()
+
+
+def _consume_stream_item(
+    item: tuple[str, Any], latest_messages: Optional[list[Any]]
+) -> tuple[Optional[str], Optional[list[Any]]]:
+    mode, payload = item
+    if mode == "messages":
+        chunk, _metadata = payload
         text = _normalize_message_content(getattr(chunk, "content", None))
-        if text:
-            yield text
+        return (text or None), latest_messages
+
+    if mode == "values" and isinstance(payload, dict):
+        messages = payload.get("messages")
+        if isinstance(messages, list):
+            return (None, list(messages))
+
+    return (None, latest_messages)
 
 
 async def _invoke_agent(messages: list[Any]) -> dict[str, Any]:
@@ -1109,6 +1143,7 @@ async def stream_agent_session_message(
 
     input_message = HumanMessage(content=request.input)
     pending_messages = [*session.messages, input_message]
+    stream = await _stream_agent_output(pending_messages)
 
     async def event_stream():
         yield _sse_event(
@@ -1116,18 +1151,25 @@ async def stream_agent_session_message(
         )
 
         deltas: list[str] = []
+        latest_messages: Optional[list[Any]] = None
         try:
-            async for delta in _stream_agent_output(pending_messages):
-                deltas.append(delta)
-                yield _sse_event("delta", {"delta": delta})
+            async for item in stream:
+                delta, latest_messages = _consume_stream_item(item, latest_messages)
+                if delta is not None:
+                    deltas.append(delta)
+                    yield _sse_event("delta", {"delta": delta})
         except Exception as error:
             yield _sse_event(
                 "error", {"sessionId": session.session_id, "error": str(error)}
             )
             return
 
-        output = _extract_final_output([AIMessage(content="".join(deltas))])
-        session.messages = [*session.messages, input_message, AIMessage(content=output)]
+        final_messages = latest_messages or [
+            *pending_messages,
+            AIMessage(content="".join(deltas)),
+        ]
+        output = _extract_final_output(final_messages)
+        session.messages = _align_final_message_output(list(final_messages), output)
         yield _sse_event(
             "final",
             {
