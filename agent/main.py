@@ -857,6 +857,14 @@ def _extract_final_output(messages: list[Any]) -> str:
     if final_message_type == "ai" and normalized_output:
         return normalized_output
 
+    if final_message_type != "ai":
+        for message in reversed(messages[:-1]):
+            if getattr(message, "type", None) != "ai":
+                continue
+            prior_output = _normalize_message_content(getattr(message, "content", ""))
+            if prior_output:
+                return prior_output
+
     logger.warning(
         "Agent returned empty final output: model=%s base_url=%s final_message_type=%s final_message_python_type=%s final_content=%r response_metadata=%r additional_kwargs=%r message_count=%d tail_message_types=%s",
         os.getenv("BRAIN_AGENT_MODEL", "gpt-4o-mini"),
