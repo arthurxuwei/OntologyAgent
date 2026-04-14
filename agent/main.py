@@ -1086,32 +1086,6 @@ def get_agent_session(session_id: str) -> AgentSessionStateResponse:
     )
 
 
-@app.post("/agent/sessions/{session_id}/messages")
-async def send_agent_session_message(
-    session_id: str, request: AgentChatRequest
-) -> AgentChatResponse:
-    try:
-        session = get_session_store().get(session_id)
-    except KeyError as error:
-        raise HTTPException(
-            status_code=404, detail=f"Unknown agent session: {session_id}"
-        ) from error
-
-    result = await _invoke_agent(
-        [*session.messages, HumanMessage(content=request.input)]
-    )
-    messages = result.get("messages", [])
-    output = _extract_final_output(list(messages))
-    session.messages = _align_final_message_output(list(messages), output)
-
-    return AgentChatResponse(
-        sessionId=session.session_id,
-        input=request.input,
-        output=output,
-        messageCount=len(session.messages),
-    )
-
-
 @app.post("/agent/sessions/{session_id}/messages/stream")
 async def stream_agent_session_message(
     session_id: str, request: AgentChatRequest

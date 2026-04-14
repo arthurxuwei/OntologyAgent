@@ -180,7 +180,7 @@ class MainApiTests(unittest.TestCase):
         main.get_session_store.cache_clear()
         main.get_chain_activity_store.cache_clear()
 
-    def test_agent_sessions_support_multi_turn_chat(self) -> None:
+    def test_sync_endpoint_is_removed(self) -> None:
         controller = FakeAutonomyController()
         with (
             patch.object(main, "get_autonomy_controller", return_value=controller),
@@ -195,11 +195,7 @@ class MainApiTests(unittest.TestCase):
                     f"/agent/sessions/{session_id}/messages",
                     json={"input": "你好，先帮我看下 guard"},
                 )
-                self.assertEqual(send_response.status_code, 200)
-                body = send_response.json()
-                self.assertEqual(body["sessionId"], session_id)
-                self.assertEqual(body["output"], "interactive reply")
-                self.assertGreaterEqual(body["messageCount"], 2)
+                self.assertEqual(send_response.status_code, 404)
 
                 state_response = client.get(f"/agent/sessions/{session_id}")
                 self.assertEqual(state_response.status_code, 200)
@@ -352,15 +348,17 @@ class MainApiTests(unittest.TestCase):
                 self.assertIn('"output": "最终答案"', body)
                 self.assertNotIn('"output": "先查工具，稍等"', body)
 
-                second_response = client.post(
-                    f"/agent/sessions/{session_id}/messages",
+                with client.stream(
+                    "POST",
+                    f"/agent/sessions/{session_id}/messages/stream",
                     json={"input": "第二轮继续"},
-                )
+                ) as second_response:
+                    self.assertEqual(second_response.status_code, 200)
+                    "".join(second_response.iter_text())
 
-        self.assertEqual(second_response.status_code, 200)
         persisted_assistant_turns = [
             message
-            for message in graph.invoke_calls[0]
+            for message in graph.stream_calls[1]
             if getattr(message, "type", None) == "ai"
         ]
         self.assertEqual(
