@@ -690,6 +690,7 @@
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
+        let startEventReceived = false;
 
         async function handleEventBlock(block) {
           const lines = block.split("\n");
@@ -710,6 +711,7 @@
 
           const payload = JSON.parse(dataLines.join("\n"));
           if (eventName === "start") {
+            startEventReceived = true;
             appendOrUpdateStreamingAgentMessage("");
             return;
           }
@@ -751,7 +753,10 @@
             await handleEventBlock(buffer);
           }
 
-          clearStreamingAgentMessage("流式回复异常结束", true);
+          const didClearStreamingMessage = clearStreamingAgentMessage("流式回复异常结束", true);
+          if (!didClearStreamingMessage && !startEventReceived) {
+            addMessage("system", "System", "流式回复异常结束");
+          }
         } catch (error) {
           const didClearStreamingMessage = clearStreamingAgentMessage(`流式回复失败：${error.message}`, true);
           if (didClearStreamingMessage) {
