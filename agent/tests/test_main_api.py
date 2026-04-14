@@ -906,6 +906,21 @@ class MainApiTests(unittest.TestCase):
             script_text,
         )
 
+    def test_chat_page_treats_stream_eof_without_terminal_event_as_failure(
+        self,
+    ) -> None:
+        controller = FakeAutonomyController()
+
+        with patch.object(main, "get_autonomy_controller", return_value=controller):
+            with TestClient(main.app) as client:
+                response = client.get("/")
+
+        self.assertEqual(response.status_code, 200)
+        script_text = _extract_inline_script(response.text)
+        self.assertIn(
+            'clearStreamingAgentMessage("流式回复异常结束", true);', script_text
+        )
+
     def test_chat_page_registers_periodic_dashboard_refresh(self) -> None:
         controller = FakeAutonomyController()
 

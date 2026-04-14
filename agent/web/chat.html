@@ -750,6 +750,8 @@
           if (buffer.trim()) {
             await handleEventBlock(buffer);
           }
+
+          clearStreamingAgentMessage("流式回复异常结束", true);
         } catch (error) {
           const didClearStreamingMessage = clearStreamingAgentMessage(`流式回复失败：${error.message}`, true);
           if (didClearStreamingMessage) {
