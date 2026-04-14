@@ -936,7 +936,7 @@ class MainApiTests(unittest.TestCase):
             'addMessage("system", "System", "流式回复异常结束");', script_text
         )
 
-    def test_chat_page_preserves_partial_stream_content_when_failure_arrives(
+    def test_chat_page_preserves_partial_stream_content_for_stream_errors_and_aborts(
         self,
     ) -> None:
         controller = FakeAutonomyController()
@@ -948,11 +948,21 @@ class MainApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn('[data-streaming-state="error"]::after', response.text)
         script_text = _extract_inline_script(response.text)
+        self.assertIn("if (isError && currentContent) {", script_text)
         self.assertIn(
             'const currentContent = article._messageBodyEl?.textContent ?? "";',
             script_text,
         )
+        self.assertIn('article.className = "message agent";', script_text)
+        self.assertIn('article._messageLabelEl.textContent = "Agent";', script_text)
         self.assertIn("article.dataset.streamingStatus = content;", script_text)
+        self.assertIn(
+            'clearStreamingAgentMessage(`流式回复失败：${payload.error ?? "未知错误"}`, true);',
+            script_text,
+        )
+        self.assertIn(
+            'clearStreamingAgentMessage("流式回复异常结束", true);', script_text
+        )
 
     def test_chat_page_registers_periodic_dashboard_refresh(self) -> None:
         controller = FakeAutonomyController()
