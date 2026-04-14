@@ -294,6 +294,13 @@
         color: var(--muted);
       }
 
+      .message[data-streaming-state="error"]::after {
+        content: attr(data-streaming-status);
+        display: block;
+        margin-top: 8px;
+        color: var(--danger);
+      }
+
       .message.intro-message {
         max-width: 380px;
         padding: 8px 10px;
@@ -658,7 +665,19 @@
           return false;
         }
 
-        appendOrUpdateStreamingAgentMessage(content, isError);
+        const article = state.streamingAgentMessageEl;
+        const currentContent = article._messageBodyEl?.textContent ?? "";
+        if (isError && currentContent) {
+          article.className = "message agent";
+          if (article._messageLabelEl) {
+            article._messageLabelEl.textContent = "Agent";
+          }
+          article.dataset.streamingState = "error";
+          article.dataset.streamingStatus = content;
+        } else {
+          appendOrUpdateStreamingAgentMessage(content, isError);
+          article.dataset.streamingStatus = isError ? content : "";
+        }
         state.streamingAgentMessageEl = null;
         return true;
       }
