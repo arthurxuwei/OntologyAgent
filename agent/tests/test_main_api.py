@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, AIMessageChunk
 
 import main
 
@@ -16,6 +16,25 @@ def _extract_inline_script(html: str) -> str:
     if match is None:
         raise AssertionError("expected inline script in chat page html")
     return match.group(1)
+
+
+def _extract_sse_event_data(body: str, event: str) -> dict[str, object]:
+    matches = re.findall(rf"event: {re.escape(event)}\ndata: (.+)", body)
+    if not matches:
+        raise AssertionError(f"expected {event} event in stream body")
+    return json.loads(matches[-1])
+
+
+def _stream_session_message(
+    client: TestClient, session_id: str, user_input: str
+) -> tuple[int, str, dict[str, object]]:
+    with client.stream(
+        "POST",
+        f"/agent/sessions/{session_id}/messages/stream",
+        json={"input": user_input},
+    ) as response:
+        body = "".join(response.iter_text())
+    return response.status_code, body, _extract_sse_event_data(body, "final")
 
 
 class FakeAutonomyController:
@@ -74,6 +93,15 @@ class FakeGraph:
         messages.append(AIMessage(content="interactive reply"))
         return {"messages": messages}
 
+    async def astream(self, payload: dict[str, object], stream_mode: str):
+        messages = list(payload["messages"])  # type: ignore[index]
+        reply = AIMessage(content="interactive reply")
+        yield (
+            "messages",
+            (AIMessageChunk(content="interactive reply"), {"node": "agent"}),
+        )
+        yield "values", {"messages": [*messages, reply]}
+
 
 class EmptyReplyGraph:
     async def ainvoke(self, payload: dict[str, object]) -> dict[str, object]:
@@ -87,6 +115,25 @@ class EmptyReplyGraph:
         )
         return {"messages": messages}
 
+    async def astream(self, payload: dict[str, object], stream_mode: str):
+        messages = list(payload["messages"])  # type: ignore[index]
+        yield (
+            "values",
+            {
+                "messages": [
+                    *messages,
+                    AIMessage(
+                        content=[{"type": "text", "text": "   "}],
+                        response_metadata={
+                            "id": "chatcmpl-empty-123",
+                            "finish_reason": "stop",
+                        },
+                        additional_kwargs={"provider": "test-openai-compatible"},
+                    ),
+                ]
+            },
+        )
+
 
 class RecordingGraph:
     def __init__(self, replies: list[object]) -> None:
@@ -98,6 +145,82 @@ class RecordingGraph:
         self.calls.append(list(messages))
         messages.append(self._replies[len(self.calls) - 1])
         return {"messages": messages}
+
+    async def astream(self, payload: dict[str, object], stream_mode: str):
+        messages = list(payload["messages"])  # type: ignore[index]
+        self.calls.append(list(messages))
+        reply = self._replies[len(self.calls) - 1]
+        text = main._normalize_message_content(getattr(reply, "content", None))
+        if text:
+            yield "messages", (AIMessageChunk(content=text), {"node": "agent"})
+        yield "values", {"messages": [*messages, reply]}
+
+
+class StreamingGraph:
+    def __init__(self) -> None:
+        self.calls: list[list[object]] = []
+
+    async def astream(self, payload: dict[str, object], stream_mode: str):
+        self.calls.append(list(payload["messages"]))  # type: ignore[index]
+        assert stream_mode == ["messages", "values"]
+        yield "messages", (AIMessageChunk(content="你"), {"node": "agent"})
+        yield "messages", (AIMessageChunk(content="好"), {"node": "agent"})
+        yield "values", {"messages": [*self.calls[-1], AIMessage(content="你好")]}
+
+
+class FailingStreamingGraph:
+    def __init__(self) -> None:
+        self.calls: list[list[object]] = []
+
+    async def astream(self, payload: dict[str, object], stream_mode: str):
+        self.calls.append(list(payload["messages"]))  # type: ignore[index]
+        assert stream_mode == ["messages", "values"]
+        yield "messages", (AIMessageChunk(content="你"), {"node": "agent"})
+        raise RuntimeError("stream exploded")
+
+
+class DivergingStreamingGraph:
+    def __init__(self) -> None:
+        self.stream_calls: list[list[object]] = []
+        self.invoke_calls: list[list[object]] = []
+
+    async def astream(self, payload: dict[str, object], stream_mode: str):
+        self.stream_calls.append(list(payload["messages"]))  # type: ignore[index]
+        assert stream_mode == ["messages", "values"]
+        yield "messages", (AIMessageChunk(content="先查工具"), {"node": "agent"})
+        yield "messages", (AIMessageChunk(content="，稍等"), {"node": "agent"})
+        yield (
+            "values",
+            {
+                "messages": [
+                    *self.stream_calls[-1],
+                    AIMessage(content="工具调用中间态"),
+                    AIMessage(content="最终答案"),
+                ]
+            },
+        )
+
+    async def ainvoke(self, payload: dict[str, object]) -> dict[str, object]:
+        messages = list(payload["messages"])  # type: ignore[index]
+        self.invoke_calls.append(list(messages))
+        messages.append(AIMessage(content="second turn reply"))
+        return {"messages": messages}
+
+
+class DelayedFirstChunkStreamingGraph:
+    async def astream(self, payload: dict[str, object], stream_mode: str):
+        assert stream_mode == ["messages", "values"]
+        await main.asyncio.sleep(0.25)
+        messages = list(payload["messages"])  # type: ignore[index]
+        yield "messages", (AIMessageChunk(content="你"), {"node": "agent"})
+        yield "values", {"messages": [*messages, AIMessage(content="你")]}
+
+
+class FirstIterationFailureStreamingGraph:
+    async def astream(self, payload: dict[str, object], stream_mode: str):
+        assert stream_mode == ["messages", "values"]
+        raise RuntimeError("first iteration failed")
+        yield  # pragma: no cover
 
 
 class FakeToolClient:
@@ -113,7 +236,7 @@ class MainApiTests(unittest.TestCase):
         main.get_session_store.cache_clear()
         main.get_chain_activity_store.cache_clear()
 
-    def test_agent_sessions_support_multi_turn_chat(self) -> None:
+    def test_sync_endpoint_is_removed(self) -> None:
         controller = FakeAutonomyController()
         with (
             patch.object(main, "get_autonomy_controller", return_value=controller),
@@ -128,15 +251,211 @@ class MainApiTests(unittest.TestCase):
                     f"/agent/sessions/{session_id}/messages",
                     json={"input": "你好，先帮我看下 guard"},
                 )
-                self.assertEqual(send_response.status_code, 200)
-                body = send_response.json()
-                self.assertEqual(body["sessionId"], session_id)
-                self.assertEqual(body["output"], "interactive reply")
-                self.assertGreaterEqual(body["messageCount"], 2)
+                self.assertEqual(send_response.status_code, 404)
 
                 state_response = client.get(f"/agent/sessions/{session_id}")
                 self.assertEqual(state_response.status_code, 200)
                 self.assertEqual(state_response.json()["sessionId"], session_id)
+
+    def test_stream_emits_start_delta_final_events(self) -> None:
+        controller = FakeAutonomyController()
+        graph = StreamingGraph()
+
+        with (
+            patch.object(main, "get_autonomy_controller", return_value=controller),
+            patch.object(main, "get_agent_graph", return_value=graph),
+        ):
+            with TestClient(main.app) as client:
+                create_response = client.post("/agent/sessions")
+                self.assertEqual(create_response.status_code, 200)
+                session_id = create_response.json()["sessionId"]
+
+                with client.stream(
+                    "POST",
+                    f"/agent/sessions/{session_id}/messages/stream",
+                    json={"input": "你好"},
+                ) as response:
+                    self.assertEqual(response.status_code, 200)
+                    self.assertEqual(
+                        response.headers["content-type"],
+                        "text/event-stream; charset=utf-8",
+                    )
+                    body = "".join(response.iter_text())
+
+                self.assertIn("event: start", body)
+                self.assertGreaterEqual(body.count("event: delta"), 2)
+                self.assertIn("event: final", body)
+                self.assertIn('"output": "你好"', body)
+
+    def test_stream_emits_start_before_first_model_chunk(self) -> None:
+        graph = DelayedFirstChunkStreamingGraph()
+        session = main.get_session_store().create()
+
+        async def invoke_stream() -> object:
+            return await main.stream_agent_session_message(
+                session.session_id, main.AgentChatRequest(input="你好")
+            )
+
+        async def read_first_two_chunks(response: object) -> tuple[str, str]:
+            first = await anext(response.body_iterator)  # type: ignore[attr-defined]
+            second = await anext(response.body_iterator)  # type: ignore[attr-defined]
+            return first, second
+
+        with patch.object(main, "get_agent_graph", return_value=graph):
+            response = main.asyncio.run(invoke_stream())
+            first_chunk, second_chunk = main.asyncio.run(
+                read_first_two_chunks(response)
+            )
+
+        self.assertIn("event: start", first_chunk)
+        self.assertIn("event: delta", second_chunk)
+        self.assertIn('"delta": "你"', second_chunk)
+        self.assertEqual(getattr(session, "messages", None), [])
+
+    def test_agent_session_stream_setup_failure_emits_error(self) -> None:
+        controller = FakeAutonomyController()
+
+        with (
+            patch.object(main, "get_autonomy_controller", return_value=controller),
+            patch.object(
+                main, "get_agent_graph", side_effect=RuntimeError("graph unavailable")
+            ),
+        ):
+            with TestClient(main.app) as client:
+                create_response = client.post("/agent/sessions")
+                self.assertEqual(create_response.status_code, 200)
+                session_id = create_response.json()["sessionId"]
+
+                with client.stream(
+                    "POST",
+                    f"/agent/sessions/{session_id}/messages/stream",
+                    json={"input": "你好"},
+                ) as response:
+                    self.assertEqual(response.status_code, 200)
+                    body = "".join(response.iter_text())
+
+                self.assertIn("event: start", body)
+                self.assertIn("event: error", body)
+                self.assertNotIn("event: delta", body)
+                self.assertNotIn("event: final", body)
+
+                state_response = client.get(f"/agent/sessions/{session_id}")
+
+        self.assertEqual(state_response.status_code, 200)
+        self.assertEqual(state_response.json()["messageCount"], 0)
+
+    def test_agent_session_stream_first_iteration_failure_emits_error(self) -> None:
+        controller = FakeAutonomyController()
+
+        with (
+            patch.object(main, "get_autonomy_controller", return_value=controller),
+            patch.object(
+                main,
+                "get_agent_graph",
+                return_value=FirstIterationFailureStreamingGraph(),
+            ),
+        ):
+            with TestClient(main.app) as client:
+                create_response = client.post("/agent/sessions")
+                self.assertEqual(create_response.status_code, 200)
+                session_id = create_response.json()["sessionId"]
+
+                with client.stream(
+                    "POST",
+                    f"/agent/sessions/{session_id}/messages/stream",
+                    json={"input": "你好"},
+                ) as response:
+                    self.assertEqual(response.status_code, 200)
+                    body = "".join(response.iter_text())
+
+                self.assertIn("event: start", body)
+                self.assertIn("event: error", body)
+                self.assertNotIn("event: delta", body)
+                self.assertNotIn("event: final", body)
+
+                state_response = client.get(f"/agent/sessions/{session_id}")
+
+        self.assertEqual(state_response.status_code, 200)
+        self.assertEqual(state_response.json()["messageCount"], 0)
+
+    def test_agent_session_stream_final_output_matches_final_message_semantics(
+        self,
+    ) -> None:
+        controller = FakeAutonomyController()
+        graph = DivergingStreamingGraph()
+
+        with (
+            patch.object(main, "get_autonomy_controller", return_value=controller),
+            patch.object(main, "get_agent_graph", return_value=graph),
+        ):
+            with TestClient(main.app) as client:
+                create_response = client.post("/agent/sessions")
+                self.assertEqual(create_response.status_code, 200)
+                session_id = create_response.json()["sessionId"]
+
+                with client.stream(
+                    "POST",
+                    f"/agent/sessions/{session_id}/messages/stream",
+                    json={"input": "第一轮"},
+                ) as response:
+                    self.assertEqual(response.status_code, 200)
+                    body = "".join(response.iter_text())
+
+                self.assertIn('"output": "最终答案"', body)
+                self.assertNotIn('"output": "先查工具，稍等"', body)
+
+                with client.stream(
+                    "POST",
+                    f"/agent/sessions/{session_id}/messages/stream",
+                    json={"input": "第二轮继续"},
+                ) as second_response:
+                    self.assertEqual(second_response.status_code, 200)
+                    "".join(second_response.iter_text())
+
+        persisted_assistant_turns = [
+            message
+            for message in graph.stream_calls[1]
+            if getattr(message, "type", None) == "ai"
+        ]
+        self.assertEqual(
+            [
+                getattr(message, "content", None)
+                for message in persisted_assistant_turns
+            ],
+            ["工具调用中间态", "最终答案"],
+        )
+
+    def test_agent_session_stream_emits_error_and_does_not_persist_partial_reply(
+        self,
+    ) -> None:
+        controller = FakeAutonomyController()
+        graph = FailingStreamingGraph()
+
+        with (
+            patch.object(main, "get_autonomy_controller", return_value=controller),
+            patch.object(main, "get_agent_graph", return_value=graph),
+        ):
+            with TestClient(main.app) as client:
+                create_response = client.post("/agent/sessions")
+                self.assertEqual(create_response.status_code, 200)
+                session_id = create_response.json()["sessionId"]
+
+                with client.stream(
+                    "POST",
+                    f"/agent/sessions/{session_id}/messages/stream",
+                    json={"input": "你好"},
+                ) as response:
+                    self.assertEqual(response.status_code, 200)
+                    body = "".join(response.iter_text())
+
+                self.assertIn("event: start", body)
+                self.assertIn("event: delta", body)
+                self.assertIn("event: error", body)
+                self.assertNotIn("event: final", body)
+
+                state_response = client.get(f"/agent/sessions/{session_id}")
+                self.assertEqual(state_response.status_code, 200)
+                self.assertEqual(state_response.json()["messageCount"], 0)
 
     def test_empty_model_reply_diagnostics_logs_warning_and_returns_fallback_text(
         self,
@@ -159,14 +478,15 @@ class MainApiTests(unittest.TestCase):
             with TestClient(main.app) as client:
                 create_response = client.post("/agent/sessions")
                 session_id = create_response.json()["sessionId"]
-                response = client.post(
-                    f"/agent/sessions/{session_id}/messages",
-                    json={"input": "为什么没有回复？"},
+                status_code, _body, final_event = _stream_session_message(
+                    client,
+                    session_id,
+                    "为什么没有回复？",
                 )
 
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(status_code, 200)
         self.assertEqual(
-            response.json()["output"], "模型返回了空回复，请重试或更换模型配置。"
+            final_event["output"], "模型返回了空回复，请重试或更换模型配置。"
         )
         joined_logs = "\n".join(logs.output)
         self.assertIn("Agent returned empty final output", joined_logs)
@@ -241,21 +561,23 @@ class MainApiTests(unittest.TestCase):
                 create_response = client.post("/agent/sessions")
                 session_id = create_response.json()["sessionId"]
 
-                first_response = client.post(
-                    f"/agent/sessions/{session_id}/messages",
-                    json={"input": "第一轮为什么没回复？"},
+                first_status, _first_body, first_final = _stream_session_message(
+                    client,
+                    session_id,
+                    "第一轮为什么没回复？",
                 )
-                second_response = client.post(
-                    f"/agent/sessions/{session_id}/messages",
-                    json={"input": "第二轮继续"},
+                second_status, _second_body, second_final = _stream_session_message(
+                    client,
+                    session_id,
+                    "第二轮继续",
                 )
 
-        self.assertEqual(first_response.status_code, 200)
+        self.assertEqual(first_status, 200)
         self.assertEqual(
-            first_response.json()["output"], "模型返回了空回复，请重试或更换模型配置。"
+            first_final["output"], "模型返回了空回复，请重试或更换模型配置。"
         )
-        self.assertEqual(second_response.status_code, 200)
-        self.assertEqual(second_response.json()["output"], "second turn reply")
+        self.assertEqual(second_status, 200)
+        self.assertEqual(second_final["output"], "second turn reply")
         persisted_assistant_turns = [
             message
             for message in graph.calls[1]
@@ -281,14 +603,15 @@ class MainApiTests(unittest.TestCase):
             with TestClient(main.app) as client:
                 create_response = client.post("/agent/sessions")
                 session_id = create_response.json()["sessionId"]
-                response = client.post(
-                    f"/agent/sessions/{session_id}/messages",
-                    json={"input": "空白 assistant 回复"},
+                status_code, _body, final_event = _stream_session_message(
+                    client,
+                    session_id,
+                    "空白 assistant 回复",
                 )
 
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(status_code, 200)
         self.assertEqual(
-            response.json()["output"], "模型返回了空回复，请重试或更换模型配置。"
+            final_event["output"], "模型返回了空回复，请重试或更换模型配置。"
         )
         self.assertIn("final_message_type=ai", "\n".join(logs.output))
 
@@ -306,13 +629,14 @@ class MainApiTests(unittest.TestCase):
             with TestClient(main.app) as client:
                 create_response = client.post("/agent/sessions")
                 session_id = create_response.json()["sessionId"]
-                response = client.post(
-                    f"/agent/sessions/{session_id}/messages",
-                    json={"input": "保留模型原始空白"},
+                status_code, _body, final_event = _stream_session_message(
+                    client,
+                    session_id,
+                    "保留模型原始空白",
                 )
 
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["output"], "  hello\n")
+        self.assertEqual(status_code, 200)
+        self.assertEqual(final_event["output"], "  hello\n")
         warning_mock.assert_not_called()
 
     def test_non_empty_list_ai_reply_preserves_whitespace_and_skips_warning(
@@ -329,13 +653,14 @@ class MainApiTests(unittest.TestCase):
             with TestClient(main.app) as client:
                 create_response = client.post("/agent/sessions")
                 session_id = create_response.json()["sessionId"]
-                response = client.post(
-                    f"/agent/sessions/{session_id}/messages",
-                    json={"input": "保留列表内容原始空白"},
+                status_code, _body, final_event = _stream_session_message(
+                    client,
+                    session_id,
+                    "保留列表内容原始空白",
                 )
 
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["output"], "  hello\n")
+        self.assertEqual(status_code, 200)
+        self.assertEqual(final_event["output"], "  hello\n")
         warning_mock.assert_not_called()
 
     def test_multi_block_list_ai_reply_does_not_inject_newlines(self) -> None:
@@ -350,13 +675,14 @@ class MainApiTests(unittest.TestCase):
             with TestClient(main.app) as client:
                 create_response = client.post("/agent/sessions")
                 session_id = create_response.json()["sessionId"]
-                response = client.post(
-                    f"/agent/sessions/{session_id}/messages",
-                    json={"input": "多段文本不要插入换行"},
+                status_code, _body, final_event = _stream_session_message(
+                    client,
+                    session_id,
+                    "多段文本不要插入换行",
                 )
 
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["output"], "hello")
+        self.assertEqual(status_code, 200)
+        self.assertEqual(final_event["output"], "hello")
         warning_mock.assert_not_called()
 
     def test_empty_non_ai_tail_session_history_appends_fallback_text_on_next_turn(
@@ -378,21 +704,23 @@ class MainApiTests(unittest.TestCase):
                 create_response = client.post("/agent/sessions")
                 session_id = create_response.json()["sessionId"]
 
-                first_response = client.post(
-                    f"/agent/sessions/{session_id}/messages",
-                    json={"input": "第一轮无 assistant 消息"},
+                first_status, _first_body, first_final = _stream_session_message(
+                    client,
+                    session_id,
+                    "第一轮无 assistant 消息",
                 )
-                second_response = client.post(
-                    f"/agent/sessions/{session_id}/messages",
-                    json={"input": "第二轮继续"},
+                second_status, _second_body, second_final = _stream_session_message(
+                    client,
+                    session_id,
+                    "第二轮继续",
                 )
 
-        self.assertEqual(first_response.status_code, 200)
+        self.assertEqual(first_status, 200)
         self.assertEqual(
-            first_response.json()["output"], "模型返回了空回复，请重试或更换模型配置。"
+            first_final["output"], "模型返回了空回复，请重试或更换模型配置。"
         )
-        self.assertEqual(second_response.status_code, 200)
-        self.assertEqual(second_response.json()["output"], "second turn reply")
+        self.assertEqual(second_status, 200)
+        self.assertEqual(second_final["output"], "second turn reply")
         self.assertEqual(getattr(graph.calls[1][-2], "type", None), "ai")
         self.assertEqual(
             getattr(graph.calls[1][-2], "content", None),
@@ -420,27 +748,30 @@ class MainApiTests(unittest.TestCase):
                 create_response = client.post("/agent/sessions")
                 session_id = create_response.json()["sessionId"]
 
-                seed_response = client.post(
-                    f"/agent/sessions/{session_id}/messages",
-                    json={"input": "先来一个正常回复"},
+                seed_status, _seed_body, seed_final = _stream_session_message(
+                    client,
+                    session_id,
+                    "先来一个正常回复",
                 )
-                first_response = client.post(
-                    f"/agent/sessions/{session_id}/messages",
-                    json={"input": "第二轮以非 assistant 空尾结束"},
+                first_status, _first_body, first_final = _stream_session_message(
+                    client,
+                    session_id,
+                    "第二轮以非 assistant 空尾结束",
                 )
-                second_response = client.post(
-                    f"/agent/sessions/{session_id}/messages",
-                    json={"input": "第三轮继续"},
+                second_status, _second_body, second_final = _stream_session_message(
+                    client,
+                    session_id,
+                    "第三轮继续",
                 )
 
-        self.assertEqual(seed_response.status_code, 200)
-        self.assertEqual(seed_response.json()["output"], "seed assistant reply")
-        self.assertEqual(first_response.status_code, 200)
+        self.assertEqual(seed_status, 200)
+        self.assertEqual(seed_final["output"], "seed assistant reply")
+        self.assertEqual(first_status, 200)
         self.assertEqual(
-            first_response.json()["output"], "模型返回了空回复，请重试或更换模型配置。"
+            first_final["output"], "模型返回了空回复，请重试或更换模型配置。"
         )
-        self.assertEqual(second_response.status_code, 200)
-        self.assertEqual(second_response.json()["output"], "third turn reply")
+        self.assertEqual(second_status, 200)
+        self.assertEqual(second_final["output"], "third turn reply")
         persisted_assistant_turns = [
             message
             for message in graph.calls[2]
@@ -475,22 +806,24 @@ class MainApiTests(unittest.TestCase):
                 create_response = client.post("/agent/sessions")
                 session_id = create_response.json()["sessionId"]
 
-                first_response = client.post(
-                    f"/agent/sessions/{session_id}/messages",
-                    json={"input": "最后一条不是 assistant"},
+                first_status, _first_body, first_final = _stream_session_message(
+                    client,
+                    session_id,
+                    "最后一条不是 assistant",
                 )
-                second_response = client.post(
-                    f"/agent/sessions/{session_id}/messages",
-                    json={"input": "第二轮继续"},
+                second_status, _second_body, second_final = _stream_session_message(
+                    client,
+                    session_id,
+                    "第二轮继续",
                 )
 
-        self.assertEqual(first_response.status_code, 200)
+        self.assertEqual(first_status, 200)
         self.assertEqual(
-            first_response.json()["output"], "模型返回了空回复，请重试或更换模型配置。"
+            first_final["output"], "模型返回了空回复，请重试或更换模型配置。"
         )
-        self.assertEqual(second_response.status_code, 200)
-        self.assertEqual(second_response.json()["output"], "second turn reply")
-        self.assertNotIn("tool or human tail content", first_response.json()["output"])
+        self.assertEqual(second_status, 200)
+        self.assertEqual(second_final["output"], "second turn reply")
+        self.assertNotIn("tool or human tail content", first_final["output"])
         self.assertEqual(getattr(graph.calls[1][-2], "type", None), "ai")
         self.assertEqual(
             getattr(graph.calls[1][-2], "content", None),
@@ -509,13 +842,14 @@ class MainApiTests(unittest.TestCase):
             with TestClient(main.app) as client:
                 create_response = client.post("/agent/sessions")
                 session_id = create_response.json()["sessionId"]
-                response = client.post(
-                    f"/agent/sessions/{session_id}/messages",
-                    json={"input": "正常回复测试"},
+                status_code, _body, final_event = _stream_session_message(
+                    client,
+                    session_id,
+                    "正常回复测试",
                 )
 
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["output"], "interactive reply")
+        self.assertEqual(status_code, 200)
+        self.assertEqual(final_event["output"], "interactive reply")
         warning_mock.assert_not_called()
 
     def test_chat_page_is_served(self) -> None:
@@ -595,6 +929,109 @@ class MainApiTests(unittest.TestCase):
             "async function refreshDashboard",
         ]:
             self.assertIn(marker, response.text)
+
+    def test_chat_page_includes_streaming_chat_helpers(self) -> None:
+        controller = FakeAutonomyController()
+
+        with patch.object(main, "get_autonomy_controller", return_value=controller):
+            with TestClient(main.app) as client:
+                response = client.get("/")
+
+        self.assertEqual(response.status_code, 200)
+        script_text = _extract_inline_script(response.text)
+        self.assertIn("async function streamAgentMessage", script_text)
+        self.assertIn("function appendOrUpdateStreamingAgentMessage", script_text)
+
+    def test_chat_page_streaming_placeholder_state_is_separate_from_message_body(
+        self,
+    ) -> None:
+        controller = FakeAutonomyController()
+
+        with patch.object(main, "get_autonomy_controller", return_value=controller):
+            with TestClient(main.app) as client:
+                response = client.get("/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('[data-streaming-state="loading"]::after', response.text)
+        script_text = _extract_inline_script(response.text)
+        self.assertIn('article.dataset.streamingState = "loading"', script_text)
+        self.assertIn('appendOrUpdateStreamingAgentMessage("")', script_text)
+
+    def test_chat_page_defines_streaming_cleanup_helper_for_transport_failures(
+        self,
+    ) -> None:
+        controller = FakeAutonomyController()
+
+        with patch.object(main, "get_autonomy_controller", return_value=controller):
+            with TestClient(main.app) as client:
+                response = client.get("/")
+
+        self.assertEqual(response.status_code, 200)
+        script_text = _extract_inline_script(response.text)
+        self.assertIn("function clearStreamingAgentMessage", script_text)
+        self.assertIn("state.streamingAgentMessageEl = null;", script_text)
+        self.assertIn(
+            "clearStreamingAgentMessage(`流式回复失败：${error.message}`, true);",
+            script_text,
+        )
+
+    def test_chat_page_treats_stream_eof_without_terminal_event_as_failure(
+        self,
+    ) -> None:
+        controller = FakeAutonomyController()
+
+        with patch.object(main, "get_autonomy_controller", return_value=controller):
+            with TestClient(main.app) as client:
+                response = client.get("/")
+
+        self.assertEqual(response.status_code, 200)
+        script_text = _extract_inline_script(response.text)
+        self.assertIn(
+            'clearStreamingAgentMessage("流式回复异常结束", true);', script_text
+        )
+
+    def test_chat_page_tracks_pre_start_eof_and_surfaces_stream_failure(self) -> None:
+        controller = FakeAutonomyController()
+
+        with patch.object(main, "get_autonomy_controller", return_value=controller):
+            with TestClient(main.app) as client:
+                response = client.get("/")
+
+        self.assertEqual(response.status_code, 200)
+        script_text = _extract_inline_script(response.text)
+        self.assertIn("let startEventReceived = false;", script_text)
+        self.assertIn("startEventReceived = true;", script_text)
+        self.assertIn(
+            'addMessage("system", "System", "流式回复异常结束");', script_text
+        )
+
+    def test_chat_page_preserves_partial_stream_content_for_stream_errors_and_aborts(
+        self,
+    ) -> None:
+        controller = FakeAutonomyController()
+
+        with patch.object(main, "get_autonomy_controller", return_value=controller):
+            with TestClient(main.app) as client:
+                response = client.get("/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('[data-streaming-state="error"]::after', response.text)
+        script_text = _extract_inline_script(response.text)
+        self.assertIn("if (isError && currentContent) {", script_text)
+        self.assertIn(
+            'const currentContent = article._messageBodyEl?.textContent ?? "";',
+            script_text,
+        )
+        self.assertIn('article.className = "message agent";', script_text)
+        self.assertIn('article._messageLabelEl.textContent = "Agent";', script_text)
+        self.assertIn("article.dataset.streamingStatus = content;", script_text)
+        self.assertIn(
+            'clearStreamingAgentMessage(`流式回复失败：${payload.error ?? "未知错误"}`, true);',
+            script_text,
+        )
+        self.assertIn(
+            'clearStreamingAgentMessage("流式回复异常结束", true);', script_text
+        )
 
     def test_chat_page_registers_periodic_dashboard_refresh(self) -> None:
         controller = FakeAutonomyController()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import threading
@@ -8,11 +9,11 @@ from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Literal, Optional
+from typing import Any, AsyncIterator, Literal, Optional
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import StructuredTool
 from langchain_openai import ChatOpenAI
@@ -907,6 +908,36 @@ def _align_final_message_output(messages: list[Any], output: str) -> list[Any]:
     return aligned_messages
 
 
+def _sse_event(event: str, data: dict[str, Any]) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def _stream_agent_output(messages: list[Any]) -> AsyncIterator[tuple[str, Any]]:
+    return _open_agent_stream(messages)
+
+
+def _open_agent_stream(messages: list[Any]) -> AsyncIterator[tuple[str, Any]]:
+    graph = get_agent_graph()
+    return graph.astream({"messages": messages}, stream_mode=["messages", "values"])
+
+
+def _consume_stream_item(
+    item: tuple[str, Any], latest_messages: Optional[list[Any]]
+) -> tuple[Optional[str], Optional[list[Any]]]:
+    mode, payload = item
+    if mode == "messages":
+        chunk, _metadata = payload
+        text = _normalize_message_content(getattr(chunk, "content", None))
+        return (text or None), latest_messages
+
+    if mode == "values" and isinstance(payload, dict):
+        messages = payload.get("messages")
+        if isinstance(messages, list):
+            return (None, list(messages))
+
+    return (None, latest_messages)
+
+
 async def _invoke_agent(messages: list[Any]) -> dict[str, Any]:
     try:
         graph = get_agent_graph()
@@ -1055,10 +1086,10 @@ def get_agent_session(session_id: str) -> AgentSessionStateResponse:
     )
 
 
-@app.post("/agent/sessions/{session_id}/messages")
-async def send_agent_session_message(
+@app.post("/agent/sessions/{session_id}/messages/stream")
+async def stream_agent_session_message(
     session_id: str, request: AgentChatRequest
-) -> AgentChatResponse:
+) -> StreamingResponse:
     try:
         session = get_session_store().get(session_id)
     except KeyError as error:
@@ -1066,19 +1097,45 @@ async def send_agent_session_message(
             status_code=404, detail=f"Unknown agent session: {session_id}"
         ) from error
 
-    result = await _invoke_agent(
-        [*session.messages, HumanMessage(content=request.input)]
-    )
-    messages = result.get("messages", [])
-    output = _extract_final_output(list(messages))
-    session.messages = _align_final_message_output(list(messages), output)
+    input_message = HumanMessage(content=request.input)
+    pending_messages = [*session.messages, input_message]
 
-    return AgentChatResponse(
-        sessionId=session.session_id,
-        input=request.input,
-        output=output,
-        messageCount=len(session.messages),
-    )
+    async def event_stream():
+        yield _sse_event(
+            "start", {"sessionId": session.session_id, "input": request.input}
+        )
+
+        deltas: list[str] = []
+        latest_messages: Optional[list[Any]] = None
+        try:
+            stream = _stream_agent_output(pending_messages)
+            async for item in stream:
+                delta, latest_messages = _consume_stream_item(item, latest_messages)
+                if delta is not None:
+                    deltas.append(delta)
+                    yield _sse_event("delta", {"delta": delta})
+        except Exception as error:
+            yield _sse_event(
+                "error", {"sessionId": session.session_id, "error": str(error)}
+            )
+            return
+
+        final_messages = latest_messages or [
+            *pending_messages,
+            AIMessage(content="".join(deltas)),
+        ]
+        output = _extract_final_output(final_messages)
+        session.messages = _align_final_message_output(list(final_messages), output)
+        yield _sse_event(
+            "final",
+            {
+                "sessionId": session.session_id,
+                "output": output,
+                "messageCount": len(session.messages),
+            },
+        )
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 @app.post("/agent/run")
