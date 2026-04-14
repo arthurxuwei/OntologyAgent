@@ -888,6 +888,24 @@ class MainApiTests(unittest.TestCase):
         self.assertIn('article.dataset.streamingState = "loading"', script_text)
         self.assertIn('appendOrUpdateStreamingAgentMessage("")', script_text)
 
+    def test_chat_page_defines_streaming_cleanup_helper_for_transport_failures(
+        self,
+    ) -> None:
+        controller = FakeAutonomyController()
+
+        with patch.object(main, "get_autonomy_controller", return_value=controller):
+            with TestClient(main.app) as client:
+                response = client.get("/")
+
+        self.assertEqual(response.status_code, 200)
+        script_text = _extract_inline_script(response.text)
+        self.assertIn("function clearStreamingAgentMessage", script_text)
+        self.assertIn("state.streamingAgentMessageEl = null;", script_text)
+        self.assertIn(
+            "clearStreamingAgentMessage(`流式回复失败：${error.message}`, true);",
+            script_text,
+        )
+
     def test_chat_page_registers_periodic_dashboard_refresh(self) -> None:
         controller = FakeAutonomyController()
 
