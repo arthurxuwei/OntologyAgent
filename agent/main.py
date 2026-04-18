@@ -640,7 +640,24 @@ async def execute_freqtrade_trade_intent_tool(
         },
     )
     trade_intent = emit_result["result"]["intent"]
-    result = await call_chain_tool("chain_execute_trade_intent", trade_intent)
+    chain_trade_intent: dict[str, Any] = {
+        "intentId": trade_intent["intentId"],
+        "pair": trade_intent["pair"],
+        "side": trade_intent["side"],
+        "amount": str(trade_intent["amount"]),
+        "amountType": trade_intent["amountType"],
+        "orderType": trade_intent["orderType"],
+        "maxSlippageBps": trade_intent["maxSlippageBps"],
+        "reason": trade_intent["reason"],
+    }
+    limit_price = trade_intent.get("limitPrice")
+    if limit_price is not None:
+        chain_trade_intent["limitPrice"] = str(limit_price)
+    strategy = trade_intent.get("strategy")
+    if strategy is not None:
+        chain_trade_intent["strategy"] = strategy
+
+    result = await call_chain_tool("chain_execute_trade_intent", chain_trade_intent)
     return {
         "tool": "execute_freqtrade_trade_intent",
         "tradeIntent": trade_intent,
