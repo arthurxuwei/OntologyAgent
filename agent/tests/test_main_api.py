@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, AIMessageChunk
+from pydantic import ValidationError
 
 import main
 
@@ -231,10 +232,23 @@ class FakeToolClient:
         return self._tools
 
 
+class RecordingMcpClient:
+    def __init__(self, responses: dict[str, dict[str, object]]) -> None:
+        self._responses = responses
+        self.calls: list[tuple[str, dict[str, object]]] = []
+
+    async def call_tool(
+        self, tool_name: str, arguments: dict[str, object]
+    ) -> dict[str, object]:
+        self.calls.append((tool_name, arguments))
+        return self._responses[tool_name]
+
+
 class MainApiTests(unittest.TestCase):
     def setUp(self) -> None:
         main.get_session_store.cache_clear()
         main.get_chain_activity_store.cache_clear()
+        main.clear_discovered_tool_cache()
 
     def test_sync_endpoint_is_removed(self) -> None:
         controller = FakeAutonomyController()
@@ -1664,10 +1678,131 @@ class MainApiTests(unittest.TestCase):
         )
 
     def test_build_tools_exposes_chain_settlement_query_tools(self) -> None:
+        main.set_discovered_tool_cache(
+            chain_tools=[
+                main._make_structured_tool(
+                    "chain_get_transaction_receipt",
+                    main.CHAIN_TOOL_REGISTRY["chain_get_transaction_receipt"],
+                ),
+                main._make_structured_tool(
+                    "chain_get_user_operation_status",
+                    main.CHAIN_TOOL_REGISTRY["chain_get_user_operation_status"],
+                ),
+            ],
+            freqtrade_tools=[],
+        )
         tool_names = {tool.name for tool in main.build_tools()}
 
         self.assertIn("chain_get_transaction_receipt", tool_names)
         self.assertIn("chain_get_user_operation_status", tool_names)
+
+    def test_execute_freqtrade_trade_intent_routes_intent_to_chain_execution(
+        self,
+    ) -> None:
+        freqtrade_client = RecordingMcpClient(
+            {
+                "emit_trade_intent": {
+                    "intent": {
+                        "intentId": "intent-123",
+                        "pair": "ETH/USDC",
+                        "side": "long",
+                        "amount": 10.5,
+                        "amountType": "quote",
+                        "orderType": "market",
+                        "limitPrice": None,
+                        "maxSlippageBps": 75,
+                        "reason": "agent_requested_trade",
+                    }
+                }
+            }
+        )
+        chain_client = RecordingMcpClient(
+            {
+                "chain_execute_trade_intent": {
+                    "status": "submitted",
+                    "txHash": "0xtrade123",
+                }
+            }
+        )
+
+        with (
+            patch.object(main, "get_freqtrade_mcp_client", return_value=freqtrade_client),
+            patch.object(main, "get_chain_mcp_client", return_value=chain_client),
+        ):
+            result = main.asyncio.run(
+                main.execute_freqtrade_trade_intent_tool(
+                    pair="ETH/USDC",
+                    stakeAmount=10.5,
+                    maxSlippageBps=75,
+                )
+            )
+
+        self.assertEqual(
+            freqtrade_client.calls,
+            [
+                (
+                    "emit_trade_intent",
+                    {
+                        "pair": "ETH/USDC",
+                        "side": "long",
+                        "stake_amount": 10.5,
+                        "order_type": "market",
+                        "max_slippage_bps": 75,
+                        "reason": "agent_requested_trade",
+                    },
+                )
+            ],
+        )
+        self.assertEqual(
+            chain_client.calls,
+            [
+                (
+                    "chain_execute_trade_intent",
+                    {
+                        "intentId": "intent-123",
+                        "pair": "ETH/USDC",
+                        "side": "long",
+                        "amount": "10.5",
+                        "amountType": "quote",
+                        "orderType": "market",
+                        "maxSlippageBps": 75,
+                        "reason": "agent_requested_trade",
+                    },
+                )
+            ],
+        )
+        self.assertEqual(
+            result,
+            {
+                "tool": "execute_freqtrade_trade_intent",
+                "tradeIntent": {
+                    "intentId": "intent-123",
+                    "pair": "ETH/USDC",
+                    "side": "long",
+                    "amount": 10.5,
+                    "amountType": "quote",
+                    "orderType": "market",
+                    "limitPrice": None,
+                    "maxSlippageBps": 75,
+                    "reason": "agent_requested_trade",
+                },
+                "result": {
+                    "status": "submitted",
+                    "txHash": "0xtrade123",
+                },
+            },
+        )
+
+    def test_execute_freqtrade_trade_intent_rejects_limit_orders_in_v1(self) -> None:
+        with self.assertRaisesRegex(ValidationError, "limit orders are unsupported in V1"):
+            main.asyncio.run(
+                main.execute_freqtrade_trade_intent_tool(
+                    pair="ETH/USDC",
+                    stakeAmount=10.5,
+                    orderType="limit",
+                    price=2000.0,
+                )
+            )
 
     def test_health_recent_chain_action_summarizes_current_settlement_shape(
         self,

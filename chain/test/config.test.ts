@@ -30,3 +30,21 @@ test("loadConfig exposes mock balance for chain wallet state", () => {
 
   assert.equal(config.network.mockBalanceWei.toString(), "2500000000000000000");
 });
+
+test("loadConfig rejects non-integer values for integer config fields", () => {
+  assert.throws(
+    () =>
+      loadConfig({
+        CHAIN_MCP_PORT: "8091.5",
+      }),
+    /CHAIN_MCP_PORT must be a positive integer/,
+  );
+
+  assert.throws(
+    () =>
+      loadConfig({
+        CHAIN_ID: "84532.1",
+      }),
+    /CHAIN_ID must be a positive integer/,
+  );
+});

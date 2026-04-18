@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 from typing import Any, Literal
+from uuid import uuid4
 
 import httpx
 import uvicorn
@@ -20,6 +21,7 @@ FREQTRADE_ALLOW_WRITE_ACTIONS = os.getenv("FREQTRADE_ALLOW_WRITE_ACTIONS", "true
     "yes",
     "on",
 }
+FREQTRADE_STRATEGY_NAME = os.getenv("FREQTRADE_STRATEGY_NAME", "SimpleAgentStrategy")
 FREQTRADE_STRATEGY_PATH = Path(os.getenv("FREQTRADE_STRATEGY_PATH", "/app/strategies"))
 FREQTRADE_CONFIG_PATH = Path(os.getenv("FREQTRADE_CONFIG_PATH", "/app/config/config.json"))
 
@@ -308,6 +310,43 @@ async def resume_trading() -> dict[str, Any]:
     return {
         "summary": "Resume trading command sent to Freqtrade (mapped to start)",
         "result": payload,
+    }
+
+
+@mcp.tool()
+async def emit_trade_intent(
+    pair: str,
+    side: Literal["long", "short"] = "long",
+    stake_amount: float = 0,
+    order_type: Literal["market", "limit"] = "market",
+    price: float | None = None,
+    strategy: str | None = None,
+    max_slippage_bps: int = 100,
+    reason: str = "agent_requested_trade",
+) -> dict[str, Any]:
+    if side != "long":
+        raise FreqtradeRestError("emit_trade_intent only supports long side in V1")
+    if stake_amount <= 0:
+        raise FreqtradeRestError("stake_amount must be greater than 0")
+    if order_type == "limit" and price is None:
+        raise FreqtradeRestError("limit orders require a price")
+    if order_type == "market" and price is not None:
+        raise FreqtradeRestError("market orders do not accept a price")
+
+    return {
+        "summary": f"Trade intent prepared for {pair}",
+        "intent": {
+            "intentId": f"intent-{pair.replace('/', '-').lower()}-{int(stake_amount * 1000)}-{uuid4().hex}",
+            "strategy": strategy or FREQTRADE_STRATEGY_NAME,
+            "pair": pair,
+            "side": side,
+            "amount": stake_amount,
+            "amountType": "quote",
+            "orderType": order_type,
+            "limitPrice": price,
+            "maxSlippageBps": max_slippage_bps,
+            "reason": reason,
+        },
     }
 
 

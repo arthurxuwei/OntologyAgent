@@ -49,6 +49,7 @@ class FakeFreqtradeMcpClient:
             "stop_bot",
             "pause_trading",
             "resume_trading",
+            "emit_trade_intent",
             "force_enter_trade",
             "force_exit_trade",
         ]
@@ -66,6 +67,7 @@ class FreqtradeToolDiscoveryTests(unittest.TestCase):
         self.assertEqual(
             tool_names,
             [
+                "execute_freqtrade_trade_intent",
                 "force_enter_trade",
                 "force_exit_trade",
                 "get_budget_snapshot",

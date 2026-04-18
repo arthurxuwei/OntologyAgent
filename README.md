@@ -71,12 +71,14 @@ docker compose --env-file "$(dirname "$(git rev-parse --git-common-dir)")/.env" 
   - `start_wealth_agent`
   - `stop_wealth_agent`
   - `run_wealth_tick`
+  - `execute_freqtrade_trade_intent`（让 `freqtrade` 生成 trade intent，再由 `chain` 用 Base 钱包执行）
 - `chain` MCP tools
   - `chain_get_wallet_state`（内部账本 / 自治循环使用）
   - `chain_sign_transfer`
   - `chain_submit_execution`
   - `chain_submit_user_operation`
   - `chain_x402_fetch`
+  - `chain_execute_trade_intent`
 - `freqtrade` MCP tools
   - `get_trading_status`
   - `list_strategies`
@@ -278,6 +280,9 @@ PRIVATE_KEY=0x... \
 - `WHITELISTED_RECIPIENTS`：额外白名单地址，逗号分隔
 - `CHAIN_MOCK`：是否使用模拟链执行，默认 `false`
 - `CHAIN_MOCK_BALANCE_ETH`：mock 模式下链上钱包返回给自治账本的余额，默认 `1.0`
+- `TRADE_INTENT_PAIR`：trade intent 默认交易对，默认 `ETH/USDC`
+- `TRADE_INTENT_SELL_TOKEN`：trade intent 默认卖出 Token，默认 Base Sepolia USDC
+- `TRADE_INTENT_BUY_TOKEN`：trade intent 默认买入 Token，默认 Base Sepolia WETH
 - `BUNDLER_RPC_URL`：ERC-4337 Bundler RPC
 - `ENTRY_POINT_ADDRESS`：ERC-4337 EntryPoint
 - `X402_FACILITATOR_URL`：x402 facilitator 地址
@@ -285,6 +290,13 @@ PRIVATE_KEY=0x... \
 - `X402_BUYER_PRIVATE_KEY`：x402 buyer 专用私钥；为空时回退到 `PRIVATE_KEY`
 - `X402_USDC_SINGLE_CAP`：x402 单笔 USDC 上限，默认 `1.0`
 - `X402_USDC_DAILY_CAP`：x402 每日 USDC 上限，默认 `2.0`
+
+### Base 链上交易意图桥接（V1）
+
+- Base 资金始终保留在 `chain` 钱包侧
+- `freqtrade` 只负责生成 trade intent，不直接持有或执行链上资金
+- `chain_execute_trade_intent` 在 `CHAIN_MOCK=true` 时返回 mock 结果，便于本地回归
+- 非 mock 模式下，如果没有接入真实 DEX / aggregator，会返回结构化拒绝结果，而不是伪造成功
 
 ### x402-seller
 
