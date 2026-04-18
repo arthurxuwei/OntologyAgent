@@ -18,7 +18,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import StructuredTool
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
 
 from autonomy import AutonomyController, load_autonomy_config
 from chain_mcp_client import ChainMcpClient
@@ -50,6 +50,8 @@ NO_CACHE_HEADERS = {
     "Expires": "0",
 }
 EMPTY_FINAL_OUTPUT_FALLBACK = "模型返回了空回复，请重试或更换模型配置。"
+_discovered_chain_tools: Optional[list[StructuredTool]] = None
+_discovered_freqtrade_tools: Optional[list[StructuredTool]] = None
 
 
 def get_openai_base_url() -> Optional[str]:
@@ -219,6 +221,28 @@ class ForceEnterTradeIntent(BaseModel):
         default="market", description="订单类型"
     )
     entryTag: str = Field(default="agent_force_enter", description="可选标签")
+
+
+class ExecuteFreqtradeTradeIntentIntent(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    pair: str
+    side: Literal["long", "short"] = "long"
+    stakeAmount: float = Field(gt=0)
+    maxSlippageBps: int = Field(default=100, ge=0, le=10000)
+    orderType: Literal["market", "limit"] = "market"
+    price: Optional[float] = None
+    reason: str = "agent_requested_trade"
+
+    @model_validator(mode="after")
+    def validate_v1_compatibility(self) -> "ExecuteFreqtradeTradeIntentIntent":
+        if self.side != "long":
+            raise ValueError("short side is unsupported in V1")
+        if self.orderType != "market":
+            raise ValueError("limit orders are unsupported in V1")
+        if self.price is not None:
+            raise ValueError("price is unsupported for market orders in V1")
+        return self
 
 
 class ForceExitTradeIntent(BaseModel):
@@ -586,6 +610,44 @@ async def force_exit_trade_tool(
     return await call_freqtrade_tool("force_exit_trade", payload)
 
 
+async def execute_freqtrade_trade_intent_tool(
+    pair: str,
+    side: str = "long",
+    stakeAmount: float = 0,
+    maxSlippageBps: int = 100,
+    orderType: str = "market",
+    price: Optional[float] = None,
+    reason: str = "agent_requested_trade",
+) -> dict[str, Any]:
+    intent = ExecuteFreqtradeTradeIntentIntent(
+        pair=pair,
+        side=side,
+        stakeAmount=stakeAmount,
+        maxSlippageBps=maxSlippageBps,
+        orderType=orderType,
+        price=price,
+        reason=reason,
+    )
+    emit_result = await call_freqtrade_tool(
+        "emit_trade_intent",
+        {
+            "pair": intent.pair,
+            "side": intent.side,
+            "stake_amount": intent.stakeAmount,
+            "order_type": intent.orderType,
+            "max_slippage_bps": intent.maxSlippageBps,
+            "reason": intent.reason,
+        },
+    )
+    trade_intent = emit_result["result"]["intent"]
+    result = await call_chain_tool("chain_execute_trade_intent", trade_intent)
+    return {
+        "tool": "execute_freqtrade_trade_intent",
+        "tradeIntent": trade_intent,
+        "result": result["result"],
+    }
+
+
 async def get_wealth_status_tool() -> dict[str, Any]:
     return await get_autonomy_controller().status()
 
@@ -706,6 +768,11 @@ FREQTRADE_TOOL_REGISTRY: dict[str, dict[str, Any]] = {
         "args_schema": ForceExitTradeIntent,
         "coroutine": force_exit_trade_tool,
     },
+    "execute_freqtrade_trade_intent": {
+        "description": "先让 Freqtrade 生成 trade intent，再交给链上执行器执行；仅支持 V1 的 long market 下单。",
+        "args_schema": ExecuteFreqtradeTradeIntentIntent,
+        "coroutine": execute_freqtrade_trade_intent_tool,
+    },
 }
 
 
@@ -716,20 +783,7 @@ def discover_chain_tools() -> list[StructuredTool]:
         raise RuntimeError(
             f"CHAIN_MCP_URL is configured but tools could not be discovered: {error}"
         ) from error
-
-    tools: list[StructuredTool] = []
-    for tool_name, spec in CHAIN_TOOL_REGISTRY.items():
-        if tool_name not in available_tools:
-            continue
-        tools.append(
-            StructuredTool.from_function(
-                name=tool_name,
-                description=spec["description"],
-                args_schema=spec["args_schema"],
-                coroutine=spec["coroutine"],
-            )
-        )
-    return tools
+    return _build_discovered_chain_tools(available_tools)
 
 
 def discover_freqtrade_tools() -> list[StructuredTool]:
@@ -739,20 +793,7 @@ def discover_freqtrade_tools() -> list[StructuredTool]:
         raise RuntimeError(
             f"FREQTRADE_MCP_URL is configured but tools could not be discovered: {error}"
         ) from error
-
-    tools: list[StructuredTool] = []
-    for tool_name, spec in FREQTRADE_TOOL_REGISTRY.items():
-        if tool_name not in available_tools:
-            continue
-        tools.append(
-            StructuredTool.from_function(
-                name=tool_name,
-                description=spec["description"],
-                args_schema=spec["args_schema"],
-                coroutine=spec["coroutine"],
-            )
-        )
-    return tools
+    return _build_discovered_freqtrade_tools(available_tools)
 
 
 def _make_structured_tool(name: str, spec: dict[str, Any]) -> StructuredTool:
@@ -761,6 +802,91 @@ def _make_structured_tool(name: str, spec: dict[str, Any]) -> StructuredTool:
         description=spec["description"],
         args_schema=spec["args_schema"],
         coroutine=spec["coroutine"],
+    )
+
+
+def _build_discovered_chain_tools(available_tools: list[str]) -> list[StructuredTool]:
+    tools: list[StructuredTool] = []
+    for tool_name, spec in CHAIN_TOOL_REGISTRY.items():
+        if tool_name not in available_tools:
+            continue
+        tools.append(_make_structured_tool(tool_name, spec))
+    return tools
+
+
+def _build_discovered_freqtrade_tools(available_tools: list[str]) -> list[StructuredTool]:
+    tools: list[StructuredTool] = []
+    for tool_name, spec in FREQTRADE_TOOL_REGISTRY.items():
+        if tool_name == "execute_freqtrade_trade_intent":
+            if "emit_trade_intent" not in available_tools:
+                continue
+        elif tool_name not in available_tools:
+            continue
+        tools.append(_make_structured_tool(tool_name, spec))
+    return tools
+
+
+def set_discovered_tool_cache(
+    *,
+    chain_tools: list[StructuredTool],
+    freqtrade_tools: list[StructuredTool],
+) -> None:
+    global _discovered_chain_tools, _discovered_freqtrade_tools
+    _discovered_chain_tools = list(chain_tools)
+    _discovered_freqtrade_tools = list(freqtrade_tools)
+
+
+def clear_discovered_tool_cache() -> None:
+    global _discovered_chain_tools, _discovered_freqtrade_tools
+    _discovered_chain_tools = None
+    _discovered_freqtrade_tools = None
+
+
+def _in_running_loop() -> bool:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    return True
+
+
+def _load_discovered_chain_tools() -> list[StructuredTool]:
+    if _discovered_chain_tools is not None:
+        return list(_discovered_chain_tools)
+    if _in_running_loop():
+        return []
+    return discover_chain_tools()
+
+
+def _load_discovered_freqtrade_tools() -> list[StructuredTool]:
+    if _discovered_freqtrade_tools is not None:
+        return list(_discovered_freqtrade_tools)
+    if _in_running_loop():
+        return []
+    return discover_freqtrade_tools()
+
+
+async def refresh_discovered_tool_cache() -> None:
+    chain_tools: list[StructuredTool]
+    freqtrade_tools: list[StructuredTool]
+
+    try:
+        chain_available_tools = await get_chain_mcp_client().list_tools()
+        chain_tools = _build_discovered_chain_tools(chain_available_tools)
+    except Exception as error:
+        logger.debug("Failed to refresh chain tool discovery: %s", error)
+        chain_tools = []
+
+    try:
+        freqtrade_available_tools = await get_freqtrade_mcp_client().list_tools()
+        freqtrade_tools = _build_discovered_freqtrade_tools(freqtrade_available_tools)
+    except Exception as error:
+        logger.debug("Failed to refresh freqtrade tool discovery: %s", error)
+        freqtrade_tools = []
+
+    set_discovered_tool_cache(
+        chain_tools=chain_tools,
+        freqtrade_tools=freqtrade_tools,
     )
 
 
@@ -790,14 +916,8 @@ def build_tools() -> list[StructuredTool]:
             args_schema=EmptyIntent,
             coroutine=run_wealth_tick_tool,
         ),
-        *[
-            _make_structured_tool(name, spec)
-            for name, spec in CHAIN_TOOL_REGISTRY.items()
-        ],
-        *[
-            _make_structured_tool(name, spec)
-            for name, spec in FREQTRADE_TOOL_REGISTRY.items()
-        ],
+        *_load_discovered_chain_tools(),
+        *_load_discovered_freqtrade_tools(),
     ]
 
 
@@ -952,6 +1072,7 @@ async def _invoke_agent(messages: list[Any]) -> dict[str, Any]:
 
 @app.on_event("startup")
 async def startup_event() -> None:
+    await refresh_discovered_tool_cache()
     await get_autonomy_controller().start()
 
 

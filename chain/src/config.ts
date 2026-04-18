@@ -21,6 +21,9 @@ export type AppConfig = {
   };
   execution: {
     bundlerRpcUrl?: string;
+    tradeIntentPair: string;
+    tradeIntentSellToken: string;
+    tradeIntentBuyToken: string;
   };
   x402: {
     facilitatorUrl: string;
@@ -37,6 +40,7 @@ const DEFAULT_TESTNET_RPC_URL = "https://base-sepolia-rpc.publicnode.com";
 const DEFAULT_TESTNET_CHAIN_ID = 84532;
 const DEFAULT_X402_NETWORK = "eip155:84532";
 const DEFAULT_BASE_SEPOLIA_USDC = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
+const DEFAULT_BASE_SEPOLIA_WETH = "0x4200000000000000000000000000000000000006";
 const X402_USDC_DECIMALS = 6;
 
 function parseEthEnv(
@@ -77,8 +81,8 @@ function parseNumberEnv(
   }
 
   const parsed = Number(rawValue);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    throw new Error(`${envName} must be a positive number`);
+  if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`${envName} must be a positive integer`);
   }
   return parsed;
 }
@@ -168,6 +172,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     },
     execution: {
       bundlerRpcUrl: env.BUNDLER_RPC_URL,
+      tradeIntentPair: env.TRADE_INTENT_PAIR ?? "ETH/USDC",
+      tradeIntentSellToken: env.TRADE_INTENT_SELL_TOKEN ?? DEFAULT_BASE_SEPOLIA_USDC,
+      tradeIntentBuyToken: env.TRADE_INTENT_BUY_TOKEN ?? DEFAULT_BASE_SEPOLIA_WETH,
     },
     x402: {
       facilitatorUrl: env.X402_FACILITATOR_URL ?? "https://x402.org/facilitator",

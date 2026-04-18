@@ -11,6 +11,7 @@ import { PolicyGuard } from "../policies/policy-guard.js";
 import { ExecutionService } from "../services/execution-service.js";
 import { SettlementService } from "../services/settlement-service.js";
 import { SignTransferService } from "../services/sign-transfer-service.js";
+import { TradeIntentExecutionService } from "../services/trade-intent-execution-service.js";
 import { TransactionReceiptService } from "../services/transaction-receipt-service.js";
 import { UserOperationStatusService } from "../services/user-operation-status-service.js";
 import { UserOperationService } from "../services/user-operation-service.js";
@@ -21,6 +22,7 @@ type ChainRuntime = {
   walletStateService: WalletStateService;
   signTransferService: SignTransferService;
   executionService: ExecutionService;
+  tradeIntentExecutionService: TradeIntentExecutionService;
   transactionReceiptService: TransactionReceiptService;
   userOperationStatusService: UserOperationStatusService;
   userOperationService: UserOperationService;
@@ -103,6 +105,7 @@ export function createChainRuntime(
     walletStateService: new WalletStateService(config, policyGuard, networkClient, signer),
     signTransferService: new SignTransferService(sender, policyGuard, settlementService),
     executionService: new ExecutionService(sender, policyGuard, settlementService),
+    tradeIntentExecutionService: new TradeIntentExecutionService(config),
     transactionReceiptService:
       overrides?.transactionReceiptService ?? new TransactionReceiptService(config, networkClient),
     userOperationStatusService:
@@ -154,6 +157,36 @@ export function createChainMcpServer(runtime: ChainRuntime): McpServer {
     },
     async ({ to, valueEth, data }) =>
       runTool(() => runtime.executionService.execute({ to, valueEth, data })),
+  );
+
+  server.registerTool(
+    "chain_execute_trade_intent",
+    {
+      description: "Execute a trade intent through the configured trade runtime.",
+      inputSchema: {
+        intentId: z.string().describe("Unique trade intent identifier"),
+        pair: z.string().describe("Trading pair symbol"),
+        side: z.enum(["long", "short"]).default("long").describe("Trade direction"),
+        amount: z.string().describe("Trade amount as a decimal string"),
+        amountType: z
+          .enum(["quote", "base"])
+          .default("quote")
+          .describe("Whether amount is quoted in quote or base units"),
+        maxSlippageBps: z
+          .int()
+          .nonnegative()
+          .default(100)
+          .describe("Maximum slippage in basis points"),
+        strategy: z.string().optional().describe("Optional strategy label"),
+        orderType: z
+          .enum(["market", "limit"])
+          .default("market")
+          .describe("Requested order type"),
+        limitPrice: z.string().optional().describe("Optional limit price"),
+        reason: z.string().optional().describe("Optional execution reason"),
+      },
+    },
+    async (args) => runTool(() => runtime.tradeIntentExecutionService.execute(args)),
   );
 
   server.registerTool(
