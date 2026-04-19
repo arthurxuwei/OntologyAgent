@@ -1098,6 +1098,26 @@ def _align_final_message_output(messages: list[Any], output: str) -> list[Any]:
     return aligned_messages
 
 
+def _is_valid_tool_message(message: Any) -> bool:
+    if getattr(message, "type", None) != "tool":
+        return True
+    tool_call_id = getattr(message, "tool_call_id", None)
+    return isinstance(tool_call_id, str) and bool(tool_call_id.strip())
+
+
+def _sanitize_session_messages(messages: list[Any]) -> list[Any]:
+    sanitized: list[Any] = []
+    dropped = 0
+    for message in messages:
+        if _is_valid_tool_message(message):
+            sanitized.append(message)
+        else:
+            dropped += 1
+    if dropped:
+        logger.warning("Dropped %d invalid tool messages from session history", dropped)
+    return sanitized
+
+
 def _sse_event(event: str, data: dict[str, Any]) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
@@ -1289,7 +1309,10 @@ async def stream_agent_session_message(
         ) from error
 
     input_message = HumanMessage(content=request.input)
-    pending_messages = [*session.messages, input_message]
+    existing_messages = _sanitize_session_messages(list(session.messages))
+    if len(existing_messages) != len(session.messages):
+        session.messages = existing_messages
+    pending_messages = [*existing_messages, input_message]
 
     async def event_stream():
         yield _sse_event(
@@ -1316,7 +1339,9 @@ async def stream_agent_session_message(
             AIMessage(content="".join(deltas)),
         ]
         output = _extract_final_output(final_messages)
-        session.messages = _align_final_message_output(list(final_messages), output)
+        session.messages = _sanitize_session_messages(
+            _align_final_message_output(list(final_messages), output)
+        )
         yield _sse_event(
             "final",
             {

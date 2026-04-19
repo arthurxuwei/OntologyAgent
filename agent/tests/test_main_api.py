@@ -217,6 +217,39 @@ class DelayedFirstChunkStreamingGraph:
         yield "values", {"messages": [*messages, AIMessage(content="你")]}
 
 
+class InvalidToolMessage:
+    type = "tool"
+
+    def __init__(self, content: str, tool_call_id: object = None) -> None:
+        self.content = content
+        self.tool_call_id = tool_call_id
+
+
+class InvalidToolStreamingGraph:
+    def __init__(self) -> None:
+        self.calls: list[list[object]] = []
+
+    async def astream(self, payload: dict[str, object], stream_mode: str):
+        self.calls.append(list(payload["messages"]))  # type: ignore[index]
+        assert stream_mode == ["messages", "values"]
+        if len(self.calls) == 1:
+            yield "messages", (AIMessageChunk(content="先处理工具"), {"node": "agent"})
+            yield (
+                "values",
+                {
+                    "messages": [
+                        *self.calls[-1],
+                        InvalidToolMessage(content="broken tool reply", tool_call_id=None),
+                        AIMessage(content="最终答案"),
+                    ]
+                },
+            )
+            return
+
+        yield "messages", (AIMessageChunk(content="第二轮正常"), {"node": "agent"})
+        yield "values", {"messages": [*self.calls[-1], AIMessage(content="第二轮正常")]}
+
+
 class FirstIterationFailureStreamingGraph:
     async def astream(self, payload: dict[str, object], stream_mode: str):
         assert stream_mode == ["messages", "values"]
@@ -469,7 +502,39 @@ class MainApiTests(unittest.TestCase):
 
                 state_response = client.get(f"/agent/sessions/{session_id}")
                 self.assertEqual(state_response.status_code, 200)
-                self.assertEqual(state_response.json()["messageCount"], 0)
+        self.assertEqual(state_response.json()["messageCount"], 0)
+
+    def test_agent_session_stream_drops_invalid_tool_messages_before_next_turn(self) -> None:
+        controller = FakeAutonomyController()
+        graph = InvalidToolStreamingGraph()
+
+        with (
+            patch.object(main, "get_autonomy_controller", return_value=controller),
+            patch.object(main, "get_agent_graph", return_value=graph),
+        ):
+            with TestClient(main.app) as client:
+                create_response = client.post("/agent/sessions")
+                self.assertEqual(create_response.status_code, 200)
+                session_id = create_response.json()["sessionId"]
+
+                first_status, _first_body, first_final = _stream_session_message(
+                    client,
+                    session_id,
+                    "第一轮",
+                )
+                second_status, _second_body, second_final = _stream_session_message(
+                    client,
+                    session_id,
+                    "第二轮",
+                )
+
+        self.assertEqual(first_status, 200)
+        self.assertEqual(first_final["output"], "最终答案")
+        self.assertEqual(second_status, 200)
+        self.assertEqual(second_final["output"], "第二轮正常")
+        self.assertFalse(
+            any(getattr(message, "type", None) == "tool" for message in graph.calls[1])
+        )
 
     def test_empty_model_reply_diagnostics_logs_warning_and_returns_fallback_text(
         self,
@@ -1339,6 +1404,7 @@ class MainApiTests(unittest.TestCase):
                     "ledger": {
                         "healthStatus": "critical",
                         "lastError": "tick failed",
+                        "lastErrorAt": "2026-04-19T10:05:23Z",
                         "circuitBreaker": {"state": "open"},
                     },
                 },
@@ -1356,7 +1422,10 @@ class MainApiTests(unittest.TestCase):
                     "enabled": False,
                     "running": False,
                     "summary": {"circuitState": "closed"},
-                    "ledger": {"healthStatus": "ok"},
+                    "ledger": {
+                        "healthStatus": "ok",
+                        "lastError": "legacy failure",
+                    },
                 },
                 "chainWallet": {"result": {"wallet": {"address": "0xdef"}}},
             },
@@ -1454,10 +1523,12 @@ class MainApiTests(unittest.TestCase):
                 "Freqtrade error: freqtrade offline",
                 "Freqtrade error: snapshot unavailable",
                 "Autonomy error: autonomy unavailable",
-                "Autonomy error: tick failed",
+                "Autonomy error at 2026-04-19T10:05:23Z: tick failed",
             ],
         )
-        self.assertEqual(helper_output["warningsWrapped"], [])
+        self.assertEqual(
+            helper_output["warningsWrapped"], ["Autonomy error: legacy failure"]
+        )
 
     def test_autonomy_management_endpoints_use_controller(self) -> None:
         controller = FakeAutonomyController()
