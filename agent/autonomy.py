@@ -187,6 +187,7 @@ class GuardLedger(RuntimeLedger):
     lastProtectiveAction: Optional[dict[str, Any]] = None
     lastFundingRecommendation: Optional[dict[str, Any]] = None
     lastError: Optional[str] = None
+    lastErrorAt: Optional[str] = None
     tickCount: int = 0
 
 
@@ -256,92 +257,38 @@ class AutonomyController:
             self._lock = asyncio.Lock()
 
         async with self._lock:
-            chain_state = await self._tool_result(
-                self._chain_tool_invoker("chain_get_wallet_state", {}),
-            )
-            freqtrade_budget = await self._tool_result(
-                self._freqtrade_tool_invoker("get_budget_snapshot", {}),
-            )
-
-            self._bootstrap_if_needed(chain_state)
-            context = self._build_context(chain_state, freqtrade_budget)
-            observation = self._build_runtime_observation(chain_state, freqtrade_budget)
-            self._state.latestObservation = observation
-            planned_intent = self._plan_intent(observation)
-            active_chain_execution = self._find_revisitable_chain_execution()
-            if active_chain_execution is not None:
-                existing_execution, active_intent = active_chain_execution
-                decision = self._decision_from_intent(active_intent)
-                execution = await self._advance_active_chain_execution(
-                    existing_execution,
-                    active_intent,
+            try:
+                chain_state = await self._tool_result(
+                    self._chain_tool_invoker("chain_get_wallet_state", {}),
                 )
-                execution = self._persist_execution(active_intent, decision, execution)
-                self._record_execution_outcome(execution)
-                if execution.status == "active":
-                    self._state.activeIntents = [active_intent]
-                else:
-                    self._state.activeIntents = [planned_intent]
-                    self._close_stale_funding_execution(planned_intent)
-                action_result = {
-                    "action": "advance_execution",
-                    "changedState": execution.status != "active",
-                    "execution": execution.model_dump(),
-                }
-                self._update_state(context, decision, action_result)
-                self._save_state()
-                return {
-                    "observation": observation,
-                    "intent": active_intent.model_dump(),
-                    "policy": PolicyDecision(
-                        decision="allow",
-                        reason="Active chain execution is being reconciled.",
-                    ).model_dump(),
-                    "decision": decision.model_dump(),
-                    "execution": execution.model_dump(),
-                    "context": context,
-                    "actionResult": action_result,
-                }
-            self._state.activeIntents = [planned_intent]
-            self._close_stale_funding_execution(planned_intent)
-            decision = self._decision_from_intent(planned_intent)
-            policy = self._apply_policy(planned_intent, observation)
-            if policy["decision"] != "allow":
-                self._refresh_state_from_context(
-                    context,
-                    last_decision={
-                        "action": "hold",
-                        "reason": policy["reason"],
-                        "policyDecision": policy["decision"],
-                    },
+                freqtrade_budget = await self._tool_result(
+                    self._freqtrade_tool_invoker("get_budget_snapshot", {}),
                 )
-                self._save_state()
-                return {
-                    "observation": observation,
-                    "intent": planned_intent.model_dump(),
-                    "policy": policy,
-                    "decision": decision.model_dump(),
-                    "context": context,
-                    "actionResult": {"action": "policy_denied", "changedState": False},
-                }
 
-            existing_execution = self._find_active_execution(planned_intent.intentId)
-            if existing_execution is not None:
-                decision = self._decision_from_intent(planned_intent)
-                if (
-                    existing_execution.intentType == "chain"
-                    and decision.action != "request_funding"
-                ):
+                self._bootstrap_if_needed(chain_state)
+                context = self._build_context(chain_state, freqtrade_budget)
+                observation = self._build_runtime_observation(
+                    chain_state, freqtrade_budget
+                )
+                self._state.latestObservation = observation
+                planned_intent = self._plan_intent(observation)
+                active_chain_execution = self._find_revisitable_chain_execution()
+                if active_chain_execution is not None:
+                    existing_execution, active_intent = active_chain_execution
+                    decision = self._decision_from_intent(active_intent)
                     execution = await self._advance_active_chain_execution(
                         existing_execution,
-                        planned_intent,
+                        active_intent,
                     )
                     execution = self._persist_execution(
-                        planned_intent,
-                        decision,
-                        execution,
+                        active_intent, decision, execution
                     )
                     self._record_execution_outcome(execution)
+                    if execution.status == "active":
+                        self._state.activeIntents = [active_intent]
+                    else:
+                        self._state.activeIntents = [planned_intent]
+                        self._close_stale_funding_execution(planned_intent)
                     action_result = {
                         "action": "advance_execution",
                         "changedState": execution.status != "active",
@@ -351,86 +298,151 @@ class AutonomyController:
                     self._save_state()
                     return {
                         "observation": observation,
-                        "intent": planned_intent.model_dump(),
-                        "policy": policy,
+                        "intent": active_intent.model_dump(),
+                        "policy": PolicyDecision(
+                            decision="allow",
+                            reason="Active chain execution is being reconciled.",
+                        ).model_dump(),
                         "decision": decision.model_dump(),
                         "execution": execution.model_dump(),
                         "context": context,
                         "actionResult": action_result,
                     }
-                self._refresh_state_from_context(
-                    context,
-                    last_decision=decision.model_dump(),
-                )
-                if decision.action == "request_funding":
-                    self._state.lastFundingRecommendation = {
-                        "action": decision.action,
-                        "recommendedFundingUsd": decision.recommendedFundingUsd,
-                        "reason": decision.reason,
-                        "at": self._state.lastTickAt,
+                self._state.activeIntents = [planned_intent]
+                self._close_stale_funding_execution(planned_intent)
+                decision = self._decision_from_intent(planned_intent)
+                policy = self._apply_policy(planned_intent, observation)
+                if policy["decision"] != "allow":
+                    self._refresh_state_from_context(
+                        context,
+                        last_decision={
+                            "action": "hold",
+                            "reason": policy["reason"],
+                            "policyDecision": policy["decision"],
+                        },
+                    )
+                    self._save_state()
+                    return {
+                        "observation": observation,
+                        "intent": planned_intent.model_dump(),
+                        "policy": policy,
+                        "decision": decision.model_dump(),
+                        "context": context,
+                        "actionResult": {
+                            "action": "policy_denied",
+                            "changedState": False,
+                        },
                     }
+
+                existing_execution = self._find_active_execution(planned_intent.intentId)
+                if existing_execution is not None:
+                    decision = self._decision_from_intent(planned_intent)
+                    if (
+                        existing_execution.intentType == "chain"
+                        and decision.action != "request_funding"
+                    ):
+                        execution = await self._advance_active_chain_execution(
+                            existing_execution,
+                            planned_intent,
+                        )
+                        execution = self._persist_execution(
+                            planned_intent,
+                            decision,
+                            execution,
+                        )
+                        self._record_execution_outcome(execution)
+                        action_result = {
+                            "action": "advance_execution",
+                            "changedState": execution.status != "active",
+                            "execution": execution.model_dump(),
+                        }
+                        self._update_state(context, decision, action_result)
+                        self._save_state()
+                        return {
+                            "observation": observation,
+                            "intent": planned_intent.model_dump(),
+                            "policy": policy,
+                            "decision": decision.model_dump(),
+                            "execution": execution.model_dump(),
+                            "context": context,
+                            "actionResult": action_result,
+                        }
+                    self._refresh_state_from_context(
+                        context,
+                        last_decision=decision.model_dump(),
+                    )
+                    if decision.action == "request_funding":
+                        self._state.lastFundingRecommendation = {
+                            "action": decision.action,
+                            "recommendedFundingUsd": decision.recommendedFundingUsd,
+                            "reason": decision.reason,
+                            "at": self._state.lastTickAt,
+                        }
+                    self._save_state()
+                    return {
+                        "observation": observation,
+                        "intent": planned_intent.model_dump(),
+                        "policy": policy,
+                        "decision": decision.model_dump(),
+                        "execution": existing_execution.model_dump(),
+                        "context": context,
+                        "actionResult": {
+                            "action": "reuse_execution",
+                            "changedState": False,
+                        },
+                    }
+
+                execution: Optional[RuntimeExecutionRecord]
+                if planned_intent.intentType == "trade":
+                    execution = await self._run_trade_execution(planned_intent)
+                    action_result = {
+                        "action": decision.action,
+                        "changedState": execution.status == "completed",
+                        "execution": execution.model_dump(),
+                    }
+                    if execution.status == "completed":
+                        self._state.botEnabled = False
+                elif planned_intent.intentType == "chain":
+                    execution = await self._run_chain_execution(planned_intent)
+                    action_result = {
+                        "action": decision.action,
+                        "changedState": execution.status == "completed",
+                        "execution": execution.model_dump(),
+                    }
+                elif planned_intent.intentType == "noop":
+                    execution = RuntimeExecutionRecord(
+                        executionId=_new_execution_id(),
+                        intentId=planned_intent.intentId,
+                        intentType=planned_intent.intentType,
+                        stage="reconciled",
+                        status="completed",
+                    )
+                    action_result = {
+                        "action": decision.action,
+                        "changedState": False,
+                        "execution": execution.model_dump(),
+                    }
+                else:
+                    action_result = await self._execute_decision(decision)
+                    execution = None
+                execution = self._persist_execution(planned_intent, decision, execution)
+                self._record_execution_outcome(execution)
+                self._update_state(context, decision, action_result)
                 self._save_state()
-                return {
+
+                response = {
                     "observation": observation,
                     "intent": planned_intent.model_dump(),
                     "policy": policy,
-                    "decision": decision.model_dump(),
-                    "execution": existing_execution.model_dump(),
+                    "execution": execution.model_dump() if execution is not None else None,
                     "context": context,
-                    "actionResult": {
-                        "action": "reuse_execution",
-                        "changedState": False,
-                    },
+                    "decision": decision.model_dump(),
+                    "actionResult": action_result,
                 }
-
-            execution: Optional[RuntimeExecutionRecord]
-            if planned_intent.intentType == "trade":
-                execution = await self._run_trade_execution(planned_intent)
-                action_result = {
-                    "action": decision.action,
-                    "changedState": execution.status == "completed",
-                    "execution": execution.model_dump(),
-                }
-                if execution.status == "completed":
-                    self._state.botEnabled = False
-            elif planned_intent.intentType == "chain":
-                execution = await self._run_chain_execution(planned_intent)
-                action_result = {
-                    "action": decision.action,
-                    "changedState": execution.status == "completed",
-                    "execution": execution.model_dump(),
-                }
-            elif planned_intent.intentType == "noop":
-                execution = RuntimeExecutionRecord(
-                    executionId=_new_execution_id(),
-                    intentId=planned_intent.intentId,
-                    intentType=planned_intent.intentType,
-                    stage="reconciled",
-                    status="completed",
-                )
-                action_result = {
-                    "action": decision.action,
-                    "changedState": False,
-                    "execution": execution.model_dump(),
-                }
-            else:
-                action_result = await self._execute_decision(decision)
-                execution = None
-            execution = self._persist_execution(planned_intent, decision, execution)
-            self._record_execution_outcome(execution)
-            self._update_state(context, decision, action_result)
-            self._save_state()
-
-            response = {
-                "observation": observation,
-                "intent": planned_intent.model_dump(),
-                "policy": policy,
-                "execution": execution.model_dump() if execution is not None else None,
-                "context": context,
-                "decision": decision.model_dump(),
-                "actionResult": action_result,
-            }
-            return response
+                return response
+            except Exception as error:
+                self._record_error_state(error)
+                raise
 
     async def _run_loop(self) -> None:
         if self._stop_event is None:
@@ -441,9 +453,8 @@ class AutonomyController:
             while not self._stop_event.is_set():
                 try:
                     await self.tick()
-                except Exception as error:
-                    self._state.lastError = str(error)
-                    self._save_state()
+                except Exception:
+                    pass
 
                 try:
                     await asyncio.wait_for(
@@ -876,7 +887,13 @@ class AutonomyController:
             self._state.lastDecision = last_decision
         self._state.lastTickAt = utcnow_iso()
         self._state.lastError = None
+        self._state.lastErrorAt = None
         self._state.tickCount += 1
+
+    def _record_error_state(self, error: Exception) -> None:
+        self._state.lastError = str(error)
+        self._state.lastErrorAt = utcnow_iso()
+        self._save_state()
 
     def _persist_execution(
         self,
@@ -978,6 +995,7 @@ class AutonomyController:
         self._state.lastDecision = decision.model_dump()
         self._state.lastTickAt = utcnow_iso()
         self._state.lastError = None
+        self._state.lastErrorAt = None
         self._state.tickCount += 1
 
         if decision.action in {"stop_trading", "force_exit_all"}:

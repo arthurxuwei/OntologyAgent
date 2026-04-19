@@ -1,6 +1,7 @@
 import asyncio
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 from unittest.mock import patch
@@ -239,6 +240,129 @@ class AutonomyControllerTests(unittest.TestCase):
             self.assertTrue(running_status["enabled"])
 
             asyncio.run(controller.stop(disable=True))
+
+    def test_run_loop_records_last_error_timestamp_on_failure(self) -> None:
+        controller: Optional[AutonomyController] = None
+
+        async def chain_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            return make_chain_state("1.0")
+
+        async def freqtrade_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            self.assertIsNotNone(controller)
+            controller._stop_event.set()
+            return {"unexpected": {}}
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = AutonomyController(
+                make_config(str(Path(temp_dir) / "autonomy.json")),
+                chain_tool,
+                freqtrade_tool,
+            )
+
+            asyncio.run(controller._run_loop())
+
+            reloaded = AutonomyController(
+                make_config(str(Path(temp_dir) / "autonomy.json")),
+                chain_tool,
+                freqtrade_tool,
+            )
+            ledger = asyncio.run(controller.status())["ledger"]
+            reloaded_ledger = asyncio.run(reloaded.status())["ledger"]
+            self.assertTrue(Path(temp_dir, "autonomy.json").exists())
+
+            self.assertEqual(
+                ledger["lastError"], "Unexpected MCP tool result shape: {'unexpected': {}}"
+            )
+            self.assertRegex(
+                ledger["lastErrorAt"],
+                r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}.*(?:\+00:00|Z)$",
+            )
+            datetime.fromisoformat(ledger["lastErrorAt"].replace("Z", "+00:00"))
+            self.assertEqual(reloaded_ledger["lastError"], ledger["lastError"])
+            self.assertEqual(reloaded_ledger["lastErrorAt"], ledger["lastErrorAt"])
+
+    def test_tick_records_last_error_timestamp_on_failure(self) -> None:
+        async def chain_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            return make_chain_state("1.0")
+
+        async def freqtrade_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            return {"unexpected": {}}
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = AutonomyController(
+                make_config(str(Path(temp_dir) / "autonomy.json")),
+                chain_tool,
+                freqtrade_tool,
+            )
+
+            with self.assertRaisesRegex(
+                RuntimeError, "Unexpected MCP tool result shape"
+            ):
+                asyncio.run(controller.tick())
+
+            reloaded = AutonomyController(
+                make_config(str(Path(temp_dir) / "autonomy.json")),
+                chain_tool,
+                freqtrade_tool,
+            )
+            ledger = asyncio.run(controller.status())["ledger"]
+            reloaded_ledger = asyncio.run(reloaded.status())["ledger"]
+            self.assertTrue(Path(temp_dir, "autonomy.json").exists())
+
+            self.assertEqual(
+                ledger["lastError"], "Unexpected MCP tool result shape: {'unexpected': {}}"
+            )
+            self.assertRegex(
+                ledger["lastErrorAt"],
+                r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}.*(?:\+00:00|Z)$",
+            )
+            datetime.fromisoformat(ledger["lastErrorAt"].replace("Z", "+00:00"))
+            self.assertEqual(reloaded_ledger["lastError"], ledger["lastError"])
+            self.assertEqual(reloaded_ledger["lastErrorAt"], ledger["lastErrorAt"])
+
+    def test_tick_clears_last_error_timestamp_after_success(self) -> None:
+        async def chain_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            return make_chain_state("1.0")
+
+        async def freqtrade_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            return make_freqtrade_budget()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = AutonomyController(
+                make_config(str(Path(temp_dir) / "autonomy.json")),
+                chain_tool,
+                freqtrade_tool,
+            )
+            controller._state.lastError = "tick failed"
+            controller._state.lastErrorAt = "2026-04-19T00:00:00+00:00"
+            controller._save_state()
+
+            asyncio.run(controller.tick())
+
+            reloaded = AutonomyController(
+                make_config(str(Path(temp_dir) / "autonomy.json")),
+                chain_tool,
+                freqtrade_tool,
+            )
+            ledger = asyncio.run(controller.status())["ledger"]
+            reloaded_ledger = asyncio.run(reloaded.status())["ledger"]
+
+            self.assertIsNone(ledger["lastError"])
+            self.assertIsNone(ledger["lastErrorAt"])
+            self.assertIsNone(reloaded_ledger["lastError"])
+            self.assertIsNone(reloaded_ledger["lastErrorAt"])
 
     def test_tick_bootstraps_guard_state_without_syncing_dry_run_wallet(self) -> None:
         calls: list[tuple[str, dict[str, object]]] = []

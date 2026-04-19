@@ -18,7 +18,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import StructuredTool
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, ValidationError, model_validator
 
 from autonomy import AutonomyController, load_autonomy_config
 from chain_mcp_client import ChainMcpClient
@@ -202,6 +202,14 @@ class TradeListIntent(BaseModel):
 
     limit: int = Field(default=20, ge=1, le=200, description="返回记录数")
     offset: int = Field(default=0, ge=0, description="偏移量")
+
+
+class EvaluateTradeSignalIntent(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    pair: str
+    strategy: Optional[str] = None
+    timeframe: Optional[str] = None
 
 
 class SyncDryRunWalletIntent(BaseModel):
@@ -546,6 +554,19 @@ async def get_budget_snapshot_tool() -> dict[str, Any]:
     return await call_freqtrade_tool("get_budget_snapshot")
 
 
+async def evaluate_trade_signal_tool(
+    pair: str,
+    strategy: Optional[str] = None,
+    timeframe: Optional[str] = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {"pair": pair}
+    if strategy is not None:
+        payload["strategy"] = strategy
+    if timeframe is not None:
+        payload["timeframe"] = timeframe
+    return await call_freqtrade_tool("evaluate_trade_signal", payload)
+
+
 async def get_freqtrade_status_snapshot() -> dict[str, Any]:
     result = await get_freqtrade_mcp_client().call_tool("get_trading_status", {})
     return _unwrap_mcp_result("get_trading_status", result)
@@ -730,6 +751,11 @@ FREQTRADE_TOOL_REGISTRY: dict[str, dict[str, Any]] = {
         "args_schema": EmptyIntent,
         "coroutine": list_strategies_tool,
     },
+    "evaluate_trade_signal": {
+        "description": "评估当前 Freqtrade 策略对指定交易对的信号，返回 buy/sell/hold。",
+        "args_schema": EvaluateTradeSignalIntent,
+        "coroutine": evaluate_trade_signal_tool,
+    },
     "get_open_trades": {
         "description": "查看当前 open trades。",
         "args_schema": TradeListIntent,
@@ -810,7 +836,17 @@ def discover_freqtrade_tools() -> list[StructuredTool]:
         raise RuntimeError(
             f"FREQTRADE_MCP_URL is configured but tools could not be discovered: {error}"
         ) from error
-    return _build_discovered_freqtrade_tools(available_tools)
+
+    chain_available_tools: list[str] = []
+    try:
+        chain_available_tools = asyncio.run(get_chain_mcp_client().list_tools())
+    except Exception as error:
+        logger.debug(
+            "Failed to discover chain tools for freqtrade bridge gating: %s",
+            error,
+        )
+
+    return _build_discovered_freqtrade_tools(available_tools, chain_available_tools)
 
 
 def _make_structured_tool(name: str, spec: dict[str, Any]) -> StructuredTool:
@@ -831,11 +867,16 @@ def _build_discovered_chain_tools(available_tools: list[str]) -> list[Structured
     return tools
 
 
-def _build_discovered_freqtrade_tools(available_tools: list[str]) -> list[StructuredTool]:
+def _build_discovered_freqtrade_tools(
+    available_tools: list[str], chain_available_tools: Optional[list[str]] = None
+) -> list[StructuredTool]:
     tools: list[StructuredTool] = []
+    chain_available = set(chain_available_tools or [])
     for tool_name, spec in FREQTRADE_TOOL_REGISTRY.items():
         if tool_name == "execute_freqtrade_trade_intent":
             if "emit_trade_intent" not in available_tools:
+                continue
+            if "chain_execute_trade_intent" not in chain_available:
                 continue
         elif tool_name not in available_tools:
             continue
@@ -872,7 +913,11 @@ def _load_discovered_chain_tools() -> list[StructuredTool]:
         return list(_discovered_chain_tools)
     if _in_running_loop():
         return []
-    return discover_chain_tools()
+    try:
+        return discover_chain_tools()
+    except Exception as error:
+        logger.debug("Failed to load discovered chain tools: %s", error)
+        return []
 
 
 def _load_discovered_freqtrade_tools() -> list[StructuredTool]:
@@ -880,10 +925,15 @@ def _load_discovered_freqtrade_tools() -> list[StructuredTool]:
         return list(_discovered_freqtrade_tools)
     if _in_running_loop():
         return []
-    return discover_freqtrade_tools()
+    try:
+        return discover_freqtrade_tools()
+    except Exception as error:
+        logger.debug("Failed to load discovered freqtrade tools: %s", error)
+        return []
 
 
 async def refresh_discovered_tool_cache() -> None:
+    chain_available_tools: list[str] = []
     chain_tools: list[StructuredTool]
     freqtrade_tools: list[StructuredTool]
 
@@ -896,7 +946,10 @@ async def refresh_discovered_tool_cache() -> None:
 
     try:
         freqtrade_available_tools = await get_freqtrade_mcp_client().list_tools()
-        freqtrade_tools = _build_discovered_freqtrade_tools(freqtrade_available_tools)
+        freqtrade_tools = _build_discovered_freqtrade_tools(
+            freqtrade_available_tools,
+            chain_available_tools,
+        )
     except Exception as error:
         logger.debug("Failed to refresh freqtrade tool discovery: %s", error)
         freqtrade_tools = []
@@ -1043,6 +1096,33 @@ def _align_final_message_output(messages: list[Any], output: str) -> list[Any]:
 
     aligned_messages.append(AIMessage(content=output))
     return aligned_messages
+
+
+def _is_valid_tool_message(message: Any) -> bool:
+    if getattr(message, "type", None) != "tool":
+        return True
+    tool_call_id = getattr(message, "tool_call_id", None)
+    return isinstance(tool_call_id, str) and bool(tool_call_id.strip())
+
+
+def _sanitize_session_messages(messages: list[Any]) -> list[Any]:
+    sanitized: list[Any] = []
+    dropped = 0
+    for message in messages:
+        if _is_valid_tool_message(message):
+            sanitized.append(message)
+        else:
+            dropped += 1
+    if dropped:
+        logger.warning("Dropped %d invalid tool messages from session history", dropped)
+    return sanitized
+
+
+def _is_tool_message_validation_error(error: Exception) -> bool:
+    if not isinstance(error, ValidationError):
+        return False
+    message = str(error)
+    return "ToolMessage" in message and "tool_call_id" in message
 
 
 def _sse_event(event: str, data: dict[str, Any]) -> str:
@@ -1236,7 +1316,10 @@ async def stream_agent_session_message(
         ) from error
 
     input_message = HumanMessage(content=request.input)
-    pending_messages = [*session.messages, input_message]
+    existing_messages = _sanitize_session_messages(list(session.messages))
+    if len(existing_messages) != len(session.messages):
+        session.messages = existing_messages
+    pending_messages = [*existing_messages, input_message]
 
     async def event_stream():
         yield _sse_event(
@@ -1246,24 +1329,53 @@ async def stream_agent_session_message(
         deltas: list[str] = []
         latest_messages: Optional[list[Any]] = None
         try:
-            stream = _stream_agent_output(pending_messages)
+            graph = get_agent_graph()
+            stream = graph.astream({"messages": pending_messages}, stream_mode=["messages", "values"])
             async for item in stream:
                 delta, latest_messages = _consume_stream_item(item, latest_messages)
                 if delta is not None:
                     deltas.append(delta)
                     yield _sse_event("delta", {"delta": delta})
         except Exception as error:
-            yield _sse_event(
-                "error", {"sessionId": session.session_id, "error": str(error)}
-            )
-            return
+            if _is_tool_message_validation_error(error):
+                logger.warning(
+                    "Streaming agent response hit invalid ToolMessage state; retrying with ainvoke: %s",
+                    error,
+                )
+                try:
+                    invoke_result = await graph.ainvoke({"messages": pending_messages})
+                except Exception as invoke_error:
+                    yield _sse_event(
+                        "error",
+                        {"sessionId": session.session_id, "error": str(invoke_error)},
+                    )
+                    return
+                invoke_messages = invoke_result.get("messages")
+                if isinstance(invoke_messages, list):
+                    latest_messages = invoke_messages
+                else:
+                    yield _sse_event(
+                        "error",
+                        {
+                            "sessionId": session.session_id,
+                            "error": "Agent fallback returned invalid message payload",
+                        },
+                    )
+                    return
+            else:
+                yield _sse_event(
+                    "error", {"sessionId": session.session_id, "error": str(error)}
+                )
+                return
 
         final_messages = latest_messages or [
             *pending_messages,
             AIMessage(content="".join(deltas)),
         ]
         output = _extract_final_output(final_messages)
-        session.messages = _align_final_message_output(list(final_messages), output)
+        session.messages = _sanitize_session_messages(
+            _align_final_message_output(list(final_messages), output)
+        )
         yield _sse_event(
             "final",
             {
