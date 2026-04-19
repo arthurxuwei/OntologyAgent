@@ -18,7 +18,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import StructuredTool
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, ValidationError, model_validator
 
 from autonomy import AutonomyController, load_autonomy_config
 from chain_mcp_client import ChainMcpClient
@@ -1118,6 +1118,13 @@ def _sanitize_session_messages(messages: list[Any]) -> list[Any]:
     return sanitized
 
 
+def _is_tool_message_validation_error(error: Exception) -> bool:
+    if not isinstance(error, ValidationError):
+        return False
+    message = str(error)
+    return "ToolMessage" in message and "tool_call_id" in message
+
+
 def _sse_event(event: str, data: dict[str, Any]) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
@@ -1322,17 +1329,44 @@ async def stream_agent_session_message(
         deltas: list[str] = []
         latest_messages: Optional[list[Any]] = None
         try:
-            stream = _stream_agent_output(pending_messages)
+            graph = get_agent_graph()
+            stream = graph.astream({"messages": pending_messages}, stream_mode=["messages", "values"])
             async for item in stream:
                 delta, latest_messages = _consume_stream_item(item, latest_messages)
                 if delta is not None:
                     deltas.append(delta)
                     yield _sse_event("delta", {"delta": delta})
         except Exception as error:
-            yield _sse_event(
-                "error", {"sessionId": session.session_id, "error": str(error)}
-            )
-            return
+            if _is_tool_message_validation_error(error):
+                logger.warning(
+                    "Streaming agent response hit invalid ToolMessage state; retrying with ainvoke: %s",
+                    error,
+                )
+                try:
+                    invoke_result = await graph.ainvoke({"messages": pending_messages})
+                except Exception as invoke_error:
+                    yield _sse_event(
+                        "error",
+                        {"sessionId": session.session_id, "error": str(invoke_error)},
+                    )
+                    return
+                invoke_messages = invoke_result.get("messages")
+                if isinstance(invoke_messages, list):
+                    latest_messages = invoke_messages
+                else:
+                    yield _sse_event(
+                        "error",
+                        {
+                            "sessionId": session.session_id,
+                            "error": "Agent fallback returned invalid message payload",
+                        },
+                    )
+                    return
+            else:
+                yield _sse_event(
+                    "error", {"sessionId": session.session_id, "error": str(error)}
+                )
+                return
 
         final_messages = latest_messages or [
             *pending_messages,

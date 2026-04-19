@@ -24,7 +24,7 @@ FREQTRADE_ALLOW_WRITE_ACTIONS = os.getenv("FREQTRADE_ALLOW_WRITE_ACTIONS", "true
     "yes",
     "on",
 }
-FREQTRADE_SIGNAL_DEFAULT_PAIR = os.getenv("FREQTRADE_SIGNAL_DEFAULT_PAIR", "ETH/USDC")
+FREQTRADE_SIGNAL_DEFAULT_PAIR = "ETH/USDC"
 FREQTRADE_SIGNAL_DEFAULT_TIMEFRAME = os.getenv("FREQTRADE_SIGNAL_DEFAULT_TIMEFRAME", "5m")
 FREQTRADE_STRATEGY_NAME = os.getenv("FREQTRADE_STRATEGY_NAME", "SimpleAgentStrategy")
 FREQTRADE_STRATEGY_PATH = Path(os.getenv("FREQTRADE_STRATEGY_PATH", "/app/strategies"))
@@ -193,56 +193,42 @@ def _is_signal_triggered(value: Any) -> bool:
     return bool(value)
 
 
-class _SingleRowLocIndexer:
-    def __init__(self, dataframe: "_SingleRowDataFrame") -> None:
-        self._dataframe = dataframe
+async def _load_pair_candles_dataframe(pair: str, timeframe: str, minimum_history: int) -> Any:
+    try:
+        from pandas import DataFrame
+    except ModuleNotFoundError:
+        raise FreqtradeRestError("pandas is required to evaluate standard strategy signals")
 
-    def __setitem__(self, key: Any, value: Any) -> None:
-        if not (isinstance(key, tuple) and len(key) == 2 and key[0] == slice(None)):
-            raise KeyError(f"Unsupported loc assignment for minimal dataframe: {key!r}")
-        column = key[1]
-        self._dataframe._row[column] = value
+    payload = await rest_client.get(
+        "/pair_candles",
+        params={"pair": pair, "timeframe": timeframe},
+    )
+    if not isinstance(payload, dict):
+        raise FreqtradeRestError(
+            f"Market data unavailable for {pair} on {timeframe}: invalid pair_candles payload"
+        )
 
+    columns = payload.get("columns") or payload.get("all_columns") or []
+    data = payload.get("data") or []
+    if not isinstance(columns, list) or not columns or not isinstance(data, list) or not data:
+        raise FreqtradeRestError(
+            f"Market data unavailable for {pair} on {timeframe}: pair_candles returned no data"
+        )
 
-class _SingleRowIlocIndexer:
-    def __init__(self, dataframe: "_SingleRowDataFrame") -> None:
-        self._dataframe = dataframe
-
-    def __getitem__(self, index: int) -> dict[str, Any]:
-        if index not in (-1, 0):
-            raise IndexError(index)
-        return self._dataframe._row
-
-
-class _SingleRowDataFrame:
-    def __init__(self) -> None:
-        self._row = {
-            "date": datetime.now(UTC),
-            "open": 1.0,
-            "high": 1.0,
-            "low": 1.0,
-            "close": 1.0,
-            "volume": 1.0,
-        }
-        self.loc = _SingleRowLocIndexer(self)
-        self.iloc = _SingleRowIlocIndexer(self)
-
-    @property
-    def empty(self) -> bool:
-        return False
-
-    def __setitem__(self, key: str, value: Any) -> None:
-        self._row[key] = value
-
-    def __getitem__(self, key: str) -> Any:
-        return self._row[key]
+    dataframe = DataFrame(data, columns=columns)
+    if dataframe.empty:
+        raise FreqtradeRestError(
+            f"Market data unavailable for {pair} on {timeframe}: pair_candles returned empty dataframe"
+        )
+    if len(dataframe) < minimum_history:
+        raise FreqtradeRestError(
+            f"Market data unavailable for {pair} on {timeframe}: "
+            f"pair_candles returned only {len(dataframe)} candles, need at least {minimum_history}"
+        )
+    return dataframe
 
 
-def _build_minimal_signal_dataframe() -> _SingleRowDataFrame:
-    return _SingleRowDataFrame()
-
-
-def _evaluate_standard_strategy_signal(
+async def _evaluate_standard_strategy_signal(
     strategy_instance: Any,
     *,
     pair: str,
@@ -259,7 +245,12 @@ def _evaluate_standard_strategy_signal(
         return None
 
     metadata = {"pair": pair, "timeframe": timeframe}
-    dataframe = _build_minimal_signal_dataframe()
+    startup_candle_count = getattr(strategy_instance, "startup_candle_count", 0)
+    if not isinstance(startup_candle_count, int) or startup_candle_count < 0:
+        startup_candle_count = 0
+    minimum_history = max(startup_candle_count, 2)
+
+    dataframe = await _load_pair_candles_dataframe(pair, timeframe, minimum_history)
     try:
         dataframe = populate_indicators(dataframe, metadata)
         dataframe = populate_entry_trend(dataframe, metadata)
@@ -315,7 +306,7 @@ async def _evaluate_trade_signal_state(
             entry_triggered = bool(signal_state.get("entryTriggered"))
             exit_triggered = bool(signal_state.get("exitTriggered"))
     else:
-        standard_signal = _evaluate_standard_strategy_signal(
+        standard_signal = await _evaluate_standard_strategy_signal(
             strategy_instance,
             pair=pair,
             timeframe=resolved_timeframe,

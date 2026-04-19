@@ -101,6 +101,12 @@ docker compose --env-file "$(dirname "$(git rev-parse --git-common-dir)")/.env" 
 - V1 仅支持 `ETH/USDC`
 - V1 返回 `buy` / `sell` / `hold`，并附带 `reason`、`confidence` 和仓位上下文
 
+### Default Freqtrade Strategy（V1）
+
+- 默认策略 `SimpleAgentStrategy` 使用 `5m` 上的 `EMA 9/21` crossover
+- 默认信号目标交易对是 `ETH/USDC`
+- 默认情况下，`evaluate_trade_signal` 会基于该策略返回 `buy` / `sell` / `hold`
+
 ## 自治运行
 
 当前 `agent` 同时支持三条运行路径：

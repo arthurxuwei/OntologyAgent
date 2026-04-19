@@ -935,7 +935,11 @@
           pushWarning(`Autonomy error: ${source.error}`);
         }
         if (ledger.lastError) {
-          pushWarning(`Autonomy error: ${ledger.lastError}`);
+          if (ledger.lastErrorAt) {
+            pushWarning(`Autonomy error at ${ledger.lastErrorAt}: ${ledger.lastError}`);
+          } else {
+            pushWarning(`Autonomy error: ${ledger.lastError}`);
+          }
         }
 
         return warnings;

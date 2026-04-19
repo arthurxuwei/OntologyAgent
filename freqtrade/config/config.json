@@ -1,7 +1,7 @@
 {
   "bot_name": "OntologyAgent Freqtrade",
   "strategy": "SimpleAgentStrategy",
-  "stake_currency": "USDT",
+  "stake_currency": "USDC",
   "stake_amount": 100,
   "max_open_trades": 3,
   "tradable_balance_ratio": 0.99,
@@ -46,8 +46,7 @@
     },
     "ccxt_async_config": {},
     "pair_whitelist": [
-      "BTC/USDT",
-      "ETH/USDT"
+      "ETH/USDC"
     ],
     "pair_blacklist": []
   },

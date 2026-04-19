@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
-from langchain_core.messages import AIMessage, AIMessageChunk
+from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 from pydantic import ValidationError
 
 import main
@@ -248,6 +248,25 @@ class InvalidToolStreamingGraph:
 
         yield "messages", (AIMessageChunk(content="第二轮正常"), {"node": "agent"})
         yield "values", {"messages": [*self.calls[-1], AIMessage(content="第二轮正常")]}
+
+
+class ToolMessageValidationFailureStreamingGraph:
+    def __init__(self) -> None:
+        self.stream_calls: list[list[object]] = []
+        self.invoke_calls: list[list[object]] = []
+
+    async def astream(self, payload: dict[str, object], stream_mode: str):
+        self.stream_calls.append(list(payload["messages"]))  # type: ignore[index]
+        assert stream_mode == ["messages", "values"]
+        yield "messages", (AIMessageChunk(content="工具输出片段"), {"node": "agent"})
+        ToolMessage(content="broken tool output", tool_call_id=None)
+        yield  # pragma: no cover
+
+    async def ainvoke(self, payload: dict[str, object]) -> dict[str, object]:
+        messages = list(payload["messages"])  # type: ignore[index]
+        self.invoke_calls.append(list(messages))
+        messages.append(AIMessage(content="fallback final answer"))
+        return {"messages": messages}
 
 
 class FirstIterationFailureStreamingGraph:
@@ -535,6 +554,37 @@ class MainApiTests(unittest.TestCase):
         self.assertFalse(
             any(getattr(message, "type", None) == "tool" for message in graph.calls[1])
         )
+
+    def test_agent_session_stream_falls_back_to_ainvoke_on_tool_message_validation_error(
+        self,
+    ) -> None:
+        controller = FakeAutonomyController()
+        graph = ToolMessageValidationFailureStreamingGraph()
+
+        with (
+            patch.object(main, "get_autonomy_controller", return_value=controller),
+            patch.object(main, "get_agent_graph", return_value=graph),
+        ):
+            with TestClient(main.app) as client:
+                create_response = client.post("/agent/sessions")
+                self.assertEqual(create_response.status_code, 200)
+                session_id = create_response.json()["sessionId"]
+
+                with client.stream(
+                    "POST",
+                    f"/agent/sessions/{session_id}/messages/stream",
+                    json={"input": "查看理财子状态，然后给我一个建议"},
+                ) as response:
+                    self.assertEqual(response.status_code, 200)
+                    body = "".join(response.iter_text())
+
+        self.assertIn("event: start", body)
+        self.assertIn("event: delta", body)
+        self.assertIn('"delta": "工具输出片段"', body)
+        self.assertIn("event: final", body)
+        self.assertIn('"output": "fallback final answer"', body)
+        self.assertNotIn("event: error", body)
+        self.assertEqual(len(graph.invoke_calls), 1)
 
     def test_empty_model_reply_diagnostics_logs_warning_and_returns_fallback_text(
         self,
