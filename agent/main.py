@@ -204,6 +204,14 @@ class TradeListIntent(BaseModel):
     offset: int = Field(default=0, ge=0, description="偏移量")
 
 
+class EvaluateTradeSignalIntent(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    pair: str
+    strategy: Optional[str] = None
+    timeframe: Optional[str] = None
+
+
 class SyncDryRunWalletIntent(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -546,6 +554,19 @@ async def get_budget_snapshot_tool() -> dict[str, Any]:
     return await call_freqtrade_tool("get_budget_snapshot")
 
 
+async def evaluate_trade_signal_tool(
+    pair: str,
+    strategy: Optional[str] = None,
+    timeframe: Optional[str] = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {"pair": pair}
+    if strategy is not None:
+        payload["strategy"] = strategy
+    if timeframe is not None:
+        payload["timeframe"] = timeframe
+    return await call_freqtrade_tool("evaluate_trade_signal", payload)
+
+
 async def get_freqtrade_status_snapshot() -> dict[str, Any]:
     result = await get_freqtrade_mcp_client().call_tool("get_trading_status", {})
     return _unwrap_mcp_result("get_trading_status", result)
@@ -730,6 +751,11 @@ FREQTRADE_TOOL_REGISTRY: dict[str, dict[str, Any]] = {
         "args_schema": EmptyIntent,
         "coroutine": list_strategies_tool,
     },
+    "evaluate_trade_signal": {
+        "description": "评估当前 Freqtrade 策略对指定交易对的信号，返回 buy/sell/hold。",
+        "args_schema": EvaluateTradeSignalIntent,
+        "coroutine": evaluate_trade_signal_tool,
+    },
     "get_open_trades": {
         "description": "查看当前 open trades。",
         "args_schema": TradeListIntent,
@@ -810,7 +836,17 @@ def discover_freqtrade_tools() -> list[StructuredTool]:
         raise RuntimeError(
             f"FREQTRADE_MCP_URL is configured but tools could not be discovered: {error}"
         ) from error
-    return _build_discovered_freqtrade_tools(available_tools)
+
+    chain_available_tools: list[str] = []
+    try:
+        chain_available_tools = asyncio.run(get_chain_mcp_client().list_tools())
+    except Exception as error:
+        logger.debug(
+            "Failed to discover chain tools for freqtrade bridge gating: %s",
+            error,
+        )
+
+    return _build_discovered_freqtrade_tools(available_tools, chain_available_tools)
 
 
 def _make_structured_tool(name: str, spec: dict[str, Any]) -> StructuredTool:
@@ -831,11 +867,16 @@ def _build_discovered_chain_tools(available_tools: list[str]) -> list[Structured
     return tools
 
 
-def _build_discovered_freqtrade_tools(available_tools: list[str]) -> list[StructuredTool]:
+def _build_discovered_freqtrade_tools(
+    available_tools: list[str], chain_available_tools: Optional[list[str]] = None
+) -> list[StructuredTool]:
     tools: list[StructuredTool] = []
+    chain_available = set(chain_available_tools or [])
     for tool_name, spec in FREQTRADE_TOOL_REGISTRY.items():
         if tool_name == "execute_freqtrade_trade_intent":
             if "emit_trade_intent" not in available_tools:
+                continue
+            if "chain_execute_trade_intent" not in chain_available:
                 continue
         elif tool_name not in available_tools:
             continue
@@ -872,7 +913,11 @@ def _load_discovered_chain_tools() -> list[StructuredTool]:
         return list(_discovered_chain_tools)
     if _in_running_loop():
         return []
-    return discover_chain_tools()
+    try:
+        return discover_chain_tools()
+    except Exception as error:
+        logger.debug("Failed to load discovered chain tools: %s", error)
+        return []
 
 
 def _load_discovered_freqtrade_tools() -> list[StructuredTool]:
@@ -880,10 +925,15 @@ def _load_discovered_freqtrade_tools() -> list[StructuredTool]:
         return list(_discovered_freqtrade_tools)
     if _in_running_loop():
         return []
-    return discover_freqtrade_tools()
+    try:
+        return discover_freqtrade_tools()
+    except Exception as error:
+        logger.debug("Failed to load discovered freqtrade tools: %s", error)
+        return []
 
 
 async def refresh_discovered_tool_cache() -> None:
+    chain_available_tools: list[str] = []
     chain_tools: list[StructuredTool]
     freqtrade_tools: list[StructuredTool]
 
@@ -896,7 +946,10 @@ async def refresh_discovered_tool_cache() -> None:
 
     try:
         freqtrade_available_tools = await get_freqtrade_mcp_client().list_tools()
-        freqtrade_tools = _build_discovered_freqtrade_tools(freqtrade_available_tools)
+        freqtrade_tools = _build_discovered_freqtrade_tools(
+            freqtrade_available_tools,
+            chain_available_tools,
+        )
     except Exception as error:
         logger.debug("Failed to refresh freqtrade tool discovery: %s", error)
         freqtrade_tools = []

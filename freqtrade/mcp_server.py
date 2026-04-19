@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import importlib.util
+import inspect
 import json
 import os
+from datetime import datetime, UTC
 from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
@@ -21,6 +24,8 @@ FREQTRADE_ALLOW_WRITE_ACTIONS = os.getenv("FREQTRADE_ALLOW_WRITE_ACTIONS", "true
     "yes",
     "on",
 }
+FREQTRADE_SIGNAL_DEFAULT_PAIR = os.getenv("FREQTRADE_SIGNAL_DEFAULT_PAIR", "ETH/USDC")
+FREQTRADE_SIGNAL_DEFAULT_TIMEFRAME = os.getenv("FREQTRADE_SIGNAL_DEFAULT_TIMEFRAME", "5m")
 FREQTRADE_STRATEGY_NAME = os.getenv("FREQTRADE_STRATEGY_NAME", "SimpleAgentStrategy")
 FREQTRADE_STRATEGY_PATH = Path(os.getenv("FREQTRADE_STRATEGY_PATH", "/app/strategies"))
 FREQTRADE_CONFIG_PATH = Path(os.getenv("FREQTRADE_CONFIG_PATH", "/app/config/config.json"))
@@ -133,6 +138,206 @@ def extract_first_numeric(payload: Any, keys: list[str]) -> float:
     return 0.0
 
 
+def _load_strategy_instance(resolved_strategy: str) -> Any:
+    strategy_file = FREQTRADE_STRATEGY_PATH / f"{resolved_strategy}.py"
+    if not strategy_file.exists():
+        raise FreqtradeRestError(
+            f"Strategy file not found for {resolved_strategy}: {strategy_file}"
+        )
+
+    spec = importlib.util.spec_from_file_location(
+        f"freqtrade_strategy_{resolved_strategy}",
+        strategy_file,
+    )
+    if spec is None or spec.loader is None:
+        raise FreqtradeRestError(
+            f"Strategy file could not be loaded for {resolved_strategy}: {strategy_file}"
+        )
+
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+    except Exception as error:
+        raise FreqtradeRestError(
+            f"Failed to import strategy {resolved_strategy}: {error}"
+        ) from error
+
+    strategy_class = getattr(module, resolved_strategy, None)
+    if not callable(strategy_class):
+        raise FreqtradeRestError(
+            f"Strategy class not found for {resolved_strategy}: {strategy_file}"
+        )
+
+    try:
+        return strategy_class(config=read_config())
+    except (FileNotFoundError, TypeError):
+        return strategy_class()
+    except Exception as error:
+        raise FreqtradeRestError(
+            f"Failed to initialize strategy {resolved_strategy}: {error}"
+        ) from error
+
+
+def _is_signal_triggered(value: Any) -> bool:
+    if value is None:
+        return False
+    try:
+        if value != value:
+            return False
+    except Exception:
+        pass
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"", "0", "false", "none", "nan"}:
+            return False
+    return bool(value)
+
+
+class _SingleRowLocIndexer:
+    def __init__(self, dataframe: "_SingleRowDataFrame") -> None:
+        self._dataframe = dataframe
+
+    def __setitem__(self, key: Any, value: Any) -> None:
+        if not (isinstance(key, tuple) and len(key) == 2 and key[0] == slice(None)):
+            raise KeyError(f"Unsupported loc assignment for minimal dataframe: {key!r}")
+        column = key[1]
+        self._dataframe._row[column] = value
+
+
+class _SingleRowIlocIndexer:
+    def __init__(self, dataframe: "_SingleRowDataFrame") -> None:
+        self._dataframe = dataframe
+
+    def __getitem__(self, index: int) -> dict[str, Any]:
+        if index not in (-1, 0):
+            raise IndexError(index)
+        return self._dataframe._row
+
+
+class _SingleRowDataFrame:
+    def __init__(self) -> None:
+        self._row = {
+            "date": datetime.now(UTC),
+            "open": 1.0,
+            "high": 1.0,
+            "low": 1.0,
+            "close": 1.0,
+            "volume": 1.0,
+        }
+        self.loc = _SingleRowLocIndexer(self)
+        self.iloc = _SingleRowIlocIndexer(self)
+
+    @property
+    def empty(self) -> bool:
+        return False
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        self._row[key] = value
+
+    def __getitem__(self, key: str) -> Any:
+        return self._row[key]
+
+
+def _build_minimal_signal_dataframe() -> _SingleRowDataFrame:
+    return _SingleRowDataFrame()
+
+
+def _evaluate_standard_strategy_signal(
+    strategy_instance: Any,
+    *,
+    pair: str,
+    timeframe: str,
+) -> tuple[bool, bool] | None:
+    populate_indicators = getattr(strategy_instance, "populate_indicators", None)
+    populate_entry_trend = getattr(strategy_instance, "populate_entry_trend", None)
+    populate_exit_trend = getattr(strategy_instance, "populate_exit_trend", None)
+    if not (
+        callable(populate_indicators)
+        and callable(populate_entry_trend)
+        and callable(populate_exit_trend)
+    ):
+        return None
+
+    metadata = {"pair": pair, "timeframe": timeframe}
+    dataframe = _build_minimal_signal_dataframe()
+    try:
+        dataframe = populate_indicators(dataframe, metadata)
+        dataframe = populate_entry_trend(dataframe, metadata)
+        dataframe = populate_exit_trend(dataframe, metadata)
+    except Exception as error:
+        raise FreqtradeRestError(
+            f"Failed to evaluate strategy {type(strategy_instance).__name__}: {error}"
+        ) from error
+
+    if not hasattr(dataframe, "iloc") or getattr(dataframe, "empty", False):
+        return (False, False)
+
+    latest = dataframe.iloc[-1]
+    return (
+        _is_signal_triggered(latest.get("enter_long")),
+        _is_signal_triggered(latest.get("exit_long")),
+    )
+
+
+async def _evaluate_trade_signal_state(
+    pair: str,
+    strategy: str | None = None,
+    timeframe: str | None = None,
+) -> dict[str, Any]:
+    resolved_strategy = strategy or FREQTRADE_STRATEGY_NAME
+    strategy_instance = _load_strategy_instance(resolved_strategy)
+
+    resolved_timeframe = timeframe
+    if resolved_timeframe is None and strategy_instance is not None:
+        strategy_timeframe = getattr(strategy_instance, "timeframe", None)
+        if isinstance(strategy_timeframe, str) and strategy_timeframe:
+            resolved_timeframe = strategy_timeframe
+    if resolved_timeframe is None:
+        resolved_timeframe = FREQTRADE_SIGNAL_DEFAULT_TIMEFRAME
+
+    status = await rest_client.get("/status")
+    has_open_position = isinstance(status, list) and any(
+        isinstance(trade, dict) and trade.get("pair") == pair for trade in status
+    )
+
+    entry_triggered = False
+    exit_triggered = False
+    evaluate_signal = getattr(strategy_instance, "evaluate_signal", None)
+    if callable(evaluate_signal):
+        signal_state = evaluate_signal(
+            pair=pair,
+            timeframe=resolved_timeframe,
+            has_open_position=has_open_position,
+        )
+        if inspect.isawaitable(signal_state):
+            signal_state = await signal_state
+        if isinstance(signal_state, dict):
+            entry_triggered = bool(signal_state.get("entryTriggered"))
+            exit_triggered = bool(signal_state.get("exitTriggered"))
+    else:
+        standard_signal = _evaluate_standard_strategy_signal(
+            strategy_instance,
+            pair=pair,
+            timeframe=resolved_timeframe,
+        )
+        if standard_signal is None:
+            raise FreqtradeRestError(
+                f"Strategy {resolved_strategy} cannot be evaluated in V1: "
+                "missing evaluate_signal() and standard populate_* methods"
+            )
+        entry_triggered, exit_triggered = standard_signal
+
+    return {
+        "pair": pair,
+        "strategy": resolved_strategy,
+        "timeframe": resolved_timeframe,
+        "hasOpenPosition": has_open_position,
+        "entryTriggered": entry_triggered,
+        "exitTriggered": exit_triggered,
+        "observedAt": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+    }
+
+
 @mcp.tool()
 async def get_trading_status() -> dict[str, Any]:
     status = await rest_client.get("/status")
@@ -152,6 +357,53 @@ async def get_trading_status() -> dict[str, Any]:
         "dryRun": show_config.get("dry_run"),
         "exchange": show_config.get("exchange"),
         "strategy": show_config.get("strategy"),
+    }
+
+
+@mcp.tool()
+async def evaluate_trade_signal(
+    pair: str = FREQTRADE_SIGNAL_DEFAULT_PAIR,
+    strategy: str | None = None,
+    timeframe: str | None = None,
+) -> dict[str, Any]:
+    if pair != FREQTRADE_SIGNAL_DEFAULT_PAIR:
+        raise FreqtradeRestError(
+            f"evaluate_trade_signal only supports {FREQTRADE_SIGNAL_DEFAULT_PAIR} in V1"
+        )
+
+    state = await _evaluate_trade_signal_state(pair, strategy=strategy, timeframe=timeframe)
+    normalized_pair = state.get("pair", pair)
+    normalized_strategy = state.get("strategy")
+    normalized_timeframe = state.get("timeframe", timeframe or FREQTRADE_SIGNAL_DEFAULT_TIMEFRAME)
+    has_open_position = bool(state.get("hasOpenPosition"))
+    entry_triggered = bool(state.get("entryTriggered"))
+    exit_triggered = bool(state.get("exitTriggered"))
+
+    signal = "hold"
+    confidence = 0.5
+    reason = "no actionable entry or exit signal on latest candle"
+
+    if entry_triggered and not has_open_position:
+        signal = "buy"
+        confidence = 0.7
+        reason = "entry conditions satisfied on latest candle and no open position"
+    elif exit_triggered and has_open_position:
+        signal = "sell"
+        confidence = 0.7
+        reason = "exit conditions satisfied while position is open"
+
+    return {
+        "summary": f"Evaluated trade signal for {normalized_pair}",
+        "pair": normalized_pair,
+        "strategy": normalized_strategy,
+        "timeframe": normalized_timeframe,
+        "signal": signal,
+        "reason": reason,
+        "confidence": confidence,
+        "hasOpenPosition": has_open_position,
+        "entryTriggered": entry_triggered,
+        "exitTriggered": exit_triggered,
+        "observedAt": state.get("observedAt"),
     }
 
 

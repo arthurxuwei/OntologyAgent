@@ -85,6 +85,7 @@ docker compose --env-file "$(dirname "$(git rev-parse --git-common-dir)")/.env" 
   - `get_open_trades`
   - `get_closed_trades`
   - `get_performance_summary`
+  - `evaluate_trade_signal`
   - `start_bot`
   - `stop_bot`
   - `pause_trading`
@@ -93,6 +94,12 @@ docker compose --env-file "$(dirname "$(git rev-parse --git-common-dir)")/.env" 
   - `force_exit_trade`
   - `get_budget_snapshot`（内部账本 / 自治循环使用）
   - `sync_dry_run_wallet`（内部 dry-run 资金同步使用）
+
+### Freqtrade Signal Evaluation（V1）
+
+- `evaluate_trade_signal` 是只读工具，不会创建 trade intent，也不会触发链上执行
+- V1 仅支持 `ETH/USDC`
+- V1 返回 `buy` / `sell` / `hold`，并附带 `reason`、`confidence` 和仓位上下文
 
 ## 自治运行
 

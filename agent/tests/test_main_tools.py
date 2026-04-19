@@ -14,6 +14,14 @@ def _make_test_tool(name: str) -> StructuredTool:
     return StructuredTool.from_function(name=name, description=name, coroutine=_fake_tool)
 
 
+class _FakeToolClient:
+    def __init__(self, tools: list[str]) -> None:
+        self._tools = tools
+
+    async def list_tools(self) -> list[str]:
+        return self._tools
+
+
 class MainToolRegistryTests(unittest.TestCase):
     def setUp(self) -> None:
         main.clear_discovered_tool_cache()
@@ -31,34 +39,109 @@ class MainToolRegistryTests(unittest.TestCase):
         self.assertIn("stop_wealth_agent", tool_names)
         self.assertIn("run_wealth_tick", tool_names)
 
-    def test_build_tools_hides_trade_intent_bridge_without_emit_trade_intent(
-        self,
-    ) -> None:
-        with patch.object(main, "_load_discovered_chain_tools", return_value=[]), patch.object(
+    def test_build_tools_hides_trade_intent_bridge_without_discovery_support(self) -> None:
+        with patch.object(
             main,
-            "_load_discovered_freqtrade_tools",
-            return_value=[_make_test_tool("get_trading_status")],
+            "get_chain_mcp_client",
+            return_value=_FakeToolClient(["chain_get_transaction_receipt"]),
+        ), patch.object(
+            main,
+            "get_freqtrade_mcp_client",
+            return_value=_FakeToolClient(["get_trading_status"]),
         ):
+            main.clear_discovered_tool_cache()
             tools = main.build_tools()
 
         tool_names = {tool.name for tool in tools}
         self.assertNotIn("execute_freqtrade_trade_intent", tool_names)
 
-    def test_build_tools_exposes_trade_intent_bridge_with_emit_trade_intent(
+    def test_build_tools_exposes_trade_intent_bridge_when_both_backends_advertise_it(
         self,
     ) -> None:
-        with patch.object(main, "_load_discovered_chain_tools", return_value=[]), patch.object(
+        with patch.object(
             main,
-            "_load_discovered_freqtrade_tools",
-            return_value=[
-                _make_test_tool("get_trading_status"),
-                _make_test_tool("execute_freqtrade_trade_intent"),
-            ],
+            "get_chain_mcp_client",
+            return_value=_FakeToolClient(
+                ["chain_execute_trade_intent", "chain_get_transaction_receipt"]
+            ),
+        ), patch.object(
+            main,
+            "get_freqtrade_mcp_client",
+            return_value=_FakeToolClient(["get_trading_status", "emit_trade_intent"]),
         ):
+            main.clear_discovered_tool_cache()
             tools = main.build_tools()
 
         tool_names = {tool.name for tool in tools}
         self.assertIn("execute_freqtrade_trade_intent", tool_names)
+
+    def test_build_tools_hides_trade_intent_bridge_without_chain_execute_trade_intent(
+        self,
+    ) -> None:
+        with patch.object(
+            main,
+            "get_chain_mcp_client",
+            return_value=_FakeToolClient(["chain_get_transaction_receipt"]),
+        ), patch.object(
+            main,
+            "get_freqtrade_mcp_client",
+            return_value=_FakeToolClient(["get_trading_status", "emit_trade_intent"]),
+        ):
+            main.clear_discovered_tool_cache()
+            tools = main.build_tools()
+
+        tool_names = {tool.name for tool in tools}
+        self.assertNotIn("execute_freqtrade_trade_intent", tool_names)
+
+    def test_build_tools_hides_trade_intent_bridge_without_emit_trade_intent(
+        self,
+    ) -> None:
+        with patch.object(
+            main,
+            "get_chain_mcp_client",
+            return_value=_FakeToolClient(
+                ["chain_execute_trade_intent", "chain_get_transaction_receipt"]
+            ),
+        ), patch.object(
+            main,
+            "get_freqtrade_mcp_client",
+            return_value=_FakeToolClient(["get_trading_status"]),
+        ):
+            main.clear_discovered_tool_cache()
+            tools = main.build_tools()
+
+        tool_names = {tool.name for tool in tools}
+        self.assertNotIn("execute_freqtrade_trade_intent", tool_names)
+
+    def test_build_tools_exposes_discovered_freqtrade_signal_tool(self) -> None:
+        with patch.object(main, "_load_discovered_chain_tools", return_value=[]), patch.object(
+            main,
+            "_load_discovered_freqtrade_tools",
+            return_value=[_make_test_tool("evaluate_trade_signal")],
+        ):
+            tools = main.build_tools()
+
+        tool_names = {tool.name for tool in tools}
+        self.assertIn("evaluate_trade_signal", tool_names)
+
+    def test_build_tools_keeps_independent_freqtrade_tools_when_chain_discovery_fails(
+        self,
+    ) -> None:
+        with patch.object(
+            main,
+            "get_freqtrade_mcp_client",
+            return_value=_FakeToolClient(["get_trading_status", "evaluate_trade_signal"]),
+        ), patch.object(
+            main,
+            "get_chain_mcp_client",
+            side_effect=RuntimeError("chain discovery failed"),
+        ):
+            main.clear_discovered_tool_cache()
+            tools = main.build_tools()
+
+        tool_names = {tool.name for tool in tools}
+        self.assertIn("evaluate_trade_signal", tool_names)
+        self.assertNotIn("execute_freqtrade_trade_intent", tool_names)
 
     def test_build_tools_uses_discovery_results_instead_of_static_registries(self) -> None:
         with patch.object(
@@ -116,7 +199,9 @@ class MainToolRegistryTests(unittest.TestCase):
             async def list_tools(self) -> list[str]:
                 return self._tools
 
-        def graph_tool_names(freqtrade_tools: list[str]) -> set[str]:
+        def graph_tool_names(
+            freqtrade_tools: list[str], chain_tools: list[str]
+        ) -> set[str]:
             captured: dict[str, object] = {}
 
             with (
@@ -124,7 +209,7 @@ class MainToolRegistryTests(unittest.TestCase):
                 patch.object(
                     main,
                     "get_chain_mcp_client",
-                    return_value=FakeChainClient(["chain_get_transaction_receipt"]),
+                    return_value=FakeChainClient(chain_tools),
                 ),
                 patch.object(
                     main,
@@ -150,13 +235,26 @@ class MainToolRegistryTests(unittest.TestCase):
 
             return captured["tool_names"]  # type: ignore[return-value]
 
-        tool_names_with_bridge = graph_tool_names(["get_trading_status", "emit_trade_intent"])
+        tool_names_with_bridge = graph_tool_names(
+            ["get_trading_status", "emit_trade_intent"],
+            ["chain_get_transaction_receipt", "chain_execute_trade_intent"],
+        )
         self.assertIn("execute_freqtrade_trade_intent", tool_names_with_bridge)
         self.assertIn("chain_get_transaction_receipt", tool_names_with_bridge)
 
-        tool_names_without_bridge = graph_tool_names(["get_trading_status"])
+        tool_names_without_bridge = graph_tool_names(
+            ["get_trading_status"],
+            ["chain_get_transaction_receipt", "chain_execute_trade_intent"],
+        )
         self.assertNotIn("execute_freqtrade_trade_intent", tool_names_without_bridge)
         self.assertIn("chain_get_transaction_receipt", tool_names_without_bridge)
+
+        tool_names_without_chain_support = graph_tool_names(
+            ["get_trading_status", "emit_trade_intent"],
+            ["chain_get_transaction_receipt"],
+        )
+        self.assertNotIn("execute_freqtrade_trade_intent", tool_names_without_chain_support)
+        self.assertIn("chain_get_transaction_receipt", tool_names_without_chain_support)
 
 
 if __name__ == "__main__":

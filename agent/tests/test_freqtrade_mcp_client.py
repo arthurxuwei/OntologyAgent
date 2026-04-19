@@ -40,6 +40,7 @@ class FakeFreqtradeMcpClient:
         return [
             "get_trading_status",
             "list_strategies",
+            "evaluate_trade_signal",
             "get_open_trades",
             "get_closed_trades",
             "get_performance_summary",
@@ -58,15 +59,29 @@ class FakeFreqtradeMcpClient:
         return {"ok": True}
 
 
+class FakeChainMcpClient:
+    async def list_tools(self) -> list[str]:
+        return ["chain_execute_trade_intent"]
+
+
 class FreqtradeToolDiscoveryTests(unittest.TestCase):
     def test_discover_freqtrade_tools_registers_known_aliases(self) -> None:
-        with patch.object(main, "get_freqtrade_mcp_client", return_value=FakeFreqtradeMcpClient()):
+        with patch.object(
+            main,
+            "get_freqtrade_mcp_client",
+            return_value=FakeFreqtradeMcpClient(),
+        ), patch.object(
+            main,
+            "get_chain_mcp_client",
+            return_value=FakeChainMcpClient(),
+        ):
             tools = main.discover_freqtrade_tools()
 
         tool_names = sorted(tool.name for tool in tools)
         self.assertEqual(
             tool_names,
             [
+                "evaluate_trade_signal",
                 "execute_freqtrade_trade_intent",
                 "force_enter_trade",
                 "force_exit_trade",
@@ -83,6 +98,24 @@ class FreqtradeToolDiscoveryTests(unittest.TestCase):
                 "sync_dry_run_wallet",
             ],
         )
+
+    def test_discover_freqtrade_tools_keeps_independent_tools_when_chain_discovery_fails(
+        self,
+    ) -> None:
+        with patch.object(
+            main,
+            "get_freqtrade_mcp_client",
+            return_value=FakeFreqtradeMcpClient(),
+        ), patch.object(
+            main,
+            "get_chain_mcp_client",
+            side_effect=RuntimeError("chain unavailable"),
+        ):
+            tools = main.discover_freqtrade_tools()
+
+        tool_names = {tool.name for tool in tools}
+        self.assertIn("evaluate_trade_signal", tool_names)
+        self.assertNotIn("execute_freqtrade_trade_intent", tool_names)
 
 
 if __name__ == "__main__":
