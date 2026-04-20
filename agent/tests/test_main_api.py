@@ -169,6 +169,57 @@ class StreamingGraph:
         yield "values", {"messages": [*self.calls[-1], AIMessage(content="你好")]}
 
 
+class NonGatedStreamingGraph:
+    def __init__(self) -> None:
+        self.astream_calls = 0
+        self.ainvoke_calls = 0
+
+    async def ainvoke(self, payload: dict[str, object]) -> dict[str, object]:
+        self.ainvoke_calls += 1
+        raise AssertionError("non-gated provider path should not call ainvoke")
+
+    async def astream(self, payload: dict[str, object], stream_mode: str):
+        self.astream_calls += 1
+        assert stream_mode == ["messages", "values"]
+        messages = list(payload["messages"])  # type: ignore[index]
+        yield "messages", (AIMessageChunk(content="你好"), {"node": "agent"})
+        yield "values", {"messages": [*messages, AIMessage(content="你好")]}
+
+
+class PackyInvokeOnlyGraph:
+    def __init__(self) -> None:
+        self.invoke_calls: list[list[object]] = []
+        self.stream_calls = 0
+
+    async def ainvoke(self, payload: dict[str, object]) -> dict[str, object]:
+        messages = list(payload["messages"])  # type: ignore[index]
+        self.invoke_calls.append(list(messages))
+        messages.append(AIMessage(content="packy direct reply"))
+        return {"messages": messages}
+
+    async def astream(self, payload: dict[str, object], stream_mode: str):
+        self.stream_calls += 1
+        raise AssertionError("packy provider path should not call astream")
+        yield  # pragma: no cover
+
+
+class PackyToolValidationFailureGraph:
+    def __init__(self) -> None:
+        self.invoke_calls: list[list[object]] = []
+        self.stream_calls = 0
+
+    async def ainvoke(self, payload: dict[str, object]) -> dict[str, object]:
+        messages = list(payload["messages"])  # type: ignore[index]
+        self.invoke_calls.append(list(messages))
+        ToolMessage(content="broken tool output", tool_call_id=None)
+        return {"messages": messages}  # pragma: no cover
+
+    async def astream(self, payload: dict[str, object], stream_mode: str):
+        self.stream_calls += 1
+        raise AssertionError("packy provider path should not call astream")
+        yield  # pragma: no cover
+
+
 class FailingStreamingGraph:
     def __init__(self) -> None:
         self.calls: list[list[object]] = []
@@ -266,6 +317,26 @@ class ToolMessageValidationFailureStreamingGraph:
         messages = list(payload["messages"])  # type: ignore[index]
         self.invoke_calls.append(list(messages))
         messages.append(AIMessage(content="fallback final answer"))
+        return {"messages": messages}
+
+
+class ToolMessageValidationFailureEmptyFallbackGraph:
+    def __init__(self) -> None:
+        self.stream_calls: list[list[object]] = []
+        self.invoke_calls: list[list[object]] = []
+
+    async def astream(self, payload: dict[str, object], stream_mode: str):
+        self.stream_calls.append(list(payload["messages"]))  # type: ignore[index]
+        assert stream_mode == ["messages", "values"]
+        yield "messages", (AIMessageChunk(content="我先查看理财子状态。"), {"node": "agent"})
+        yield "messages", (AIMessageChunk(content="这是工具原始输出。"), {"node": "agent"})
+        ToolMessage(content="broken tool output", tool_call_id=None)
+        yield  # pragma: no cover
+
+    async def ainvoke(self, payload: dict[str, object]) -> dict[str, object]:
+        messages = list(payload["messages"])  # type: ignore[index]
+        self.invoke_calls.append(list(messages))
+        messages.append(AIMessage(content=""))
         return {"messages": messages}
 
 
@@ -377,6 +448,113 @@ class MainApiTests(unittest.TestCase):
         self.assertIn("event: delta", second_chunk)
         self.assertIn('"delta": "你"', second_chunk)
         self.assertEqual(getattr(session, "messages", None), [])
+
+    def test_agent_session_stream_uses_direct_invoke_for_packyapi_provider(
+        self,
+    ) -> None:
+        graph = PackyInvokeOnlyGraph()
+
+        with (
+            patch.dict(
+                os.environ,
+                {"OPENAI_BASE_URL": "https://packyapi.com/v1"},
+                clear=False,
+            ),
+            patch.object(main, "get_agent_graph", return_value=graph),
+        ):
+            with TestClient(main.app) as client:
+                create_response = client.post("/agent/sessions")
+                self.assertEqual(create_response.status_code, 200)
+                session_id = create_response.json()["sessionId"]
+
+                with client.stream(
+                    "POST",
+                    f"/agent/sessions/{session_id}/messages/stream",
+                    json={"input": "你好"},
+                ) as response:
+                    self.assertEqual(response.status_code, 200)
+                    body = "".join(response.iter_text())
+
+                state_response = client.get(f"/agent/sessions/{session_id}")
+
+        self.assertIn("event: start", body)
+        self.assertIn("event: final", body)
+        self.assertNotIn("event: delta", body)
+        self.assertNotIn("event: error", body)
+        self.assertIn('"output": "packy direct reply"', body)
+        self.assertEqual(len(graph.invoke_calls), 1)
+        self.assertEqual(graph.stream_calls, 0)
+        self.assertEqual(state_response.status_code, 200)
+        self.assertEqual(state_response.json()["messageCount"], 2)
+
+    def test_agent_session_stream_keeps_astream_for_non_gated_provider(self) -> None:
+        graph = NonGatedStreamingGraph()
+
+        with (
+            patch.dict(
+                os.environ,
+                {"OPENAI_BASE_URL": "https://api.openai.com/v1"},
+                clear=False,
+            ),
+            patch.object(main, "get_agent_graph", return_value=graph),
+        ):
+            with TestClient(main.app) as client:
+                create_response = client.post("/agent/sessions")
+                self.assertEqual(create_response.status_code, 200)
+                session_id = create_response.json()["sessionId"]
+
+                with client.stream(
+                    "POST",
+                    f"/agent/sessions/{session_id}/messages/stream",
+                    json={"input": "你好"},
+                ) as response:
+                    self.assertEqual(response.status_code, 200)
+                    body = "".join(response.iter_text())
+
+        final_event = _extract_sse_event_data(body, "final")
+
+        self.assertIn("event: delta", body)
+        self.assertIn('"delta": "你好"', body)
+        self.assertEqual(final_event["output"], "你好")
+        self.assertEqual(graph.astream_calls, 1)
+        self.assertEqual(graph.ainvoke_calls, 0)
+
+    def test_agent_session_stream_direct_invoke_for_packyapi_provider_does_not_retry_tool_validation_error(
+        self,
+    ) -> None:
+        graph = PackyToolValidationFailureGraph()
+
+        with (
+            patch.dict(
+                os.environ,
+                {"OPENAI_BASE_URL": "https://packyapi.com/v1"},
+                clear=False,
+            ),
+            patch.object(main, "get_agent_graph", return_value=graph),
+        ):
+            with TestClient(main.app) as client:
+                create_response = client.post("/agent/sessions")
+                self.assertEqual(create_response.status_code, 200)
+                session_id = create_response.json()["sessionId"]
+
+                with client.stream(
+                    "POST",
+                    f"/agent/sessions/{session_id}/messages/stream",
+                    json={"input": "你好"},
+                ) as response:
+                    self.assertEqual(response.status_code, 200)
+                    body = "".join(response.iter_text())
+
+                state_response = client.get(f"/agent/sessions/{session_id}")
+
+        self.assertIn("event: start", body)
+        self.assertIn("event: error", body)
+        self.assertNotIn("event: delta", body)
+        self.assertNotIn("event: final", body)
+        self.assertEqual(len(graph.invoke_calls), 1)
+        self.assertEqual(graph.stream_calls, 0)
+        self.assertEqual(state_response.status_code, 200)
+        self.assertEqual(state_response.json()["messageCount"], 0)
 
     def test_agent_session_stream_setup_failure_emits_error(self) -> None:
         controller = FakeAutonomyController()
@@ -584,6 +762,34 @@ class MainApiTests(unittest.TestCase):
         self.assertIn("event: final", body)
         self.assertIn('"output": "fallback final answer"', body)
         self.assertNotIn("event: error", body)
+        self.assertEqual(len(graph.invoke_calls), 1)
+
+    def test_agent_session_stream_uses_accumulated_deltas_when_fallback_invoke_is_empty(
+        self,
+    ) -> None:
+        controller = FakeAutonomyController()
+        graph = ToolMessageValidationFailureEmptyFallbackGraph()
+
+        with (
+            patch.object(main, "get_autonomy_controller", return_value=controller),
+            patch.object(main, "get_agent_graph", return_value=graph),
+        ):
+            with TestClient(main.app) as client:
+                create_response = client.post("/agent/sessions")
+                self.assertEqual(create_response.status_code, 200)
+                session_id = create_response.json()["sessionId"]
+
+                with client.stream(
+                    "POST",
+                    f"/agent/sessions/{session_id}/messages/stream",
+                    json={"input": "查看理财子状态，然后给我一个建议"},
+                ) as response:
+                    self.assertEqual(response.status_code, 200)
+                    body = "".join(response.iter_text())
+
+        self.assertIn("event: final", body)
+        self.assertNotIn("event: error", body)
+        self.assertIn('"output": "我先查看理财子状态。这是工具原始输出。"', body)
         self.assertEqual(len(graph.invoke_calls), 1)
 
     def test_empty_model_reply_diagnostics_logs_warning_and_returns_fallback_text(
@@ -1802,6 +2008,10 @@ class MainApiTests(unittest.TestCase):
         main.set_discovered_tool_cache(
             chain_tools=[
                 main._make_structured_tool(
+                    "chain_get_wallet_state",
+                    main.CHAIN_TOOL_REGISTRY["chain_get_wallet_state"],
+                ),
+                main._make_structured_tool(
                     "chain_get_transaction_receipt",
                     main.CHAIN_TOOL_REGISTRY["chain_get_transaction_receipt"],
                 ),
@@ -1814,6 +2024,7 @@ class MainApiTests(unittest.TestCase):
         )
         tool_names = {tool.name for tool in main.build_tools()}
 
+        self.assertIn("chain_get_wallet_state", tool_names)
         self.assertIn("chain_get_transaction_receipt", tool_names)
         self.assertIn("chain_get_user_operation_status", tool_names)
 

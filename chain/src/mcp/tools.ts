@@ -126,7 +126,8 @@ export function createChainMcpServer(runtime: ChainRuntime): McpServer {
   server.registerTool(
     "chain_get_wallet_state",
     {
-      description: "Return the configured signer address, current wallet balance, and chain policy snapshot.",
+      description:
+        "Return the configured signer address, native ETH balance, configured USDC token balance, and chain policy snapshot.",
       inputSchema: {},
     },
     async () => runTool(() => runtime.walletStateService.execute()),

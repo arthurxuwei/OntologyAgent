@@ -218,6 +218,8 @@ export type WalletStateResult = {
     signerConfigured: boolean;
     balanceWei: string;
     balanceEth: string;
+    usdcBalanceAtomic: string;
+    usdcBalance: string;
     mockChain: boolean;
   };
   chain: {

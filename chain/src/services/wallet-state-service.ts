@@ -1,4 +1,4 @@
-import { formatEther } from "ethers";
+import { formatEther, formatUnits } from "ethers";
 
 import type { AppConfig } from "../config.js";
 import type { WalletStateResult } from "../domain/types.js";
@@ -27,6 +27,7 @@ export class WalletStateService {
         };
 
     const balanceWei = await this.getBalanceWei(address);
+    const usdcBalanceAtomic = await this.getUsdcBalanceAtomic(address);
 
     return {
       wallet: {
@@ -34,6 +35,8 @@ export class WalletStateService {
         signerConfigured: this.config.signer.privateKey !== undefined,
         balanceWei: balanceWei.toString(),
         balanceEth: formatEther(balanceWei),
+        usdcBalanceAtomic: usdcBalanceAtomic.toString(),
+        usdcBalance: formatUnits(usdcBalanceAtomic, this.config.x402.usdcDecimals),
         mockChain: this.config.network.mockChain,
       },
       chain,
@@ -69,5 +72,18 @@ export class WalletStateService {
 
     await this.networkClient.assertExpectedChain();
     return this.networkClient.getBalance(address);
+  }
+
+  private async getUsdcBalanceAtomic(address: string | null): Promise<bigint> {
+    if (address === null) {
+      return 0n;
+    }
+
+    if (this.config.network.mockChain || this.networkClient === null) {
+      return this.config.network.mockUsdcBalanceAtomic;
+    }
+
+    await this.networkClient.assertExpectedChain();
+    return this.networkClient.getErc20Balance(this.config.x402.usdcAssetAddress, address);
   }
 }
