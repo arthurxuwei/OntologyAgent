@@ -137,10 +137,10 @@ def load_autonomy_config(env: Optional[dict[str, str]] = None) -> AutonomyConfig
         state_path=get_text("AUTONOMY_STATE_PATH", "/app/data/autonomy_state.json"),
         eth_price_usd=float(source.get("AUTONOMY_ETH_PRICE_USD", "3000")),
         min_wallet_balance_usd=float(
-            source.get("AUTONOMY_MIN_WALLET_BALANCE_USD", "250")
+            source.get("AUTONOMY_MIN_WALLET_BALANCE_USD", "100")
         ),
         stop_trading_balance_usd=float(
-            source.get("AUTONOMY_STOP_TRADING_BALANCE_USD", "150")
+            source.get("AUTONOMY_STOP_TRADING_BALANCE_USD", "500")
         ),
         force_exit_balance_usd=float(
             source.get("AUTONOMY_FORCE_EXIT_BALANCE_USD", "75")

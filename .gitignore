@@ -10,3 +10,4 @@ agent/data/
 .vscode/
 .worktrees/
 .playwright-mcp/
+.DS_Store
