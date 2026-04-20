@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, AsyncIterator, Literal, Optional
+from urllib.parse import urlparse
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException
@@ -60,6 +61,17 @@ def get_openai_base_url() -> Optional[str]:
         return None
     normalized = value.strip()
     return normalized or None
+
+
+def _provider_supports_streamed_tool_execution() -> bool:
+    base_url = get_openai_base_url()
+    if not base_url:
+        return True
+    parsed = urlparse(base_url)
+    hostname = (parsed.hostname or "").lower()
+    if hostname == "packyapi.com" or hostname.endswith(".packyapi.com"):
+        return False
+    return True
 
 
 class SignTransferIntent(BaseModel):
@@ -707,6 +719,11 @@ async def run_wealth_tick_tool() -> dict[str, Any]:
 
 
 CHAIN_TOOL_REGISTRY: dict[str, dict[str, Any]] = {
+    "chain_get_wallet_state": {
+        "description": "查看当前链钱包地址、ETH 余额、USDC 余额和链策略摘要。",
+        "args_schema": EmptyIntent,
+        "coroutine": get_chain_wallet_state,
+    },
     "chain_sign_transfer": {
         "description": "签名 ETH 转账，但不广播。",
         "args_schema": SignTransferIntent,
@@ -1328,32 +1345,20 @@ async def stream_agent_session_message(
 
         deltas: list[str] = []
         latest_messages: Optional[list[Any]] = None
+        used_tool_validation_fallback = False
         try:
             graph = get_agent_graph()
-            stream = graph.astream({"messages": pending_messages}, stream_mode=["messages", "values"])
-            async for item in stream:
-                delta, latest_messages = _consume_stream_item(item, latest_messages)
-                if delta is not None:
-                    deltas.append(delta)
-                    yield _sse_event("delta", {"delta": delta})
         except Exception as error:
-            if _is_tool_message_validation_error(error):
-                logger.warning(
-                    "Streaming agent response hit invalid ToolMessage state; retrying with ainvoke: %s",
-                    error,
-                )
-                try:
-                    invoke_result = await graph.ainvoke({"messages": pending_messages})
-                except Exception as invoke_error:
-                    yield _sse_event(
-                        "error",
-                        {"sessionId": session.session_id, "error": str(invoke_error)},
-                    )
-                    return
+            yield _sse_event(
+                "error", {"sessionId": session.session_id, "error": str(error)}
+            )
+            return
+
+        if not _provider_supports_streamed_tool_execution():
+            try:
+                invoke_result = await graph.ainvoke({"messages": pending_messages})
                 invoke_messages = invoke_result.get("messages")
-                if isinstance(invoke_messages, list):
-                    latest_messages = invoke_messages
-                else:
+                if not isinstance(invoke_messages, list):
                     yield _sse_event(
                         "error",
                         {
@@ -1362,17 +1367,74 @@ async def stream_agent_session_message(
                         },
                     )
                     return
-            else:
+                latest_messages = invoke_messages
+            except Exception as error:
                 yield _sse_event(
                     "error", {"sessionId": session.session_id, "error": str(error)}
                 )
                 return
+        else:
+            try:
+                stream = graph.astream(
+                    {"messages": pending_messages}, stream_mode=["messages", "values"]
+                )
+                async for item in stream:
+                    delta, latest_messages = _consume_stream_item(item, latest_messages)
+                    if delta is not None:
+                        deltas.append(delta)
+                        yield _sse_event("delta", {"delta": delta})
+            except Exception as error:
+                if _is_tool_message_validation_error(error):
+                    used_tool_validation_fallback = True
+                    logger.warning(
+                        "Streaming agent response hit invalid ToolMessage state; retrying with ainvoke: %s",
+                        error,
+                    )
+                    try:
+                        invoke_result = await graph.ainvoke({"messages": pending_messages})
+                    except Exception as invoke_error:
+                        yield _sse_event(
+                            "error",
+                            {
+                                "sessionId": session.session_id,
+                                "error": str(invoke_error),
+                            },
+                        )
+                        return
+                    invoke_messages = invoke_result.get("messages")
+                    if isinstance(invoke_messages, list):
+                        latest_messages = invoke_messages
+                    else:
+                        yield _sse_event(
+                            "error",
+                            {
+                                "sessionId": session.session_id,
+                                "error": "Agent fallback returned invalid message payload",
+                            },
+                        )
+                        return
+                else:
+                    yield _sse_event(
+                        "error",
+                        {
+                            "sessionId": session.session_id,
+                            "error": str(error),
+                        },
+                    )
+                    return
 
         final_messages = latest_messages or [
             *pending_messages,
             AIMessage(content="".join(deltas)),
         ]
         output = _extract_final_output(final_messages)
+        streamed_output = "".join(deltas).strip()
+        if (
+            used_tool_validation_fallback
+            and output == EMPTY_FINAL_OUTPUT_FALLBACK
+            and streamed_output
+        ):
+            output = streamed_output
         session.messages = _sanitize_session_messages(
             _align_final_message_output(list(final_messages), output)
         )

@@ -9,6 +9,7 @@ export type AppConfig = {
     expectedChainId: number;
     mockChain: boolean;
     mockBalanceWei: bigint;
+    mockUsdcBalanceAtomic: bigint;
     entryPointAddress: string;
   };
   signer: {
@@ -159,6 +160,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       expectedChainId: parseNumberEnv(env, "CHAIN_ID", DEFAULT_TESTNET_CHAIN_ID),
       mockChain: parseBooleanEnv({ ...env, CHAIN_MOCK: chainMockEnv }, "CHAIN_MOCK", false),
       mockBalanceWei: parseEthEnv(env, "CHAIN_MOCK_BALANCE_ETH", "1.0"),
+      mockUsdcBalanceAtomic: parseUnitsEnv(env, "CHAIN_MOCK_USDC_BALANCE", "0", X402_USDC_DECIMALS),
       entryPointAddress:
         env.ENTRY_POINT_ADDRESS ?? "0x0576a174D229E3cFA37253523E645A78A0C91B57",
     },

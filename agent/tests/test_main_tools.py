@@ -222,7 +222,7 @@ class MainToolRegistryTests(unittest.TestCase):
                 patch.object(
                     main,
                     "create_react_agent",
-                    side_effect=lambda *, model, tools, prompt: captured.update(
+                    side_effect=lambda *, model, tools, prompt, streamed_tool_execution=True: captured.update(
                         {"tool_names": {tool.name for tool in tools}}
                     )
                     or object(),
@@ -255,6 +255,42 @@ class MainToolRegistryTests(unittest.TestCase):
         )
         self.assertNotIn("execute_freqtrade_trade_intent", tool_names_without_chain_support)
         self.assertIn("chain_get_transaction_receipt", tool_names_without_chain_support)
+
+    def test_streamed_tool_execution_is_disabled_for_packyapi(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {
+                "OPENAI_BASE_URL": "https://www.packyapi.com/v1",
+            },
+            clear=True,
+        ):
+            self.assertFalse(main._provider_supports_streamed_tool_execution())
+
+    def test_provider_supports_streamed_tool_execution_for_openai_base_url(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {
+                "OPENAI_BASE_URL": "https://api.openai.com/v1",
+            },
+            clear=True,
+        ):
+            self.assertTrue(main._provider_supports_streamed_tool_execution())
+
+    def test_provider_supports_streamed_tool_execution_uses_openai_endpoint_alias(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {
+                "OPENAI_ENDPOINT": "https://gateway.packyapi.com/custom/v1",
+            },
+            clear=True,
+        ):
+            self.assertFalse(main._provider_supports_streamed_tool_execution())
+
+    def test_streamed_tool_execution_defaults_to_enabled_without_known_provider_gate(
+        self,
+    ) -> None:
+        with patch.dict("os.environ", {}, clear=True):
+            self.assertTrue(main._provider_supports_streamed_tool_execution())
 
 
 if __name__ == "__main__":
