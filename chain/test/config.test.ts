@@ -26,9 +26,11 @@ test("loadConfig normalizes private keys with missing 0x prefix", () => {
 test("loadConfig exposes mock balance for chain wallet state", () => {
   const config = loadConfig({
     CHAIN_MOCK_BALANCE_ETH: "2.5",
+    CHAIN_MOCK_USDC_BALANCE: "123.456789",
   });
 
   assert.equal(config.network.mockBalanceWei.toString(), "2500000000000000000");
+  assert.equal(config.network.mockUsdcBalanceAtomic.toString(), "123456789");
 });
 
 test("loadConfig rejects non-integer values for integer config fields", () => {

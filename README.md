@@ -293,6 +293,7 @@ PRIVATE_KEY=0x... \
 - `WHITELISTED_RECIPIENTS`：额外白名单地址，逗号分隔
 - `CHAIN_MOCK`：是否使用模拟链执行，默认 `false`
 - `CHAIN_MOCK_BALANCE_ETH`：mock 模式下链上钱包返回给自治账本的余额，默认 `1.0`
+- `CHAIN_MOCK_USDC_BALANCE`：mock 模式下 `chain_get_wallet_state` 返回的 USDC 余额，默认 `0`
 - `TRADE_INTENT_PAIR`：trade intent 默认交易对，默认 `ETH/USDC`
 - `TRADE_INTENT_SELL_TOKEN`：trade intent 默认卖出 Token，默认 Base Sepolia USDC
 - `TRADE_INTENT_BUY_TOKEN`：trade intent 默认买入 Token，默认 Base Sepolia WETH

@@ -43,6 +43,7 @@ class ChainMcpClientTests(unittest.TestCase):
 class FakeChainMcpClient:
     async def list_tools(self) -> list[str]:
         return [
+            "chain_get_wallet_state",
             "chain_sign_transfer",
             "chain_submit_execution",
             "chain_submit_user_operation",
@@ -62,6 +63,7 @@ class ChainToolDiscoveryTests(unittest.TestCase):
         self.assertEqual(
             tool_names,
             [
+                "chain_get_wallet_state",
                 "chain_sign_transfer",
                 "chain_submit_execution",
                 "chain_submit_user_operation",

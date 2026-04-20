@@ -15,6 +15,7 @@ type RuntimeOverrides = NonNullable<Parameters<typeof createChainRuntime>[1]>;
 function createMockConfig() {
   return loadConfig({
     CHAIN_MOCK: "true",
+    CHAIN_MOCK_USDC_BALANCE: "321.123456",
     PRIVATE_KEY: "0x59c6995e998f97a5a0044966f0945382d7fb8f3c2b5b2dd8f04c208dbb0f4f8d",
     WHITELISTED_RECIPIENTS:
       "0x2222222222222222222222222222222222222222,0x3333333333333333333333333333333333333333",
@@ -322,6 +323,8 @@ test("chain_get_wallet_state returns the configured mock wallet balance", async 
     const content = response.structuredContent as Record<string, any>;
     assert.equal(content.wallet?.mockChain, true);
     assert.equal(content.wallet?.balanceEth, "1.0");
+    assert.equal(content.wallet?.usdcBalanceAtomic, "321123456");
+    assert.equal(content.wallet?.usdcBalance, "321.123456");
     assert.equal(content.policy?.dailyLimitUsdcAtomic, "2000000");
   });
 });
