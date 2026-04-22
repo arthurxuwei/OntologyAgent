@@ -209,6 +209,48 @@ class EmptyIntent(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class UpdateWealthConfigIntent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    intervalSeconds: Optional[float] = Field(
+        default=None,
+        gt=0,
+        description="自治循环间隔秒数，必须大于 0。",
+    )
+    ethPriceUsd: Optional[float] = Field(
+        default=None,
+        gt=0,
+        description="用于把 ETH 余额折算成 USD 的参考价格，必须大于 0。",
+    )
+    minWalletBalanceUsd: Optional[float] = Field(
+        default=None,
+        ge=0,
+        description="低于该钱包余额时建议补充资金。",
+    )
+    stopTradingBalanceUsd: Optional[float] = Field(
+        default=None,
+        ge=0,
+        description="低于该钱包余额时允许停止交易。",
+    )
+    forceExitBalanceUsd: Optional[float] = Field(
+        default=None,
+        ge=0,
+        description="低于该钱包余额时允许强制退出所有交易。",
+    )
+    maxDrawdownRatio: Optional[float] = Field(
+        default=None,
+        ge=0,
+        le=1,
+        description="最大回撤比例，取值范围 0 到 1。",
+    )
+
+    @model_validator(mode="after")
+    def require_at_least_one_field(self) -> "UpdateWealthConfigIntent":
+        if not self.model_dump(exclude_none=True):
+            raise ValueError("至少需要提供一个要修改的配置字段")
+        return self
+
+
 class TradeListIntent(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -718,6 +760,27 @@ async def run_wealth_tick_tool() -> dict[str, Any]:
     return await get_autonomy_controller().tick()
 
 
+async def update_wealth_config_tool(
+    intervalSeconds: Optional[float] = None,
+    ethPriceUsd: Optional[float] = None,
+    minWalletBalanceUsd: Optional[float] = None,
+    stopTradingBalanceUsd: Optional[float] = None,
+    forceExitBalanceUsd: Optional[float] = None,
+    maxDrawdownRatio: Optional[float] = None,
+) -> dict[str, Any]:
+    intent = UpdateWealthConfigIntent(
+        intervalSeconds=intervalSeconds,
+        ethPriceUsd=ethPriceUsd,
+        minWalletBalanceUsd=minWalletBalanceUsd,
+        stopTradingBalanceUsd=stopTradingBalanceUsd,
+        forceExitBalanceUsd=forceExitBalanceUsd,
+        maxDrawdownRatio=maxDrawdownRatio,
+    )
+    return await get_autonomy_controller().update_config(
+        intent.model_dump(exclude_none=True)
+    )
+
+
 CHAIN_TOOL_REGISTRY: dict[str, dict[str, Any]] = {
     "chain_get_wallet_state": {
         "description": "查看当前链钱包地址、ETH 余额、USDC 余额和链策略摘要。",
@@ -1002,6 +1065,15 @@ def build_tools() -> list[StructuredTool]:
             description="立即让理财子 Agent 执行一次检查和保护性决策。",
             args_schema=EmptyIntent,
             coroutine=run_wealth_tick_tool,
+        ),
+        StructuredTool.from_function(
+            name="update_wealth_config",
+            description=(
+                "修改理财子 Agent 的运行时风控配置，例如钱包余额阈值、最大回撤、"
+                "ETH/USD 参考价或检查间隔。修改会立即生效并写入自治状态。"
+            ),
+            args_schema=UpdateWealthConfigIntent,
+            coroutine=update_wealth_config_tool,
         ),
         *_load_discovered_chain_tools(),
         *_load_discovered_freqtrade_tools(),
@@ -1299,6 +1371,13 @@ async def autonomy_stop() -> dict[str, Any]:
 @app.post("/autonomy/tick")
 async def autonomy_tick() -> dict[str, Any]:
     return await get_autonomy_controller().tick()
+
+
+@app.post("/autonomy/config")
+async def autonomy_config_update(intent: UpdateWealthConfigIntent) -> dict[str, Any]:
+    controller = get_autonomy_controller()
+    status = await controller.update_config(intent.model_dump(exclude_none=True))
+    return _with_autonomy_runtime_summary(status)
 
 
 @app.post("/agent/sessions")

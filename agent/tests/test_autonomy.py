@@ -85,6 +85,74 @@ def make_config(state_path: str) -> AutonomyConfig:
 
 
 class AutonomyControllerTests(unittest.TestCase):
+    def test_update_config_persists_overrides_and_reload_applies_them(self) -> None:
+        async def chain_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            return make_chain_state("1.0")
+
+        async def freqtrade_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            return make_freqtrade_budget()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            state_path = str(Path(temp_dir) / "autonomy.json")
+            controller = AutonomyController(
+                make_config(state_path),
+                chain_tool,
+                freqtrade_tool,
+            )
+
+            status = asyncio.run(
+                controller.update_config(
+                    {
+                        "minWalletBalanceUsd": 50,
+                        "maxDrawdownRatio": 0.25,
+                    }
+                )
+            )
+
+            self.assertEqual(status["thresholds"]["minWalletBalanceUsd"], 50)
+            self.assertEqual(status["thresholds"]["maxDrawdownRatio"], 0.25)
+            self.assertEqual(
+                status["configOverrides"],
+                {"minWalletBalanceUsd": 50.0, "maxDrawdownRatio": 0.25},
+            )
+
+            reloaded = AutonomyController(
+                make_config(state_path),
+                chain_tool,
+                freqtrade_tool,
+            )
+            reloaded_status = asyncio.run(reloaded.status())
+
+            self.assertEqual(
+                reloaded_status["thresholds"]["minWalletBalanceUsd"], 50
+            )
+            self.assertEqual(reloaded_status["thresholds"]["maxDrawdownRatio"], 0.25)
+
+    def test_update_config_rejects_unsupported_fields(self) -> None:
+        async def chain_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            return make_chain_state("1.0")
+
+        async def freqtrade_tool(
+            tool_name: str, arguments: Optional[dict[str, object]] = None
+        ) -> dict[str, object]:
+            return make_freqtrade_budget()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = AutonomyController(
+                make_config(str(Path(temp_dir) / "autonomy.json")),
+                chain_tool,
+                freqtrade_tool,
+            )
+
+            with self.assertRaisesRegex(ValueError, "Unsupported autonomy config field"):
+                asyncio.run(controller.update_config({"modelName": 123}))
+
     def test_run_chain_execution_returns_failed_record_for_chain_error(self) -> None:
         async def chain_tool(
             tool_name: str, arguments: Optional[dict[str, object]] = None

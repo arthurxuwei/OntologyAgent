@@ -38,6 +38,7 @@ class MainToolRegistryTests(unittest.TestCase):
         self.assertIn("start_wealth_agent", tool_names)
         self.assertIn("stop_wealth_agent", tool_names)
         self.assertIn("run_wealth_tick", tool_names)
+        self.assertIn("update_wealth_config", tool_names)
 
     def test_build_tools_hides_trade_intent_bridge_without_discovery_support(self) -> None:
         with patch.object(

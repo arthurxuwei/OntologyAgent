@@ -43,6 +43,7 @@ class FakeAutonomyController:
         self.started = False
         self.start_calls: list[bool] = []
         self.stop_calls: list[bool] = []
+        self.config_updates: list[dict[str, object]] = []
 
     async def start(self, *, force: bool = False) -> None:
         self.start_calls.append(force)
@@ -77,6 +78,28 @@ class FakeAutonomyController:
                     "state": "open",
                     "failureCount": 2,
                 },
+            },
+        }
+
+    async def update_config(self, updates: dict[str, object]) -> dict[str, object]:
+        self.config_updates.append(dict(updates))
+        return {
+            "enabled": self.started,
+            "autostartConfigured": False,
+            "running": self.started,
+            "intervalSeconds": updates.get("intervalSeconds", 60),
+            "modelName": "gpt-4o-mini",
+            "thresholds": {
+                "minWalletBalanceUsd": updates.get("minWalletBalanceUsd", 100),
+                "stopTradingBalanceUsd": updates.get("stopTradingBalanceUsd", 500),
+                "forceExitBalanceUsd": updates.get("forceExitBalanceUsd", 75),
+                "maxDrawdownRatio": updates.get("maxDrawdownRatio", 0.15),
+            },
+            "configOverrides": updates,
+            "ledger": {
+                "activeExecutions": [],
+                "executionHistory": [],
+                "circuitBreaker": {"state": "closed"},
             },
         }
 
@@ -1810,6 +1833,32 @@ class MainApiTests(unittest.TestCase):
 
         self.assertIn(True, controller.start_calls)
         self.assertIn(True, controller.stop_calls)
+
+    def test_autonomy_config_endpoint_updates_runtime_thresholds(self) -> None:
+        controller = FakeAutonomyController()
+        with patch.object(main, "get_autonomy_controller", return_value=controller):
+            with TestClient(main.app) as client:
+                response = client.post(
+                    "/autonomy/config",
+                    json={
+                        "minWalletBalanceUsd": 42,
+                        "maxDrawdownRatio": 0.2,
+                    },
+                )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            controller.config_updates,
+            [{"minWalletBalanceUsd": 42.0, "maxDrawdownRatio": 0.2}],
+        )
+        self.assertEqual(response.json()["thresholds"]["minWalletBalanceUsd"], 42)
+        self.assertEqual(response.json()["summary"]["activeExecutionCount"], 0)
+
+    def test_autonomy_config_endpoint_rejects_empty_payload(self) -> None:
+        with TestClient(main.app) as client:
+            response = client.post("/autonomy/config", json={})
+
+        self.assertEqual(response.status_code, 422)
 
     def test_autonomy_status_exposes_active_execution_and_circuit_breaker(self) -> None:
         controller = FakeAutonomyController()

@@ -71,6 +71,7 @@ docker compose --env-file "$(dirname "$(git rev-parse --git-common-dir)")/.env" 
   - `start_wealth_agent`
   - `stop_wealth_agent`
   - `run_wealth_tick`
+  - `update_wealth_config`
   - `execute_freqtrade_trade_intent`（让 `freqtrade` 生成 trade intent，再由 `chain` 用 Base 钱包执行）
 - `chain` MCP tools
   - `chain_get_wallet_state`（内部账本 / 自治循环使用）
@@ -139,6 +140,7 @@ docker compose --env-file "$(dirname "$(git rev-parse --git-common-dir)")/.env" 
 - `POST /autonomy/start`
 - `POST /autonomy/stop`
 - `POST /autonomy/tick`
+- `POST /autonomy/config`
 
 查看当前自治状态和账本快照，也可以显式管理子 Agent 的生命周期。
 
@@ -148,7 +150,7 @@ docker compose --env-file "$(dirname "$(git rev-parse --git-common-dir)")/.env" 
 - 是否给 Freqtrade dry-run 增加资金
 - 是否执行其他链上或交易动作
 
-在这些业务动作之前，建议先调用 `get_wealth_status` 查看理财子 Agent 的当前状态。管家也可以直接通过 `start_wealth_agent`、`stop_wealth_agent`、`run_wealth_tick` 管理子 Agent。
+在这些业务动作之前，建议先调用 `get_wealth_status` 查看理财子 Agent 的当前状态。管家也可以直接通过 `start_wealth_agent`、`stop_wealth_agent`、`run_wealth_tick` 管理子 Agent，并通过 `update_wealth_config` 调整运行时风控阈值。
 
 ## 演示脚本
 
@@ -282,6 +284,15 @@ PRIVATE_KEY=0x... \
 - `AUTONOMY_FORCE_EXIT_BALANCE_USD`：低于该值时自治子 Agent 可强制平仓，默认 `75`
 - `AUTONOMY_MAX_DRAWDOWN_RATIO`：最大回撤阈值比例，默认 `0.15`
 - `AUTONOMY_MODEL`：自治循环专用模型；为空时回退到 `BRAIN_AGENT_MODEL`
+
+`update_wealth_config` 和 `POST /autonomy/config` 可以在运行时修改以下自治配置，并会把覆盖值写入 `AUTONOMY_STATE_PATH`，重启后继续生效：
+
+- `intervalSeconds`
+- `ethPriceUsd`
+- `minWalletBalanceUsd`
+- `stopTradingBalanceUsd`
+- `forceExitBalanceUsd`
+- `maxDrawdownRatio`
 ### chain
 
 - `CHAIN_MCP_PORT`：chain MCP 端口，默认 `8091`
