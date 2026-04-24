@@ -38,6 +38,8 @@ export type AppConfig = {
   circle: {
     apiKey?: string;
     entitySecret?: string;
+    // Static ciphertext is loaded only so live wallet creation can reject unsafe reuse.
+    // Circle requires a fresh entitySecretCiphertext for each API request.
     entitySecretCiphertext?: string;
     walletSetId?: string;
     baseUrl: string;

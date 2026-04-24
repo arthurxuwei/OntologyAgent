@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 
 import type { AppConfig } from "../config.js";
 import { AppError } from "../domain/errors.js";
+import { normalizeAddress } from "../security.js";
 
 export type CircleWalletCreateResult = {
   circleWalletId: string;
@@ -18,8 +19,26 @@ type CircleWalletResponseWallet = {
   walletSetId?: unknown;
 };
 
+export type CircleEntitySecretCiphertextFactory = (
+  entitySecret: string,
+) => string | Promise<string>;
+
+export type CircleWalletServiceOptions = {
+  createEntitySecretCiphertext?: CircleEntitySecretCiphertextFactory;
+  fetchImpl?: typeof fetch;
+};
+
 export class CircleWalletService {
-  constructor(private readonly config: AppConfig) {}
+  private readonly createEntitySecretCiphertext?: CircleEntitySecretCiphertextFactory;
+  private readonly fetchImpl: typeof fetch;
+
+  constructor(
+    private readonly config: AppConfig,
+    options: CircleWalletServiceOptions = {},
+  ) {
+    this.createEntitySecretCiphertext = options.createEntitySecretCiphertext;
+    this.fetchImpl = options.fetchImpl ?? fetch;
+  }
 
   async createWallet(agentName: string): Promise<CircleWalletCreateResult> {
     if (this.config.network.mockChain) {
@@ -34,16 +53,34 @@ export class CircleWalletService {
 
     const apiKey = this.config.circle.apiKey;
     const walletSetId = this.config.circle.walletSetId;
-    const entitySecretCiphertext = this.config.circle.entitySecretCiphertext;
-    if (!apiKey || !walletSetId || !entitySecretCiphertext) {
+    const entitySecret = this.config.circle.entitySecret;
+    const staticEntitySecretCiphertext = this.config.circle.entitySecretCiphertext;
+    if (staticEntitySecretCiphertext && !entitySecret) {
       throw new AppError(
         "CONFIG_ERROR",
-        "CIRCLE_API_KEY, CIRCLE_WALLET_SET_ID, and CIRCLE_ENTITY_SECRET_CIPHERTEXT are required",
+        "static CIRCLE_ENTITY_SECRET_CIPHERTEXT cannot be reused for live wallet creation; configure CIRCLE_ENTITY_SECRET and per-request ciphertext generation",
         500,
       );
     }
 
-    const response = await fetch(`${this.config.circle.baseUrl}/developer/wallets`, {
+    if (!apiKey || !walletSetId || !entitySecret) {
+      throw new AppError(
+        "CONFIG_ERROR",
+        "CIRCLE_API_KEY, CIRCLE_WALLET_SET_ID, and CIRCLE_ENTITY_SECRET are required",
+        500,
+      );
+    }
+
+    if (!this.createEntitySecretCiphertext) {
+      throw new AppError(
+        "CONFIG_ERROR",
+        "per-request Circle entitySecretCiphertext generation is required for live wallet creation; static CIRCLE_ENTITY_SECRET_CIPHERTEXT cannot be reused",
+        500,
+      );
+    }
+
+    const entitySecretCiphertext = await this.createEntitySecretCiphertext(entitySecret);
+    const response = await this.fetchImpl(`${this.config.circle.baseUrl}/developer/wallets`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -77,7 +114,7 @@ export class CircleWalletService {
     const wallet = extractFirstWallet(payload);
     if (typeof wallet?.id !== "string" || typeof wallet.address !== "string") {
       throw new AppError(
-        "INTERNAL_ERROR",
+        "UPSTREAM_REQUEST_FAILED",
         "Circle wallet response did not include id and address",
         502,
         payload,
@@ -93,12 +130,13 @@ export class CircleWalletService {
       );
     }
 
+    const walletAddress = normalizeCircleAddress(wallet.address, payload);
     return {
       circleWalletId: wallet.id,
       circleWalletSetId:
         typeof wallet.walletSetId === "string" ? wallet.walletSetId : walletSetId,
       blockchain: "BASE-SEPOLIA",
-      walletAddress: wallet.address,
+      walletAddress,
       mode: "circle",
     };
   }
@@ -143,4 +181,20 @@ function extractFirstWallet(payload: unknown): CircleWalletResponseWallet | unde
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function normalizeCircleAddress(address: string, payload: unknown): string {
+  try {
+    return normalizeAddress(address).toLowerCase();
+  } catch (error) {
+    throw new AppError(
+      "UPSTREAM_REQUEST_FAILED",
+      "Circle wallet response included an invalid address",
+      502,
+      {
+        payload,
+        cause: error instanceof Error ? error.message : String(error),
+      },
+    );
+  }
 }
