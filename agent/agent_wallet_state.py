@@ -4,6 +4,8 @@ import hashlib
 import json
 import os
 import secrets
+import tempfile
+import threading
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal, Optional
@@ -109,21 +111,67 @@ class AgentWalletState(BaseModel):
 
 
 class AgentWalletStore:
+    _locks: dict[str, threading.RLock] = {}
+    _locks_guard = threading.Lock()
+
     def __init__(self, path: str) -> None:
         self.path = path
+        self._lock = self._lock_for_path(path)
 
     def load(self) -> AgentWalletState:
+        with self._lock:
+            return self._load_unlocked()
+
+    def save(self, state: AgentWalletState) -> None:
+        with self._lock:
+            self._save_unlocked(state)
+
+    def _load_unlocked(self) -> AgentWalletState:
         if not os.path.exists(self.path):
             return AgentWalletState()
         with open(self.path, encoding="utf-8") as handle:
             return AgentWalletState.model_validate(json.load(handle))
 
-    def save(self, state: AgentWalletState) -> None:
+    def _save_unlocked(self, state: AgentWalletState) -> None:
         parent_dir = os.path.dirname(self.path)
         if parent_dir:
             os.makedirs(parent_dir, exist_ok=True)
-        with open(self.path, "w", encoding="utf-8") as handle:
-            json.dump(state.model_dump(), handle, indent=2, sort_keys=True)
+        target_dir = parent_dir or "."
+        fd, temp_path = tempfile.mkstemp(
+            prefix=".agent-wallet-state-",
+            suffix=".tmp",
+            dir=target_dir,
+            text=True,
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(state.model_dump(), handle, indent=2, sort_keys=True)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temp_path, self.path)
+        except Exception:
+            try:
+                os.unlink(temp_path)
+            except FileNotFoundError:
+                pass
+            raise
+
+    @classmethod
+    def _lock_for_path(cls, path: str) -> threading.RLock:
+        absolute_path = os.path.abspath(path)
+        with cls._locks_guard:
+            lock = cls._locks.get(absolute_path)
+            if lock is None:
+                lock = threading.RLock()
+                cls._locks[absolute_path] = lock
+            return lock
+
+    def _mutate(self, mutator):
+        with self._lock:
+            state = self._load_unlocked()
+            result = mutator(state)
+            self._save_unlocked(state)
+            return result
 
     def upsert_owner(
         self,
@@ -134,38 +182,38 @@ class AgentWalletStore:
         display_name: Optional[str],
         avatar_url: Optional[str],
     ) -> Owner:
-        state = self.load()
-        current = now_iso()
+        def mutate(state: AgentWalletState) -> Owner:
+            current = now_iso()
 
-        for index, owner in enumerate(state.owners):
-            if owner.provider == provider and owner.providerUserId == provider_user_id:
-                updated = owner.model_copy(
-                    update={
-                        "login": login,
-                        "email": email,
-                        "displayName": display_name,
-                        "avatarUrl": avatar_url,
-                        "updatedAt": current,
-                    }
-                )
-                state.owners[index] = updated
-                self.save(state)
-                return updated
+            for index, owner in enumerate(state.owners):
+                if owner.provider == provider and owner.providerUserId == provider_user_id:
+                    updated = owner.model_copy(
+                        update={
+                            "login": login,
+                            "email": email,
+                            "displayName": display_name,
+                            "avatarUrl": avatar_url,
+                            "updatedAt": current,
+                        }
+                    )
+                    state.owners[index] = updated
+                    return updated
 
-        owner = Owner(
-            ownerId=f"owner_{uuid.uuid4().hex}",
-            provider=provider,
-            providerUserId=provider_user_id,
-            login=login,
-            email=email,
-            displayName=display_name,
-            avatarUrl=avatar_url,
-            createdAt=current,
-            updatedAt=current,
-        )
-        state.owners.append(owner)
-        self.save(state)
-        return owner
+            owner = Owner(
+                ownerId=f"owner_{uuid.uuid4().hex}",
+                provider=provider,
+                providerUserId=provider_user_id,
+                login=login,
+                email=email,
+                displayName=display_name,
+                avatarUrl=avatar_url,
+                createdAt=current,
+                updatedAt=current,
+            )
+            state.owners.append(owner)
+            return owner
+
+        return self._mutate(mutate)
 
     def create_agent_wallet(
         self,
@@ -173,72 +221,76 @@ class AgentWalletStore:
         agent_description: Optional[str],
         wallet_payload: dict[str, Any],
     ) -> tuple[AgentRecord, str]:
-        state = self.load()
-        current = now_iso()
         claim_code = secrets.token_urlsafe(18)
 
-        agent = AgentRecord(
-            agentId=f"agent_{uuid.uuid4().hex}",
-            name=agent_name,
-            description=agent_description,
-            walletId=wallet_payload["circleWalletId"],
-            walletAddress=wallet_payload["walletAddress"],
-            circleWalletSetId=wallet_payload.get("circleWalletSetId"),
-            blockchain=wallet_payload.get("blockchain", "BASE-SEPOLIA"),
-            createdAt=current,
-            updatedAt=current,
-        )
-        claim = ClaimRecord(
-            claimId=f"claim_{uuid.uuid4().hex}",
-            agentId=agent.agentId,
-            claimCodeHash=self.hash_claim_code(claim_code),
-            expiresAt=(datetime.now(timezone.utc) + timedelta(hours=24)).isoformat(),
-            createdAt=current,
-        )
+        def mutate(state: AgentWalletState) -> AgentRecord:
+            current = now_iso()
+            agent = AgentRecord(
+                agentId=f"agent_{uuid.uuid4().hex}",
+                name=agent_name,
+                description=agent_description,
+                walletId=wallet_payload["circleWalletId"],
+                walletAddress=wallet_payload["walletAddress"],
+                circleWalletSetId=wallet_payload.get("circleWalletSetId"),
+                blockchain=wallet_payload.get("blockchain", "BASE-SEPOLIA"),
+                createdAt=current,
+                updatedAt=current,
+            )
+            claim = ClaimRecord(
+                claimId=f"claim_{uuid.uuid4().hex}",
+                agentId=agent.agentId,
+                claimCodeHash=self.hash_claim_code(claim_code),
+                expiresAt=(
+                    datetime.now(timezone.utc) + timedelta(hours=24)
+                ).isoformat(),
+                createdAt=current,
+            )
 
-        state.agents.append(agent)
-        state.claims.append(claim)
-        self.save(state)
-        return agent, claim_code
+            state.agents.append(agent)
+            state.claims.append(claim)
+            return agent
+
+        return self._mutate(mutate), claim_code
 
     def claim_wallet(self, claim_code: str, owner_id: str) -> AgentRecord:
-        state = self.load()
-        code_hash = self.hash_claim_code(claim_code)
-        current = now_iso()
+        def mutate(state: AgentWalletState) -> AgentRecord:
+            code_hash = self.hash_claim_code(claim_code)
+            current = now_iso()
 
-        for claim_index, claim in enumerate(state.claims):
-            if claim.claimCodeHash != code_hash:
-                continue
-            if claim.claimedAt is not None:
-                raise ValueError("claim code has already been consumed")
-            if _parse_iso_datetime(claim.expiresAt) <= datetime.now(timezone.utc):
-                raise ValueError("claim code has expired")
-
-            for agent_index, agent in enumerate(state.agents):
-                if agent.agentId != claim.agentId:
+            for claim_index, claim in enumerate(state.claims):
+                if claim.claimCodeHash != code_hash:
                     continue
-                if agent.claimStatus != "unclaimed":
-                    raise ValueError("wallet is already claimed")
+                if claim.claimedAt is not None:
+                    raise ValueError("claim code has already been consumed")
+                if _parse_iso_datetime(claim.expiresAt) <= datetime.now(timezone.utc):
+                    raise ValueError("claim code has expired")
 
-                updated_agent = agent.model_copy(
-                    update={
-                        "ownerId": owner_id,
-                        "claimStatus": "claimed",
-                        "updatedAt": current,
-                    }
-                )
-                updated_claim = claim.model_copy(
-                    update={
-                        "claimedAt": current,
-                        "consumedByOwnerId": owner_id,
-                    }
-                )
-                state.agents[agent_index] = updated_agent
-                state.claims[claim_index] = updated_claim
-                self.save(state)
-                return updated_agent
+                for agent_index, agent in enumerate(state.agents):
+                    if agent.agentId != claim.agentId:
+                        continue
+                    if agent.claimStatus != "unclaimed":
+                        raise ValueError("wallet is already claimed")
 
-        raise ValueError("claim code is invalid")
+                    updated_agent = agent.model_copy(
+                        update={
+                            "ownerId": owner_id,
+                            "claimStatus": "claimed",
+                            "updatedAt": current,
+                        }
+                    )
+                    updated_claim = claim.model_copy(
+                        update={
+                            "claimedAt": current,
+                            "consumedByOwnerId": owner_id,
+                        }
+                    )
+                    state.agents[agent_index] = updated_agent
+                    state.claims[claim_index] = updated_claim
+                    return updated_agent
+
+            raise ValueError("claim code is invalid")
+
+        return self._mutate(mutate)
 
     @staticmethod
     def hash_claim_code(claim_code: str) -> str:
