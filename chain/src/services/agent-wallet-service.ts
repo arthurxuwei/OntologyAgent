@@ -11,6 +11,7 @@ import type {
   AgentWalletStatusResult,
 } from "../domain/types.js";
 import { normalizeAddress } from "../security.js";
+import { CircleWalletService } from "./circle-wallet-service.js";
 import type { X402FetchService } from "./x402-fetch-service.js";
 
 const MOCK_CIRCLE_WALLET_SET_ID = "mock-circle-wallet-set";
@@ -20,6 +21,7 @@ export class AgentWalletService {
   constructor(
     private readonly config: AppConfig,
     private readonly x402FetchService: X402FetchService,
+    private readonly circleWalletService = new CircleWalletService(config),
   ) {}
 
   async init(command: AgentWalletInitCommand): Promise<AgentWalletInitResult> {
@@ -28,13 +30,7 @@ export class AgentWalletService {
       throw new AppError("VALIDATION_ERROR", "agentName is required", 400);
     }
 
-    return {
-      circleWalletId: `mock-circle-wallet-${slug(agentName)}`,
-      circleWalletSetId: MOCK_CIRCLE_WALLET_SET_ID,
-      blockchain: "BASE-SEPOLIA",
-      walletAddress: MOCK_WALLET_ADDRESS,
-      mode: "mock",
-    };
+    return this.circleWalletService.createWallet(agentName);
   }
 
   async status(command: AgentWalletStatusCommand): Promise<AgentWalletStatusResult> {
@@ -108,7 +104,7 @@ function hasNonEmptyValue(value: string | undefined): value is string {
 
 function normalizeRequestAddress(address: string, fieldName: string): string {
   try {
-    return normalizeAddress(address);
+    return normalizeAddress(address).toLowerCase();
   } catch (error) {
     throw new AppError("VALIDATION_ERROR", `${fieldName} must be a valid address`, 400, {
       cause: error instanceof Error ? error.message : String(error),
@@ -126,12 +122,4 @@ function parsePositiveBigInt(value: string, fieldName: string): bigint {
   } catch {
     throw new AppError("VALIDATION_ERROR", `${fieldName} must be a positive integer`, 400);
   }
-}
-
-function slug(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
 }
