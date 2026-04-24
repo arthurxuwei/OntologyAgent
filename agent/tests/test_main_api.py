@@ -4,11 +4,13 @@ import re
 import subprocess
 import unittest
 from unittest.mock import patch
+from urllib.parse import parse_qs, urlparse
 
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 from pydantic import ValidationError
 
+from agent_wallet_auth import sign_session
 import main
 
 
@@ -390,6 +392,67 @@ class AgentWalletAuthApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 500)
         self.assertIn("GITHUB_CLIENT_ID", response.json()["detail"])
+
+    def test_github_login_sets_secure_oauth_cookie_for_https_public_base_url(
+        self,
+    ) -> None:
+        client = TestClient(main.app)
+
+        with patch.dict(
+            os.environ,
+            {
+                "GITHUB_CLIENT_ID": "client-123",
+                "PUBLIC_BASE_URL": "https://example.com",
+                "AUTH_SESSION_SECRET": "secret",
+            },
+            clear=True,
+        ):
+            response = client.get("/auth/github/login", follow_redirects=False)
+
+        self.assertEqual(response.status_code, 307)
+        location = response.headers["location"]
+        parsed_location = urlparse(location)
+        query = parse_qs(parsed_location.query)
+        self.assertEqual(parsed_location.scheme, "https")
+        self.assertEqual(parsed_location.netloc, "github.com")
+        self.assertEqual(parsed_location.path, "/login/oauth/authorize")
+        self.assertEqual(
+            query["redirect_uri"], ["https://example.com/auth/github/callback"]
+        )
+
+        cookie = response.headers["set-cookie"]
+        self.assertIn(f"{main.OAUTH_STATE_COOKIE}=", cookie)
+        self.assertIn("Secure", cookie)
+        self.assertIn("HttpOnly", cookie)
+        self.assertIn("SameSite=lax", cookie)
+
+    def test_auth_session_returns_500_when_cookie_present_and_secret_missing(
+        self,
+    ) -> None:
+        client = TestClient(main.app)
+        client.cookies.set(main.SESSION_COOKIE, "body.signature")
+
+        with patch.dict(os.environ, {}, clear=True):
+            response = client.get("/auth/session")
+
+        self.assertEqual(response.status_code, 500)
+        self.assertIn("AUTH_SESSION_SECRET", response.json()["detail"])
+
+    def test_auth_session_returns_anonymous_for_invalid_signed_cookie(self) -> None:
+        client = TestClient(main.app)
+
+        with patch.dict(os.environ, {"AUTH_SESSION_SECRET": "secret"}, clear=True):
+            token = sign_session({"ownerId": "owner_123"})
+        client.cookies.set(main.SESSION_COOKIE, f"{token}tampered")
+
+        with patch.dict(os.environ, {"AUTH_SESSION_SECRET": "secret"}, clear=True):
+            response = client.get("/auth/session")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json(),
+            {"authenticated": False, "owner": None},
+        )
 
     def test_logout_clears_session_cookie(self) -> None:
         client = TestClient(main.app)

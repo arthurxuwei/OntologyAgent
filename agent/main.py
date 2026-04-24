@@ -325,8 +325,22 @@ def get_agent_wallet_store() -> AgentWalletStore:
     return AgentWalletStore(AGENT_WALLET_STATE_PATH)
 
 
+def _should_secure_oauth_state_cookie() -> bool:
+    public_base_url = os.getenv("PUBLIC_BASE_URL", "http://localhost:8000")
+    parsed = urlparse(public_base_url)
+    hostname = (parsed.hostname or "").lower()
+    return parsed.scheme == "https" and hostname not in {
+        "localhost",
+        "127.0.0.1",
+        "::1",
+    }
+
+
 def resolve_current_owner(session_cookie: Optional[str]) -> Optional[dict[str, object]]:
-    session = verify_session(session_cookie)
+    try:
+        session = verify_session(session_cookie)
+    except RuntimeError as error:
+        raise HTTPException(status_code=500, detail=str(error)) from error
     if session is None:
         return None
 
@@ -1336,6 +1350,7 @@ def github_login() -> RedirectResponse:
         f"{oauth_state.state}:{oauth_state.code_verifier}",
         httponly=True,
         samesite="lax",
+        secure=_should_secure_oauth_state_cookie(),
     )
     return response
 
