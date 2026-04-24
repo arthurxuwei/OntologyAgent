@@ -8,6 +8,7 @@ import { BundlerClient } from "../erc4337.js";
 import { NetworkClient } from "../infra/network-client.js";
 import { PrivateKeySigner } from "../infra/signers/private-key-signer.js";
 import { PolicyGuard } from "../policies/policy-guard.js";
+import { AgentWalletService } from "../services/agent-wallet-service.js";
 import { ExecutionService } from "../services/execution-service.js";
 import { SettlementService } from "../services/settlement-service.js";
 import { SignTransferService } from "../services/sign-transfer-service.js";
@@ -27,6 +28,7 @@ type ChainRuntime = {
   userOperationStatusService: UserOperationStatusService;
   userOperationService: UserOperationService;
   x402FetchService: X402FetchService;
+  agentWalletService: AgentWalletService;
 };
 
 type ChainRuntimeOverrides = {
@@ -100,6 +102,8 @@ export function createChainRuntime(
   const bundlerClient = new BundlerClient(config);
   const policyGuard = new PolicyGuard(config.policy, config.x402);
   const settlementService = new SettlementService();
+  const x402FetchService =
+    overrides?.x402FetchService ?? new X402FetchService(config, policyGuard);
 
   return {
     walletStateService: new WalletStateService(config, policyGuard, networkClient, signer),
@@ -112,8 +116,8 @@ export function createChainRuntime(
       overrides?.userOperationStatusService ??
       new UserOperationStatusService(config, bundlerClient),
     userOperationService: new UserOperationService(bundlerClient, policyGuard, settlementService),
-    x402FetchService:
-      overrides?.x402FetchService ?? new X402FetchService(config, policyGuard),
+    x402FetchService,
+    agentWalletService: new AgentWalletService(config, x402FetchService),
   };
 }
 
@@ -122,6 +126,69 @@ export function createChainMcpServer(runtime: ChainRuntime): McpServer {
     name: "ontologyagent-chain",
     version: "1.0.0",
   });
+
+  server.registerTool(
+    "agent_wallet_init",
+    {
+      description: "Initialize an Agent Wallet for a named agent.",
+      inputSchema: {
+        agentName: z.string().describe("Agent name used to derive the mock wallet id"),
+        agentDescription: z.string().optional().describe("Optional agent description"),
+      },
+    },
+    async ({ agentName, agentDescription }) =>
+      runTool(() => runtime.agentWalletService.init({ agentName, agentDescription })),
+  );
+
+  server.registerTool(
+    "agent_wallet_status",
+    {
+      description: "Return Agent Wallet status by wallet address or Circle wallet id.",
+      inputSchema: {
+        walletAddress: z.string().optional().describe("Agent wallet address"),
+        circleWalletId: z.string().optional().describe("Circle wallet id"),
+      },
+    },
+    async ({ walletAddress, circleWalletId }) =>
+      runTool(() => runtime.agentWalletService.status({ walletAddress, circleWalletId })),
+  );
+
+  server.registerTool(
+    "agent_wallet_register_x402_service",
+    {
+      description: "Register an x402 paid service exposed by an Agent Wallet.",
+      inputSchema: {
+        name: z.string().describe("Service name"),
+        path: z.string().describe("HTTP path beginning with /"),
+        priceAtomic: z.string().describe("USDC price in atomic units"),
+        payTo: z.string().describe("Payment recipient address"),
+      },
+    },
+    async ({ name, path, priceAtomic, payTo }) =>
+      runTool(() =>
+        runtime.agentWalletService.registerX402Service({ name, path, priceAtomic, payTo }),
+      ),
+  );
+
+  server.registerTool(
+    "agent_wallet_call_x402_service",
+    {
+      description: "Call an x402 service through the Agent Wallet flow.",
+      inputSchema: {
+        url: z.string().url().describe("Target x402 upstream URL"),
+        method: z
+          .enum(["GET", "POST", "PUT", "PATCH", "DELETE"])
+          .default("GET")
+          .describe("HTTP method"),
+        headers: z.record(z.string(), z.string()).optional().describe("Optional request headers"),
+        body: z.unknown().optional().describe("Optional request body"),
+      },
+    },
+    async ({ url, method, headers, body }) =>
+      runTool(() =>
+        runtime.agentWalletService.callX402Service({ url, method, headers, body }),
+      ),
+  );
 
   server.registerTool(
     "chain_get_wallet_state",

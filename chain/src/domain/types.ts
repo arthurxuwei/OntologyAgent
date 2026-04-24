@@ -160,6 +160,57 @@ export type X402FetchResult = {
   policy: PolicySnapshot;
 };
 
+export type AgentWalletInitCommand = {
+  agentName: string;
+  agentDescription?: string;
+};
+
+export type AgentWalletInitResult = {
+  circleWalletId: string;
+  circleWalletSetId: string | null;
+  blockchain: "BASE-SEPOLIA";
+  walletAddress: string;
+  mode: "mock" | "circle";
+};
+
+export type AgentWalletStatusCommand = {
+  walletAddress?: string;
+  circleWalletId?: string;
+};
+
+export type AgentWalletStatusResult = {
+  circleWalletId: string | null;
+  circleWalletSetId: string | null;
+  blockchain: "BASE-SEPOLIA";
+  walletAddress: string;
+  status: "created" | "available" | "unknown";
+  balances: Record<string, string>;
+  mode: "mock" | "circle";
+};
+
+export type AgentWalletRegisterX402ServiceCommand = {
+  name: string;
+  path: string;
+  priceAtomic: string;
+  payTo: string;
+};
+
+export type AgentWalletRegisterX402ServiceResult = {
+  name: string;
+  path: string;
+  priceAtomic: string;
+  assetAddress: string;
+  network: string;
+  payTo: string;
+  active: true;
+};
+
+export type AgentWalletCallX402ServiceCommand = X402FetchCommand;
+
+export type AgentWalletCallX402ServiceResult = X402FetchResult & {
+  agentWalletTool: "agent_wallet_call_x402_service";
+};
+
 export type UserOperationResult = {
   userOperation: {
     target: string;
