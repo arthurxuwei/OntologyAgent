@@ -2,9 +2,11 @@ import json
 import os
 import re
 import subprocess
+import tempfile
 import unittest
 from unittest.mock import patch
 
+from agent_wallet_state import AgentWalletStore
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 from pydantic import ValidationError
@@ -365,6 +367,71 @@ class RecordingMcpClient:
     ) -> dict[str, object]:
         self.calls.append((tool_name, arguments))
         return self._responses[tool_name]
+
+
+class AgentWalletStateStoreTests(unittest.TestCase):
+    def test_agent_wallet_claim_flow_persists_hashed_claim_code(self) -> None:
+        wallet_payload = {
+            "circleWalletId": "circle-wallet-123",
+            "circleWalletSetId": "wallet-set-456",
+            "blockchain": "BASE-SEPOLIA",
+            "walletAddress": "0xabc123",
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = AgentWalletStore(os.path.join(temp_dir, "agent-wallet.json"))
+
+            owner = store.upsert_owner(
+                provider="github",
+                provider_user_id="12345",
+                login="octocat",
+                email="octocat@example.com",
+                display_name="The Octocat",
+                avatar_url="https://example.com/octocat.png",
+            )
+            updated_owner = store.upsert_owner(
+                provider="github",
+                provider_user_id="12345",
+                login="octocat-updated",
+                email=None,
+                display_name=None,
+                avatar_url=None,
+            )
+            self.assertEqual(updated_owner.ownerId, owner.ownerId)
+            self.assertEqual(updated_owner.login, "octocat-updated")
+
+            agent, claim_code = store.create_agent_wallet(
+                agent_name="Demo Agent",
+                agent_description="Local demo wallet",
+                wallet_payload=wallet_payload,
+            )
+
+            self.assertEqual(agent.claimStatus, "unclaimed")
+            self.assertIsNone(agent.ownerId)
+            self.assertEqual(agent.walletId, "circle-wallet-123")
+            self.assertEqual(agent.circleWalletSetId, "wallet-set-456")
+            self.assertEqual(agent.walletAddress, "0xabc123")
+
+            with open(store.path, encoding="utf-8") as state_file:
+                raw_state = state_file.read()
+            self.assertNotIn(claim_code, raw_state)
+            self.assertIn(AgentWalletStore.hash_claim_code(claim_code), raw_state)
+
+            claimed_agent = store.claim_wallet(claim_code, owner.ownerId)
+            self.assertEqual(claimed_agent.agentId, agent.agentId)
+            self.assertEqual(claimed_agent.ownerId, owner.ownerId)
+            self.assertEqual(claimed_agent.claimStatus, "claimed")
+
+            reloaded_state = store.load()
+            self.assertEqual(reloaded_state.agents[0].ownerId, owner.ownerId)
+            self.assertEqual(reloaded_state.agents[0].claimStatus, "claimed")
+            self.assertEqual(
+                reloaded_state.claims[0].consumedByOwnerId,
+                owner.ownerId,
+            )
+
+            with self.assertRaises(ValueError):
+                store.claim_wallet(claim_code, owner.ownerId)
 
 
 class MainApiTests(unittest.TestCase):
