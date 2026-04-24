@@ -13,8 +13,13 @@ from typing import Any, AsyncIterator, Literal, Optional
 from urllib.parse import urlparse
 from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+from fastapi import Cookie, FastAPI, HTTPException, Response
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import StructuredTool
 from langchain_openai import ChatOpenAI
@@ -22,6 +27,12 @@ from langgraph.prebuilt import create_react_agent
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, ValidationError, model_validator
 
 from autonomy import AutonomyController, load_autonomy_config
+from agent_wallet_auth import (
+    build_github_login_url,
+    build_github_oauth_state,
+    verify_session,
+)
+from agent_wallet_state import AgentWalletStore
 from chain_mcp_client import ChainMcpClient
 from freqtrade_mcp_client import FreqtradeMcpClient, FreqtradeMcpClientError
 
@@ -51,6 +62,11 @@ NO_CACHE_HEADERS = {
     "Expires": "0",
 }
 EMPTY_FINAL_OUTPUT_FALLBACK = "模型返回了空回复，请重试或更换模型配置。"
+AGENT_WALLET_STATE_PATH = os.getenv(
+    "AGENT_WALLET_STATE_PATH", "agent/data/agent_wallet_state.json"
+)
+SESSION_COOKIE = "agent_wallet_session"
+OAUTH_STATE_COOKIE = "agent_wallet_oauth_state"
 _discovered_chain_tools: Optional[list[StructuredTool]] = None
 _discovered_freqtrade_tools: Optional[list[StructuredTool]] = None
 
@@ -302,6 +318,27 @@ def get_session_store() -> AgentSessionStore:
 @lru_cache(maxsize=1)
 def get_chain_activity_store() -> ChainActivityStore:
     return ChainActivityStore()
+
+
+@lru_cache(maxsize=1)
+def get_agent_wallet_store() -> AgentWalletStore:
+    return AgentWalletStore(AGENT_WALLET_STATE_PATH)
+
+
+def resolve_current_owner(session_cookie: Optional[str]) -> Optional[dict[str, object]]:
+    session = verify_session(session_cookie)
+    if session is None:
+        return None
+
+    owner_id = session.get("ownerId")
+    if owner_id is None:
+        return None
+
+    state = get_agent_wallet_store().load()
+    for owner in state.owners:
+        if owner.ownerId == owner_id:
+            return owner.model_dump()
+    return None
 
 
 @lru_cache(maxsize=1)
@@ -1275,6 +1312,38 @@ def health() -> dict[str, Any]:
         "freqtradeStatus": freqtrade_status,
         "autonomy": autonomy_status,
     }
+
+
+@app.get("/auth/session")
+def auth_session(
+    session_cookie: Optional[str] = Cookie(default=None, alias=SESSION_COOKIE)
+) -> dict[str, Any]:
+    owner = resolve_current_owner(session_cookie)
+    return {"authenticated": owner is not None, "owner": owner}
+
+
+@app.get("/auth/github/login")
+def github_login() -> RedirectResponse:
+    oauth_state = build_github_oauth_state()
+    try:
+        login_url = build_github_login_url(oauth_state)
+    except RuntimeError as error:
+        raise HTTPException(status_code=500, detail=str(error)) from error
+
+    response = RedirectResponse(login_url)
+    response.set_cookie(
+        OAUTH_STATE_COOKIE,
+        f"{oauth_state.state}:{oauth_state.code_verifier}",
+        httponly=True,
+        samesite="lax",
+    )
+    return response
+
+
+@app.post("/auth/logout")
+def auth_logout(response: Response) -> dict[str, bool]:
+    response.delete_cookie(SESSION_COOKIE)
+    return {"ok": True}
 
 
 @app.get("/autonomy/status")

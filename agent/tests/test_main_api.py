@@ -367,6 +367,41 @@ class RecordingMcpClient:
         return self._responses[tool_name]
 
 
+class AgentWalletAuthApiTests(unittest.TestCase):
+    def setUp(self) -> None:
+        main.get_agent_wallet_store.cache_clear()
+
+    def test_auth_session_returns_anonymous_without_cookie(self) -> None:
+        client = TestClient(main.app)
+
+        response = client.get("/auth/session")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json(),
+            {"authenticated": False, "owner": None},
+        )
+
+    def test_github_login_requires_config(self) -> None:
+        client = TestClient(main.app)
+
+        with patch.dict(os.environ, {}, clear=True):
+            response = client.get("/auth/github/login", follow_redirects=False)
+
+        self.assertEqual(response.status_code, 500)
+        self.assertIn("GITHUB_CLIENT_ID", response.json()["detail"])
+
+    def test_logout_clears_session_cookie(self) -> None:
+        client = TestClient(main.app)
+        client.cookies.set(main.SESSION_COOKIE, "session-value")
+
+        response = client.post("/auth/logout")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"ok": True})
+        self.assertEqual(client.cookies.get(main.SESSION_COOKIE), None)
+
+
 class MainApiTests(unittest.TestCase):
     def setUp(self) -> None:
         main.get_session_store.cache_clear()
