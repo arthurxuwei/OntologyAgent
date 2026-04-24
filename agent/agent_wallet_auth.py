@@ -60,9 +60,11 @@ def sign_session(payload: dict[str, str]) -> str:
     secret = require_env("AUTH_SESSION_SECRET")
     raw_body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
     body = _base64url_no_padding(raw_body)
-    signature = hmac.new(
-        secret.encode("utf-8"), body.encode("ascii"), hashlib.sha256
-    ).hexdigest()
+    signature = _base64url_no_padding(
+        hmac.new(
+            secret.encode("utf-8"), body.encode("ascii"), hashlib.sha256
+        ).digest()
+    )
     return f"{body}.{signature}"
 
 
@@ -76,9 +78,11 @@ def verify_session(value: Optional[str]) -> Optional[dict[str, str]]:
     except ValueError:
         return None
 
-    expected_signature = hmac.new(
-        secret.encode("utf-8"), body.encode("ascii"), hashlib.sha256
-    ).hexdigest()
+    expected_signature = _base64url_no_padding(
+        hmac.new(
+            secret.encode("utf-8"), body.encode("ascii"), hashlib.sha256
+        ).digest()
+    )
     if not hmac.compare_digest(signature, expected_signature):
         return None
 

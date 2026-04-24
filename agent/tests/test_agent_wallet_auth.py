@@ -1,7 +1,9 @@
 import base64
 import hashlib
+import hmac
 import json
 import os
+import re
 import unittest
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
@@ -60,8 +62,17 @@ class AgentWalletAuthTests(unittest.TestCase):
 
         body, signature = token.split(".", 1)
         raw_body = base64.urlsafe_b64decode(body + "=" * (-len(body) % 4))
+        expected_signature = base64.urlsafe_b64encode(
+            hmac.new(
+                b"secret",
+                body.encode("ascii"),
+                hashlib.sha256,
+            ).digest()
+        ).decode("ascii").rstrip("=")
         self.assertEqual(json.loads(raw_body.decode("utf-8")), payload)
-        self.assertRegex(signature, r"^[0-9a-f]{64}$")
+        self.assertEqual(signature, expected_signature)
+        self.assertNotIn("=", signature)
+        self.assertIsNone(re.fullmatch(r"[0-9a-f]{64}", signature))
         self.assertEqual(decoded, payload)
 
     def test_verify_session_returns_none_for_missing_and_bad_values(self) -> None:
