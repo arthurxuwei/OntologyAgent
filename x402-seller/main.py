@@ -46,6 +46,35 @@ def health() -> dict[str, Any]:
 
 @app.get("/x402/demo-resource")
 async def x402_demo_resource(request: Request):
+    return await authorize_paid_response(
+        request,
+        {
+            "ok": True,
+            "resource": "demo-x402-resource",
+            "network": os.getenv("X402_NETWORK", BASE_SEPOLIA_NETWORK),
+            "quote": {
+                "tokenIn": "ETH",
+                "tokenOut": "USDC",
+                "price": os.getenv("X402_PRICE", "$0.01"),
+            },
+        },
+    )
+
+
+@app.get("/x402/agent-services/research-summary")
+async def x402_research_summary_service(request: Request):
+    return await authorize_paid_response(
+        request,
+        {
+            "ok": True,
+            "service": "research-summary",
+            "summary": "Agent Wallet MVP paid research summary",
+            "network": os.getenv("X402_NETWORK", BASE_SEPOLIA_NETWORK),
+        },
+    )
+
+
+async def authorize_paid_response(request: Request, body: dict[str, Any]):
     try:
         seller = get_x402_seller_service()
     except RuntimeError as error:
@@ -59,16 +88,4 @@ async def x402_demo_resource(request: Request):
     if isinstance(authorization, JSONResponse):
         return authorization
 
-    return seller.build_success_response(
-        {
-            "ok": True,
-            "resource": "demo-x402-resource",
-            "network": os.getenv("X402_NETWORK", BASE_SEPOLIA_NETWORK),
-            "quote": {
-                "tokenIn": "ETH",
-                "tokenOut": "USDC",
-                "price": os.getenv("X402_PRICE", "$0.01"),
-            },
-        },
-        authorization,
-    )
+    return seller.build_success_response({**body, "settlement": authorization}, authorization)
