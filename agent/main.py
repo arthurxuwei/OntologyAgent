@@ -147,6 +147,19 @@ class X402FetchIntent(BaseModel):
     body: Optional[Any] = Field(default=None, description="可选请求体")
 
 
+class AgentWalletInitRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    agentName: str = Field(min_length=1)
+    agentDescription: Optional[str] = None
+
+
+class AgentWalletClaimRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    claimCode: str = Field(min_length=1)
+
+
 class AgentRunRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
@@ -353,6 +366,13 @@ def resolve_current_owner(session_cookie: Optional[str]) -> Optional[dict[str, o
         if owner.ownerId == owner_id:
             return owner.model_dump()
     return None
+
+
+def _tool_result_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    result = payload.get("result")
+    if isinstance(result, dict):
+        return result
+    return payload
 
 
 @lru_cache(maxsize=1)
@@ -1359,6 +1379,66 @@ def github_login() -> RedirectResponse:
 def auth_logout(response: Response) -> dict[str, bool]:
     response.delete_cookie(SESSION_COOKIE)
     return {"ok": True}
+
+
+@app.get("/agent-wallet/state")
+def agent_wallet_state(
+    session_cookie: Optional[str] = Cookie(default=None, alias=SESSION_COOKIE)
+) -> dict[str, Any]:
+    owner = resolve_current_owner(session_cookie)
+    state = get_agent_wallet_store().load()
+    owner_id = owner["ownerId"] if owner else None
+    agents = [
+        agent.model_dump()
+        for agent in state.agents
+        if owner_id is None or agent.ownerId in (None, owner_id)
+    ]
+    return {
+        "owner": owner,
+        "agents": agents,
+        "services": [service.model_dump() for service in state.services],
+        "payments": [payment.model_dump() for payment in state.payments],
+    }
+
+
+@app.post("/agent-wallet/init")
+async def agent_wallet_init(request: AgentWalletInitRequest) -> dict[str, Any]:
+    wallet_payload = _tool_result_payload(
+        await call_chain_tool(
+            "agent_wallet_init",
+            {
+                "agentName": request.agentName,
+                "agentDescription": request.agentDescription,
+            },
+        )
+    )
+    agent, claim_code = get_agent_wallet_store().create_agent_wallet(
+        agent_name=request.agentName,
+        agent_description=request.agentDescription,
+        wallet_payload=wallet_payload,
+    )
+    return {"agent": agent.model_dump(), "claimCode": claim_code}
+
+
+@app.post("/agent-wallet/claim")
+def agent_wallet_claim(
+    request: AgentWalletClaimRequest,
+    session_cookie: Optional[str] = Cookie(default=None, alias=SESSION_COOKIE),
+) -> dict[str, Any]:
+    owner = resolve_current_owner(session_cookie)
+    if owner is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication is required to claim a wallet",
+        )
+    try:
+        agent = get_agent_wallet_store().claim_wallet(
+            request.claimCode,
+            str(owner["ownerId"]),
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return {"agent": agent.model_dump()}
 
 
 @app.get("/autonomy/status")

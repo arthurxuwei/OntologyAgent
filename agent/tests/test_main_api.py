@@ -2,8 +2,9 @@ import json
 import os
 import re
 import subprocess
+import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 from urllib.parse import parse_qs, urlparse
 
 from fastapi.testclient import TestClient
@@ -463,6 +464,77 @@ class AgentWalletAuthApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"ok": True})
         self.assertEqual(client.cookies.get(main.SESSION_COOKIE), None)
+
+
+class AgentWalletInitClaimApiTests(unittest.TestCase):
+    def setUp(self) -> None:
+        main.get_agent_wallet_store.cache_clear()
+
+    def test_agent_wallet_state_returns_empty_demo_view(self) -> None:
+        client = TestClient(main.app)
+
+        with tempfile.TemporaryDirectory() as temp_dir, patch.object(
+            main,
+            "AGENT_WALLET_STATE_PATH",
+            os.path.join(temp_dir, "state.json"),
+        ):
+            main.get_agent_wallet_store.cache_clear()
+            response = client.get("/agent-wallet/state")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json(),
+            {"owner": None, "agents": [], "services": [], "payments": []},
+        )
+
+    def test_agent_wallet_init_calls_chain_and_returns_claim_code(self) -> None:
+        client = TestClient(main.app)
+        chain_call = AsyncMock(
+            return_value={
+                "circleWalletId": "cw_123",
+                "circleWalletSetId": "cws_123",
+                "blockchain": "BASE-SEPOLIA",
+                "walletAddress": "0x3333333333333333333333333333333333333333",
+            }
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir, patch.object(
+            main,
+            "AGENT_WALLET_STATE_PATH",
+            os.path.join(temp_dir, "state.json"),
+        ), patch.object(main, "call_chain_tool", chain_call):
+            main.get_agent_wallet_store.cache_clear()
+            response = client.post(
+                "/agent-wallet/init",
+                json={
+                    "agentName": "Research Agent",
+                    "agentDescription": "demo",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["agent"]["claimStatus"], "unclaimed")
+        self.assertEqual(
+            payload["agent"]["walletAddress"],
+            "0x3333333333333333333333333333333333333333",
+        )
+        self.assertRegex(payload["claimCode"], r".+")
+        chain_call.assert_awaited_once_with(
+            "agent_wallet_init",
+            {"agentName": "Research Agent", "agentDescription": "demo"},
+        )
+
+    def test_agent_wallet_claim_rejects_unauthenticated_request(self) -> None:
+        client = TestClient(main.app)
+
+        response = client.post("/agent-wallet/claim", json={"claimCode": "abc"})
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(
+            response.json()["detail"],
+            "Authentication is required to claim a wallet",
+        )
 
 
 class MainApiTests(unittest.TestCase):
