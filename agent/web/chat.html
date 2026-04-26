@@ -354,6 +354,80 @@
         border-color: var(--accent);
       }
 
+      .agent-wallet-panel {
+        padding: 18px;
+        display: grid;
+        gap: 16px;
+      }
+
+      .agent-wallet-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+
+      .wallet-auth-actions {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+
+      .wallet-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 14px;
+      }
+
+      .wallet-form {
+        display: grid;
+        gap: 10px;
+        align-content: start;
+      }
+
+      .wallet-field {
+        display: grid;
+        gap: 6px;
+      }
+
+      .wallet-field span {
+        font-size: 12px;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+      }
+
+      input,
+      select {
+        width: 100%;
+        border-radius: 14px;
+        border: 1px solid var(--border);
+        background: rgba(255, 255, 255, 0.78);
+        padding: 11px 12px;
+        font: inherit;
+        font-size: 14px;
+        color: var(--ink);
+      }
+
+      input:focus,
+      select:focus {
+        outline: 2px solid rgba(15, 118, 110, 0.18);
+        border-color: var(--accent);
+      }
+
+      .wallet-summary {
+        min-height: 124px;
+        padding: 14px;
+        border-radius: 16px;
+        background: rgba(255, 255, 255, 0.72);
+        border: 1px solid rgba(215, 201, 170, 0.9);
+        font-size: 13px;
+        line-height: 1.55;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
       .guard-result {
         height: 240px;
         padding: 14px;
@@ -408,7 +482,8 @@
 
         .topbar-actions,
         .observability-grid,
-        .detail-grid {
+        .detail-grid,
+        .wallet-grid {
           grid-template-columns: 1fr;
         }
 
@@ -427,6 +502,12 @@
 
         .guard-result {
           height: 180px;
+        }
+
+        .agent-wallet-header,
+        .wallet-auth-actions {
+          align-items: stretch;
+          flex-direction: column;
         }
       }
     </style>
@@ -541,6 +622,75 @@
           </article>
         </section>
 
+        <section class="card agent-wallet-panel" id="agent-wallet-panel" aria-label="Agent Wallet MVP">
+          <div class="agent-wallet-header">
+            <div>
+              <h2 class="panel-title">Agent Wallet MVP</h2>
+              <div class="hint" id="wallet-auth-state">Checking session…</div>
+            </div>
+            <div class="wallet-auth-actions">
+              <button class="secondary" id="wallet-sign-in-button" data-wallet-button>GitHub 登录</button>
+              <button class="ghost" id="wallet-sign-out-button" data-wallet-button>退出登录</button>
+            </div>
+          </div>
+
+          <div class="wallet-summary" id="wallet-state-summary">Loading wallet state…</div>
+
+          <div class="wallet-grid">
+            <form class="wallet-form meta-box" id="wallet-create-form">
+              <h3 class="panel-title">Create Wallet</h3>
+              <label class="wallet-field">
+                <span>Agent Name</span>
+                <input id="wallet-agent-name" name="agentName" value="Research Agent" autocomplete="off" required />
+              </label>
+              <label class="wallet-field">
+                <span>Description</span>
+                <input id="wallet-agent-description" name="agentDescription" value="x402 research seller" autocomplete="off" />
+              </label>
+              <button class="primary" type="submit" data-wallet-button>Create</button>
+            </form>
+
+            <form class="wallet-form meta-box" id="wallet-claim-form">
+              <h3 class="panel-title">Claim Wallet</h3>
+              <label class="wallet-field">
+                <span>Claim Code</span>
+                <input id="wallet-claim-code" name="claimCode" autocomplete="off" required />
+              </label>
+              <button class="secondary" type="submit" data-wallet-button>Claim</button>
+            </form>
+
+            <form class="wallet-form meta-box" id="wallet-register-service-form">
+              <h3 class="panel-title">Register Service</h3>
+              <label class="wallet-field">
+                <span>Agent</span>
+                <select id="wallet-agent-select" name="agentId" required></select>
+              </label>
+              <label class="wallet-field">
+                <span>Name</span>
+                <input id="wallet-service-name" name="name" value="Research Summary" autocomplete="off" required />
+              </label>
+              <label class="wallet-field">
+                <span>Path</span>
+                <input id="wallet-service-path" name="path" value="/x402/agent-services/research-summary" autocomplete="off" required />
+              </label>
+              <label class="wallet-field">
+                <span>Price Atomic</span>
+                <input id="wallet-service-price" name="priceAtomic" value="10000" autocomplete="off" required />
+              </label>
+              <button class="secondary" type="submit" data-wallet-button>Register</button>
+            </form>
+
+            <form class="wallet-form meta-box" id="wallet-call-service-form">
+              <h3 class="panel-title">Trigger Payment</h3>
+              <label class="wallet-field">
+                <span>Service</span>
+                <select id="wallet-service-select" name="serviceId" required></select>
+              </label>
+              <button class="primary" type="submit" data-wallet-button>Call x402</button>
+            </form>
+          </div>
+        </section>
+
         <section class="card chat-panel">
           <header class="chat-header">
             <div>
@@ -574,6 +724,12 @@
         messageCount: 0,
         busy: false,
         streamingAgentMessageEl: null,
+        wallet: {
+          owner: null,
+          agents: [],
+          services: [],
+          payments: [],
+        },
       };
 
       const sessionIdEl = document.getElementById("session-id");
@@ -593,6 +749,22 @@
       const startButtonEl = document.getElementById("start-button");
       const tickButtonEl = document.getElementById("tick-button");
       const stopButtonEl = document.getElementById("stop-button");
+      const walletAuthStateEl = document.getElementById("wallet-auth-state");
+      const walletStateSummaryEl = document.getElementById("wallet-state-summary");
+      const walletSignInButtonEl = document.getElementById("wallet-sign-in-button");
+      const walletSignOutButtonEl = document.getElementById("wallet-sign-out-button");
+      const walletCreateFormEl = document.getElementById("wallet-create-form");
+      const walletClaimFormEl = document.getElementById("wallet-claim-form");
+      const walletRegisterServiceFormEl = document.getElementById("wallet-register-service-form");
+      const walletCallServiceFormEl = document.getElementById("wallet-call-service-form");
+      const walletAgentNameEl = document.getElementById("wallet-agent-name");
+      const walletAgentDescriptionEl = document.getElementById("wallet-agent-description");
+      const walletClaimCodeEl = document.getElementById("wallet-claim-code");
+      const walletAgentSelectEl = document.getElementById("wallet-agent-select");
+      const walletServiceNameEl = document.getElementById("wallet-service-name");
+      const walletServicePathEl = document.getElementById("wallet-service-path");
+      const walletServicePriceEl = document.getElementById("wallet-service-price");
+      const walletServiceSelectEl = document.getElementById("wallet-service-select");
 
       const GUARD_ACTION_LABELS = {
         "/autonomy/start": "启动理财子",
@@ -610,6 +782,13 @@
         document.querySelectorAll("[data-control-button]").forEach((button) => {
           button.disabled = busy;
         });
+        document.querySelectorAll("[data-wallet-button]").forEach((button) => {
+          button.disabled = busy;
+        });
+        if (!busy) {
+          walletSignInButtonEl.disabled = Boolean(state.wallet.owner);
+          walletSignOutButtonEl.disabled = !state.wallet.owner;
+        }
         connectionStatusEl.textContent = busy ? label : "Ready";
       }
 
@@ -974,6 +1153,89 @@
         warningsTextEl.textContent = warnings.length > 0 ? warnings.join("\n") : "No active warnings.";
       }
 
+      function selectedWalletAgentId() {
+        return walletAgentSelectEl.value || "";
+      }
+
+      function selectedWalletServiceId() {
+        return walletServiceSelectEl.value || "";
+      }
+
+      function setSelectOptions(selectEl, items, valueKey, labelBuilder, emptyLabel) {
+        const previousValue = selectEl.value;
+        selectEl.replaceChildren();
+
+        if (items.length === 0) {
+          const option = document.createElement("option");
+          option.value = "";
+          option.textContent = emptyLabel;
+          selectEl.appendChild(option);
+          return;
+        }
+
+        items.forEach((item) => {
+          const option = document.createElement("option");
+          option.value = item[valueKey];
+          option.textContent = labelBuilder(item);
+          selectEl.appendChild(option);
+        });
+
+        if (items.some((item) => item[valueKey] === previousValue)) {
+          selectEl.value = previousValue;
+        }
+      }
+
+      function renderAgentWalletState(payload) {
+        const owner = payload?.owner ?? null;
+        const agents = Array.isArray(payload?.agents) ? payload.agents : [];
+        const services = Array.isArray(payload?.services) ? payload.services : [];
+        const payments = Array.isArray(payload?.payments) ? payload.payments : [];
+
+        state.wallet = { owner, agents, services, payments };
+        walletAuthStateEl.textContent = owner ? `Signed in as ${owner.login}` : "Not signed in";
+        walletSignInButtonEl.disabled = state.busy || Boolean(owner);
+        walletSignOutButtonEl.disabled = state.busy || !owner;
+
+        setSelectOptions(
+          walletAgentSelectEl,
+          agents.filter((agent) => agent.claimStatus === "claimed"),
+          "agentId",
+          (agent) => `${agent.name} | ${agent.walletAddress}`,
+          "No claimed wallets",
+        );
+        setSelectOptions(
+          walletServiceSelectEl,
+          services,
+          "serviceId",
+          (service) => `${service.name} | ${service.priceAtomic}`,
+          "No services",
+        );
+
+        const latestPayment = payments[payments.length - 1];
+        walletStateSummaryEl.textContent = [
+          `Owner: ${owner ? owner.login : "anonymous"}`,
+          `Wallets: ${agents.length}`,
+          `Services: ${services.length}`,
+          `Payments: ${payments.length}`,
+          `Latest Payment: ${latestPayment ? `${latestPayment.status} ${latestPayment.txHash ?? ""}`.trim() : "none"}`,
+        ].join("\n");
+      }
+
+      async function walletApi(path, options = {}) {
+        return requestJson(path, options);
+      }
+
+      async function refreshAgentWalletState() {
+        try {
+          const authPayload = await walletApi("/auth/session", { method: "GET" });
+          const walletPayload = await walletApi("/agent-wallet/state", { method: "GET" });
+          renderAgentWalletState({ ...walletPayload, owner: authPayload.owner ?? walletPayload.owner });
+        } catch (error) {
+          walletAuthStateEl.textContent = "Wallet state unavailable";
+          walletStateSummaryEl.textContent = error.message;
+        }
+      }
+
       function updateGuardSummary(payload) {
         renderRuntimeStatus(buildRuntimeViewModel(payload));
       }
@@ -1073,6 +1335,10 @@
       }
 
       async function sendMessage() {
+        if (state.busy) {
+          return;
+        }
+
         const input = composerEl.value.trim();
         if (!input) {
           return;
@@ -1113,6 +1379,111 @@
         }
       }
 
+      async function createAgentWallet(event) {
+        event.preventDefault();
+        setBusy(true, "Creating wallet");
+        try {
+          const payload = await walletApi("/agent-wallet/init", {
+            method: "POST",
+            body: JSON.stringify({
+              agentName: walletAgentNameEl.value.trim(),
+              agentDescription: walletAgentDescriptionEl.value.trim() || null,
+            }),
+          });
+          walletClaimCodeEl.value = payload.claimCode ?? "";
+          updateGuardResult("Agent Wallet created", payload);
+          await refreshAgentWalletState();
+        } catch (error) {
+          updateGuardResult("Agent Wallet create failed", error.message, true);
+        } finally {
+          setBusy(false);
+        }
+      }
+
+      async function claimAgentWallet(event) {
+        event.preventDefault();
+        setBusy(true, "Claiming wallet");
+        try {
+          const payload = await walletApi("/agent-wallet/claim", {
+            method: "POST",
+            body: JSON.stringify({
+              claimCode: walletClaimCodeEl.value.trim(),
+            }),
+          });
+          updateGuardResult("Agent Wallet claimed", payload);
+          walletClaimCodeEl.value = "";
+          await refreshAgentWalletState();
+        } catch (error) {
+          updateGuardResult("Agent Wallet claim failed", error.message, true);
+        } finally {
+          setBusy(false);
+        }
+      }
+
+      async function registerAgentWalletService(event) {
+        event.preventDefault();
+        const agentId = selectedWalletAgentId();
+        if (!agentId) {
+          updateGuardResult("Service registration failed", "Select a claimed wallet first.", true);
+          return;
+        }
+
+        setBusy(true, "Registering service");
+        try {
+          const payload = await walletApi("/agent-wallet/register-service", {
+            method: "POST",
+            body: JSON.stringify({
+              agentId,
+              name: walletServiceNameEl.value.trim(),
+              path: walletServicePathEl.value.trim(),
+              priceAtomic: walletServicePriceEl.value.trim(),
+            }),
+          });
+          updateGuardResult("Agent Wallet service registered", payload);
+          await refreshAgentWalletState();
+        } catch (error) {
+          updateGuardResult("Service registration failed", error.message, true);
+        } finally {
+          setBusy(false);
+        }
+      }
+
+      async function callAgentWalletService(event) {
+        event.preventDefault();
+        const serviceId = selectedWalletServiceId();
+        if (!serviceId) {
+          updateGuardResult("x402 service call failed", "Select a registered service first.", true);
+          return;
+        }
+
+        setBusy(true, "Calling x402");
+        try {
+          const payload = await walletApi("/agent-wallet/call-service", {
+            method: "POST",
+            body: JSON.stringify({ serviceId }),
+          });
+          updateGuardResult("x402 service call complete", payload);
+          await refreshAgentWalletState();
+        } catch (error) {
+          updateGuardResult("x402 service call failed", error.message, true);
+          await refreshAgentWalletState();
+        } finally {
+          setBusy(false);
+        }
+      }
+
+      async function signOutWalletOwner() {
+        setBusy(true, "Signing out");
+        try {
+          await walletApi("/auth/logout", { method: "POST" });
+          await refreshAgentWalletState();
+        } catch (error) {
+          updateGuardResult("Sign out failed", error.message, true);
+        } finally {
+          setBusy(false);
+        }
+      }
+
       sendButtonEl.addEventListener("click", sendMessage);
       newSessionButtonEl.addEventListener("click", createSession);
       startButtonEl.addEventListener("click", () => {
@@ -1124,6 +1495,14 @@
       stopButtonEl.addEventListener("click", () => {
         runGuardAction("/autonomy/stop", GUARD_ACTION_LABELS["/autonomy/stop"]);
       });
+      walletSignInButtonEl.addEventListener("click", () => {
+        window.location.href = "/auth/github/login";
+      });
+      walletSignOutButtonEl.addEventListener("click", signOutWalletOwner);
+      walletCreateFormEl.addEventListener("submit", createAgentWallet);
+      walletClaimFormEl.addEventListener("submit", claimAgentWallet);
+      walletRegisterServiceFormEl.addEventListener("submit", registerAgentWalletService);
+      walletCallServiceFormEl.addEventListener("submit", callAgentWalletService);
       composerEl.addEventListener("keydown", (event) => {
         if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
           event.preventDefault();
@@ -1132,6 +1511,7 @@
       });
 
       refreshDashboard();
+      refreshAgentWalletState();
       setInterval(refreshDashboard, DASHBOARD_REFRESH_INTERVAL_MS);
     </script>
   </body>

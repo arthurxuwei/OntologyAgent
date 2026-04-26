@@ -1050,6 +1050,127 @@ class AgentWalletServicePaymentApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 403)
 
 
+class AgentWalletUiTests(unittest.TestCase):
+    def test_chat_page_contains_agent_wallet_panel_and_api_calls(self) -> None:
+        client = TestClient(main.app)
+
+        response = client.get("/")
+
+        self.assertEqual(response.status_code, 200)
+        html = response.text
+        self.assertIn("Agent Wallet MVP", html)
+        self.assertIn('aria-label="Agent Wallet MVP"', html)
+        self.assertIn('id="wallet-auth-state"', html)
+        self.assertIn('id="wallet-state-summary"', html)
+        self.assertIn('id="wallet-sign-in-button"', html)
+        self.assertIn('id="wallet-sign-out-button"', html)
+        self.assertIn('id="wallet-create-form"', html)
+        self.assertIn('id="wallet-claim-form"', html)
+        self.assertIn('id="wallet-register-service-form"', html)
+        self.assertIn('id="wallet-call-service-form"', html)
+        self.assertIn("function selectedWalletAgentId()", html)
+        self.assertIn("function selectedWalletServiceId()", html)
+        self.assertIn("async function walletApi(", html)
+        self.assertIn("async function refreshAgentWalletState()", html)
+        self.assertIn("/auth/session", html)
+        self.assertIn("/agent-wallet/init", html)
+        self.assertIn("/agent-wallet/claim", html)
+        self.assertIn("/agent-wallet/register-service", html)
+        self.assertIn("/agent-wallet/call-service", html)
+
+    def test_chat_page_agent_wallet_helpers_render_state_and_payloads(self) -> None:
+        client = TestClient(main.app)
+
+        response = client.get("/")
+
+        self.assertEqual(response.status_code, 200)
+        script_text = _extract_inline_script(response.text)
+        node_result = subprocess.run(
+            [
+                "node",
+                "-e",
+                "const fs = require('fs');"
+                "const scriptText = fs.readFileSync(0, 'utf8');"
+                "const elements = new Map();"
+                "const listeners = new Map();"
+                "const fetchCalls = [];"
+                "const makeElement = (id = '') => ({"
+                "id, textContent: '', style: {}, disabled: false, value: '', children: [],"
+                "appendChild(child) { this.children.push(child); if (!this.value && child.value) this.value = child.value; },"
+                "replaceChildren() { this.children = []; this.value = ''; },"
+                "addEventListener(event, handler) { listeners.set(`${id}:${event}`, handler.name || 'anonymous'); },"
+                "focus() {}, scrollTop: 0, scrollHeight: 0"
+                "});"
+                "global.document = {"
+                "getElementById(id) { if (!elements.has(id)) elements.set(id, makeElement(id)); return elements.get(id); },"
+                "querySelectorAll() { return []; },"
+                "createElement(tag) { return makeElement(tag); },"
+                "createTextNode(text) { return text; }"
+                "};"
+                "global.window = { location: { href: '' } };"
+                "global.fetch = async (url, options = {}) => {"
+                "fetchCalls.push({ url, method: options.method || 'GET', headers: options.headers || {}, body: options.body || null });"
+                "if (url === '/health') return { ok: true, json: async () => ({}) };"
+                "if (url === '/auth/session') return { ok: true, json: async () => ({ authenticated: true, owner: { login: 'octocat' } }) };"
+                "if (url === '/agent-wallet/state') return { ok: true, json: async () => ({ owner: { login: 'octocat' }, agents: [], services: [], payments: [] }) };"
+                "return { ok: true, json: async () => ({ ok: true }) };"
+                "};"
+                "global.setInterval = () => 0;"
+                "(async () => {"
+                "eval(scriptText);"
+                "renderAgentWalletState({ owner: null, agents: [{ agentId: 'agent_unclaimed', name: 'Draft', walletAddress: '0x1', claimStatus: 'unclaimed' }], services: [], payments: [] });"
+                "const unclaimedSelection = selectedWalletAgentId();"
+                "renderAgentWalletState({"
+                "owner: { login: 'octocat' },"
+                "agents: [{ agentId: 'agent_claimed', name: 'Research Agent', walletAddress: '0x2', claimStatus: 'claimed' }],"
+                "services: [{ serviceId: 'service_1', name: 'Research Summary', priceAtomic: '10000' }],"
+                "payments: [{ status: 'settled', txHash: '0xsettled' }]"
+                "});"
+                "await walletApi('/agent-wallet/init', { method: 'POST', body: JSON.stringify({ agentName: 'Research Agent' }) });"
+                "process.stdout.write(JSON.stringify({"
+                "unclaimedSelection,"
+                "claimedSelection: selectedWalletAgentId(),"
+                "serviceSelection: selectedWalletServiceId(),"
+                "summary: elements.get('wallet-state-summary').textContent,"
+                "authState: elements.get('wallet-auth-state').textContent,"
+                "signInDisabled: elements.get('wallet-sign-in-button').disabled,"
+                "signOutDisabled: elements.get('wallet-sign-out-button').disabled,"
+                "createListener: listeners.get('wallet-create-form:submit'),"
+                "claimListener: listeners.get('wallet-claim-form:submit'),"
+                "registerListener: listeners.get('wallet-register-service-form:submit'),"
+                "callListener: listeners.get('wallet-call-service-form:submit'),"
+                "initCall: fetchCalls.find((call) => call.url === '/agent-wallet/init')"
+                "}));"
+                "})().catch((error) => { console.error(error); process.exit(1); });",
+            ],
+            input=script_text,
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(node_result.returncode, 0, node_result.stderr)
+        helper_output = json.loads(node_result.stdout)
+        self.assertEqual(helper_output["unclaimedSelection"], "")
+        self.assertEqual(helper_output["claimedSelection"], "agent_claimed")
+        self.assertEqual(helper_output["serviceSelection"], "service_1")
+        self.assertIn("Owner: octocat", helper_output["summary"])
+        self.assertIn("Latest Payment: settled 0xsettled", helper_output["summary"])
+        self.assertEqual(helper_output["authState"], "Signed in as octocat")
+        self.assertTrue(helper_output["signInDisabled"])
+        self.assertFalse(helper_output["signOutDisabled"])
+        self.assertEqual(helper_output["createListener"], "createAgentWallet")
+        self.assertEqual(helper_output["claimListener"], "claimAgentWallet")
+        self.assertEqual(
+            helper_output["registerListener"],
+            "registerAgentWalletService",
+        )
+        self.assertEqual(helper_output["callListener"], "callAgentWalletService")
+        self.assertEqual(helper_output["initCall"]["method"], "POST")
+        self.assertEqual(
+            helper_output["initCall"]["headers"]["content-type"],
+            "application/json",
+        )
+
+
 class MainApiTests(unittest.TestCase):
     def setUp(self) -> None:
         main.get_session_store.cache_clear()
@@ -1908,8 +2029,13 @@ class MainApiTests(unittest.TestCase):
         for marker in ["console-shell", "observability-grid", "detail-grid"]:
             self.assertIn(marker, response.text)
         normalized_html = " ".join(response.text.split())
+        self.assertIn("@media (max-width: 960px)", normalized_html)
         self.assertIn(
-            "@media (max-width: 960px) { .topbar { padding: 16px; } .console-layout { gap: 16px; } .topbar-actions, .observability-grid, .detail-grid { grid-template-columns: 1fr; } .chat-panel { min-height: auto; } .composer-actions { flex-direction: column; align-items: stretch; }",
+            ".topbar-actions, .observability-grid, .detail-grid, .wallet-grid { grid-template-columns: 1fr; }",
+            normalized_html,
+        )
+        self.assertIn(
+            ".composer-actions { flex-direction: column; align-items: stretch; }",
             normalized_html,
         )
 
@@ -1959,6 +2085,7 @@ class MainApiTests(unittest.TestCase):
         script_text = _extract_inline_script(response.text)
         self.assertIn("async function streamAgentMessage", script_text)
         self.assertIn("function appendOrUpdateStreamingAgentMessage", script_text)
+        self.assertIn("if (state.busy) {\n          return;\n        }", script_text)
 
     def test_chat_page_streaming_placeholder_state_is_separate_from_message_body(
         self,
