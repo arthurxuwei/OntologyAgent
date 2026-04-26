@@ -5,7 +5,12 @@ from unittest.mock import AsyncMock, patch
 from fastapi.testclient import TestClient
 
 import main
-from x402_seller import X402SellerConfig, X402SellerService, encode_header
+from x402_seller import (
+    X402SellerConfig,
+    X402SellerService,
+    decode_header,
+    encode_header,
+)
 
 
 class X402SellerTests(unittest.TestCase):
@@ -76,6 +81,11 @@ class X402SellerTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("PAYMENT-RESPONSE", response.headers)
         self.assertEqual(response.json()["ok"], True)
+        self.assertNotIn("settlement", response.json())
+        self.assertEqual(
+            decode_header(response.headers["PAYMENT-RESPONSE"])["transaction"],
+            "0xsettled",
+        )
 
     def test_agent_service_resource_returns_standard_402_header(self) -> None:
         client = TestClient(main.app)
@@ -142,6 +152,13 @@ class X402SellerTests(unittest.TestCase):
         self.assertEqual(response.json()["ok"], True)
         self.assertEqual(response.json()["service"], "research-summary")
         self.assertEqual(response.json()["settlement"]["transaction"], "0xsettled")
+        payment_response = decode_header(response.headers["PAYMENT-RESPONSE"])
+        self.assertEqual(payment_response["success"], True)
+        self.assertEqual(payment_response["transaction"], "0xsettled")
+        self.assertEqual(
+            response.json()["settlement"]["transaction"],
+            payment_response["transaction"],
+        )
 
 
 if __name__ == "__main__":

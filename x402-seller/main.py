@@ -65,16 +65,21 @@ async def x402_demo_resource(request: Request):
 async def x402_research_summary_service(request: Request):
     return await authorize_paid_response(
         request,
-        {
+        lambda settlement: {
             "ok": True,
             "service": "research-summary",
             "summary": "Agent Wallet MVP paid research summary",
             "network": os.getenv("X402_NETWORK", BASE_SEPOLIA_NETWORK),
+            "settlement": {
+                "success": bool(settlement.get("success")),
+                "transaction": settlement.get("transaction"),
+                "network": settlement.get("network"),
+            },
         },
     )
 
 
-async def authorize_paid_response(request: Request, body: dict[str, Any]):
+async def authorize_paid_response(request: Request, body: Any):
     try:
         seller = get_x402_seller_service()
     except RuntimeError as error:
@@ -88,4 +93,5 @@ async def authorize_paid_response(request: Request, body: dict[str, Any]):
     if isinstance(authorization, JSONResponse):
         return authorization
 
-    return seller.build_success_response({**body, "settlement": authorization}, authorization)
+    response_body = body(authorization) if callable(body) else body
+    return seller.build_success_response(response_body, authorization)
