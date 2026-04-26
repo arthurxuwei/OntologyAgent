@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Literal, Optional
@@ -115,6 +116,16 @@ class AutonomyConfig:
     model_name: str
 
 
+CONFIG_OVERRIDE_FIELDS = {
+    "intervalSeconds": "interval_seconds",
+    "ethPriceUsd": "eth_price_usd",
+    "minWalletBalanceUsd": "min_wallet_balance_usd",
+    "stopTradingBalanceUsd": "stop_trading_balance_usd",
+    "forceExitBalanceUsd": "force_exit_balance_usd",
+    "maxDrawdownRatio": "max_drawdown_ratio",
+}
+
+
 def load_autonomy_config(env: Optional[dict[str, str]] = None) -> AutonomyConfig:
     source = env if env is not None else os.environ
 
@@ -173,6 +184,7 @@ class GuardDecision(BaseModel):
 class GuardLedger(RuntimeLedger):
     model_config = ConfigDict(extra="forbid")
 
+    configOverrides: dict[str, float] = Field(default_factory=dict)
     initializedAt: Optional[str] = None
     startingCapitalEth: str = "0"
     startingCapitalUsd: float = 0
@@ -205,6 +217,7 @@ class AutonomyController:
         self._task: Optional[asyncio.Task[None]] = None
         self._stop_event: Optional[asyncio.Event] = None
         self._state = self._load_state()
+        self.config = self._config_with_overrides(config, self._state.configOverrides)
         self._running = False
         self._enabled = config.enabled
         self._autostart_configured = config.enabled
@@ -249,8 +262,21 @@ class AutonomyController:
                 "forceExitBalanceUsd": self.config.force_exit_balance_usd,
                 "maxDrawdownRatio": self.config.max_drawdown_ratio,
             },
+            "configOverrides": dict(self._state.configOverrides),
             "ledger": self._state.model_dump(),
         }
+
+    async def update_config(self, updates: dict[str, float]) -> dict[str, Any]:
+        normalized = self._normalize_config_updates(updates)
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+
+        async with self._lock:
+            merged_overrides = {**self._state.configOverrides, **normalized}
+            self.config = self._config_with_overrides(self.config, normalized)
+            self._state.configOverrides = merged_overrides
+            self._save_state()
+            return await self.status()
 
     async def tick(self) -> dict[str, Any]:
         if self._lock is None:
@@ -1038,6 +1064,45 @@ class AutonomyController:
             return GuardLedger.model_validate_json(path.read_text(encoding="utf-8"))
         except Exception:
             return GuardLedger()
+
+    def _config_with_overrides(
+        self, config: AutonomyConfig, overrides: dict[str, float]
+    ) -> AutonomyConfig:
+        normalized = self._normalize_config_updates(overrides, allow_empty=True)
+        if not normalized:
+            return config
+
+        return replace(
+            config,
+            **{
+                CONFIG_OVERRIDE_FIELDS[name]: value
+                for name, value in normalized.items()
+            },
+        )
+
+    def _normalize_config_updates(
+        self, updates: dict[str, float], *, allow_empty: bool = False
+    ) -> dict[str, float]:
+        normalized: dict[str, float] = {}
+        for name, value in updates.items():
+            if name not in CONFIG_OVERRIDE_FIELDS:
+                raise ValueError(f"Unsupported autonomy config field: {name}")
+            if not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+                raise ValueError(f"{name} must be a finite number")
+            numeric_value = float(value)
+            if name == "maxDrawdownRatio":
+                if numeric_value < 0 or numeric_value > 1:
+                    raise ValueError("maxDrawdownRatio must be between 0 and 1")
+            elif name in {"intervalSeconds", "ethPriceUsd"}:
+                if numeric_value <= 0:
+                    raise ValueError(f"{name} must be greater than 0")
+            elif numeric_value < 0:
+                raise ValueError(f"{name} must be greater than or equal to 0")
+            normalized[name] = numeric_value
+
+        if not normalized and not allow_empty:
+            raise ValueError("At least one autonomy config field must be provided")
+        return normalized
 
     def _save_state(self) -> None:
         path = Path(self.config.state_path)

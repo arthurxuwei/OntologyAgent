@@ -71,6 +71,7 @@ docker compose --env-file "$(dirname "$(git rev-parse --git-common-dir)")/.env" 
   - `start_wealth_agent`
   - `stop_wealth_agent`
   - `run_wealth_tick`
+  - `update_wealth_config`
   - `execute_freqtrade_trade_intent`（让 `freqtrade` 生成 trade intent，再由 `chain` 用 Base 钱包执行）
 - `chain` MCP tools
   - `chain_get_wallet_state`（内部账本 / 自治循环使用）
@@ -139,6 +140,7 @@ docker compose --env-file "$(dirname "$(git rev-parse --git-common-dir)")/.env" 
 - `POST /autonomy/start`
 - `POST /autonomy/stop`
 - `POST /autonomy/tick`
+- `POST /autonomy/config`
 
 查看当前自治状态和账本快照，也可以显式管理子 Agent 的生命周期。
 
@@ -148,7 +150,7 @@ docker compose --env-file "$(dirname "$(git rev-parse --git-common-dir)")/.env" 
 - 是否给 Freqtrade dry-run 增加资金
 - 是否执行其他链上或交易动作
 
-在这些业务动作之前，建议先调用 `get_wealth_status` 查看理财子 Agent 的当前状态。管家也可以直接通过 `start_wealth_agent`、`stop_wealth_agent`、`run_wealth_tick` 管理子 Agent。
+在这些业务动作之前，建议先调用 `get_wealth_status` 查看理财子 Agent 的当前状态。管家也可以直接通过 `start_wealth_agent`、`stop_wealth_agent`、`run_wealth_tick` 管理子 Agent，并通过 `update_wealth_config` 调整运行时风控阈值。
 
 ## 演示脚本
 
@@ -289,6 +291,15 @@ PRIVATE_KEY=0x... \
 - `AGENT_WALLET_STATE_PATH`：Agent Wallet 本地 demo 状态文件，Docker 默认 `/app/data/agent_wallet_state.json`
 - `X402_SELLER_BASE_URL`：Agent Wallet UI 调用 seller 服务时使用的内部 base URL，默认 `http://x402-seller:8000`
 
+
+`update_wealth_config` 和 `POST /autonomy/config` 可以在运行时修改以下自治配置，并会把覆盖值写入 `AUTONOMY_STATE_PATH`，重启后继续生效：
+
+- `intervalSeconds`
+- `ethPriceUsd`
+- `minWalletBalanceUsd`
+- `stopTradingBalanceUsd`
+- `forceExitBalanceUsd`
+- `maxDrawdownRatio`
 ### chain
 
 - `CHAIN_MCP_PORT`：chain MCP 端口，默认 `8091`
