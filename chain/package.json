@@ -9,6 +9,7 @@
     "test": "node --import tsx --test test/**/*.test.ts"
   },
   "dependencies": {
+    "@circle-fin/developer-controlled-wallets": "^10.3.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@x402/core": "^2.8.0",
     "@x402/evm": "^2.8.0",
