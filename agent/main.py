@@ -375,6 +375,24 @@ def _tool_result_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def _visible_agent_ids_for_owner(
+    state: Any,
+    owner_id: Optional[str],
+) -> set[str]:
+    if owner_id is None:
+        return {
+            agent.agentId
+            for agent in state.agents
+            if agent.claimStatus == "unclaimed" and agent.ownerId is None
+        }
+    return {
+        agent.agentId
+        for agent in state.agents
+        if agent.ownerId == owner_id
+        or (agent.claimStatus == "unclaimed" and agent.ownerId is None)
+    }
+
+
 @lru_cache(maxsize=1)
 def get_chain_mcp_client() -> ChainMcpClient:
     return ChainMcpClient(CHAIN_MCP_URL)
@@ -1388,16 +1406,29 @@ def agent_wallet_state(
     owner = resolve_current_owner(session_cookie)
     state = get_agent_wallet_store().load()
     owner_id = owner["ownerId"] if owner else None
+    visible_agent_ids = _visible_agent_ids_for_owner(state, owner_id)
     agents = [
         agent.model_dump()
         for agent in state.agents
-        if owner_id is None or agent.ownerId in (None, owner_id)
+        if agent.agentId in visible_agent_ids
+    ]
+    services = [
+        service.model_dump()
+        for service in state.services
+        if service.agentId in visible_agent_ids
+    ]
+    visible_service_ids = {service["serviceId"] for service in services}
+    payments = [
+        payment.model_dump()
+        for payment in state.payments
+        if payment.sellerAgentId in visible_agent_ids
+        and payment.serviceId in visible_service_ids
     ]
     return {
         "owner": owner,
         "agents": agents,
-        "services": [service.model_dump() for service in state.services],
-        "payments": [payment.model_dump() for payment in state.payments],
+        "services": services,
+        "payments": payments,
     }
 
 

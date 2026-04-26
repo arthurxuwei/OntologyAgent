@@ -5,8 +5,16 @@ import subprocess
 import tempfile
 import unittest
 from unittest.mock import AsyncMock, patch
+from uuid import uuid4
 from urllib.parse import parse_qs, urlparse
 
+from agent_wallet_state import (
+    AgentRecord,
+    AgentWalletState,
+    Owner,
+    PaymentRecord,
+    ServiceRegistration,
+)
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 from pydantic import ValidationError
@@ -486,6 +494,257 @@ class AgentWalletInitClaimApiTests(unittest.TestCase):
             response.json(),
             {"owner": None, "agents": [], "services": [], "payments": []},
         )
+
+    def test_agent_wallet_state_filters_private_records_for_anonymous_callers(
+        self,
+    ) -> None:
+        client = TestClient(main.app)
+        current = "2026-04-24T00:00:00+00:00"
+
+        with tempfile.TemporaryDirectory() as temp_dir, patch.object(
+            main,
+            "AGENT_WALLET_STATE_PATH",
+            os.path.join(temp_dir, "state.json"),
+        ):
+            main.get_agent_wallet_store.cache_clear()
+            state = AgentWalletState(
+                owners=[
+                    Owner(
+                        ownerId="owner_123",
+                        provider="github",
+                        providerUserId="123",
+                        login="octocat",
+                        createdAt=current,
+                        updatedAt=current,
+                    )
+                ],
+                agents=[
+                    AgentRecord(
+                        agentId="agent_public",
+                        name="Public Demo",
+                        walletId="wallet_public",
+                        walletAddress="0x111",
+                        claimStatus="unclaimed",
+                        createdAt=current,
+                        updatedAt=current,
+                    ),
+                    AgentRecord(
+                        agentId="agent_private",
+                        name="Private Demo",
+                        ownerId="owner_123",
+                        walletId="wallet_private",
+                        walletAddress="0x222",
+                        claimStatus="claimed",
+                        createdAt=current,
+                        updatedAt=current,
+                    ),
+                ],
+                services=[
+                    ServiceRegistration(
+                        serviceId="service_public",
+                        agentId="agent_public",
+                        name="Public Service",
+                        path="/x402/public",
+                        priceAtomic="10000",
+                        assetAddress="0xasset",
+                        network="eip155:84532",
+                        payTo="0x111",
+                        active=True,
+                        createdAt=current,
+                    ),
+                    ServiceRegistration(
+                        serviceId="service_private",
+                        agentId="agent_private",
+                        name="Private Service",
+                        path="/x402/private",
+                        priceAtomic="10000",
+                        assetAddress="0xasset",
+                        network="eip155:84532",
+                        payTo="0x222",
+                        active=True,
+                        createdAt=current,
+                    ),
+                ],
+                payments=[
+                    PaymentRecord(
+                        paymentId="payment_public",
+                        serviceId="service_public",
+                        sellerAgentId="agent_public",
+                        sellerWalletAddress="0x111",
+                        amountAtomic="10000",
+                        assetAddress="0xasset",
+                        network="eip155:84532",
+                        status="settled",
+                        requestUrl="http://x402-seller/public",
+                        resultSummary={},
+                        txHash="0xpublic",
+                        createdAt=current,
+                    ),
+                    PaymentRecord(
+                        paymentId="payment_private",
+                        serviceId="service_private",
+                        sellerAgentId="agent_private",
+                        sellerWalletAddress="0x222",
+                        amountAtomic="10000",
+                        assetAddress="0xasset",
+                        network="eip155:84532",
+                        status="settled",
+                        requestUrl="http://x402-seller/private",
+                        resultSummary={"secret": True},
+                        txHash="0xprivate",
+                        createdAt=current,
+                    ),
+                ],
+            )
+            main.get_agent_wallet_store().save(state)
+
+            response = client.get("/agent-wallet/state")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(
+            [agent["agentId"] for agent in payload["agents"]],
+            ["agent_public"],
+        )
+        self.assertEqual(
+            [service["serviceId"] for service in payload["services"]],
+            ["service_public"],
+        )
+        self.assertEqual(
+            [payment["paymentId"] for payment in payload["payments"]],
+            ["payment_public"],
+        )
+        self.assertNotIn("agent_private", json.dumps(payload))
+        self.assertNotIn("0xprivate", json.dumps(payload))
+
+    def test_agent_wallet_state_filters_records_to_authenticated_owner(self) -> None:
+        client = TestClient(main.app)
+        current = "2026-04-24T00:00:00+00:00"
+
+        with tempfile.TemporaryDirectory() as temp_dir, patch.object(
+            main,
+            "AGENT_WALLET_STATE_PATH",
+            os.path.join(temp_dir, "state.json"),
+        ), patch.dict(
+            os.environ,
+            {"AUTH_SESSION_SECRET": "secret"},
+            clear=True,
+        ):
+            main.get_agent_wallet_store.cache_clear()
+            owner = Owner(
+                ownerId="owner_123",
+                provider="github",
+                providerUserId="123",
+                login="octocat",
+                createdAt=current,
+                updatedAt=current,
+            )
+            state = AgentWalletState(
+                owners=[owner],
+                agents=[
+                    AgentRecord(
+                        agentId="agent_owned",
+                        name="Owned Demo",
+                        ownerId=owner.ownerId,
+                        walletId="wallet_owned",
+                        walletAddress="0x111",
+                        claimStatus="claimed",
+                        createdAt=current,
+                        updatedAt=current,
+                    ),
+                    AgentRecord(
+                        agentId="agent_other",
+                        name="Other Demo",
+                        ownerId="owner_other",
+                        walletId="wallet_other",
+                        walletAddress="0x222",
+                        claimStatus="claimed",
+                        createdAt=current,
+                        updatedAt=current,
+                    ),
+                ],
+                services=[
+                    ServiceRegistration(
+                        serviceId="service_owned",
+                        agentId="agent_owned",
+                        name="Owned Service",
+                        path="/x402/owned",
+                        priceAtomic="10000",
+                        assetAddress="0xasset",
+                        network="eip155:84532",
+                        payTo="0x111",
+                        active=True,
+                        createdAt=current,
+                    ),
+                    ServiceRegistration(
+                        serviceId="service_other",
+                        agentId="agent_other",
+                        name="Other Service",
+                        path="/x402/other",
+                        priceAtomic="10000",
+                        assetAddress="0xasset",
+                        network="eip155:84532",
+                        payTo="0x222",
+                        active=True,
+                        createdAt=current,
+                    ),
+                ],
+                payments=[
+                    PaymentRecord(
+                        paymentId="payment_owned",
+                        serviceId="service_owned",
+                        sellerAgentId="agent_owned",
+                        sellerWalletAddress="0x111",
+                        amountAtomic="10000",
+                        assetAddress="0xasset",
+                        network="eip155:84532",
+                        status="settled",
+                        requestUrl="http://x402-seller/owned",
+                        resultSummary={},
+                        txHash="0xowned",
+                        createdAt=current,
+                    ),
+                    PaymentRecord(
+                        paymentId="payment_other",
+                        serviceId="service_other",
+                        sellerAgentId="agent_other",
+                        sellerWalletAddress="0x222",
+                        amountAtomic="10000",
+                        assetAddress="0xasset",
+                        network="eip155:84532",
+                        status="settled",
+                        requestUrl="http://x402-seller/other",
+                        resultSummary={"secret": True},
+                        txHash="0xother",
+                        createdAt=current,
+                    ),
+                ],
+            )
+            main.get_agent_wallet_store().save(state)
+            client.cookies.set(
+                main.SESSION_COOKIE,
+                sign_session({"ownerId": owner.ownerId, "nonce": uuid4().hex}),
+            )
+
+            response = client.get("/agent-wallet/state")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["owner"]["ownerId"], owner.ownerId)
+        self.assertEqual(
+            [agent["agentId"] for agent in payload["agents"]],
+            ["agent_owned"],
+        )
+        self.assertEqual(
+            [service["serviceId"] for service in payload["services"]],
+            ["service_owned"],
+        )
+        self.assertEqual(
+            [payment["paymentId"] for payment in payload["payments"]],
+            ["payment_owned"],
+        )
+        self.assertNotIn("agent_other", json.dumps(payload))
+        self.assertNotIn("0xother", json.dumps(payload))
 
     def test_agent_wallet_init_calls_chain_and_returns_claim_code(self) -> None:
         client = TestClient(main.app)
