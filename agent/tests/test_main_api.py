@@ -949,6 +949,63 @@ class AgentWalletServicePaymentApiTests(unittest.TestCase):
         )
         self.assertEqual(chain_call.await_count, 2)
 
+    def test_call_service_persists_failure_and_returns_bad_gateway(self) -> None:
+        client = TestClient(main.app)
+        chain_call = AsyncMock(
+            side_effect=[
+                {
+                    "name": "Research Summary",
+                    "path": "/x402/agent-services/research-summary",
+                    "priceAtomic": "10000",
+                    "assetAddress": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+                    "network": "eip155:84532",
+                    "payTo": "0x3333333333333333333333333333333333333333",
+                    "active": True,
+                },
+                RuntimeError("missing x402 buyer signer"),
+            ]
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir, patch.object(
+            main,
+            "AGENT_WALLET_STATE_PATH",
+            os.path.join(temp_dir, "state.json"),
+        ), patch.object(main, "call_chain_tool", chain_call), patch.dict(
+            os.environ,
+            {
+                "AUTH_SESSION_SECRET": "secret",
+                "X402_SELLER_BASE_URL": "http://x402-seller:8000",
+            },
+            clear=True,
+        ):
+            owner_id, agent_id = self._create_claimed_agent(
+                os.path.join(temp_dir, "state.json")
+            )
+            client.cookies.set(main.SESSION_COOKIE, self._owner_cookie(owner_id))
+            service = client.post(
+                "/agent-wallet/register-service",
+                json={
+                    "agentId": agent_id,
+                    "name": "Research Summary",
+                    "path": "/x402/agent-services/research-summary",
+                    "priceAtomic": "10000",
+                },
+            ).json()["service"]
+            response = client.post(
+                "/agent-wallet/call-service",
+                json={"serviceId": service["serviceId"]},
+            )
+            payments = main.get_agent_wallet_store().load().payments
+
+        self.assertEqual(response.status_code, 502)
+        detail = response.json()["detail"]
+        self.assertEqual(detail["message"], "x402 service call failed")
+        self.assertIn("missing x402 buyer signer", detail["error"])
+        self.assertEqual(detail["payment"]["status"], "failed")
+        self.assertIsNone(detail["payment"]["txHash"])
+        self.assertEqual(len(payments), 1)
+        self.assertEqual(payments[0].status, "failed")
+
     def test_register_service_rejects_unclaimed_agent(self) -> None:
         client = TestClient(main.app)
 

@@ -1559,6 +1559,7 @@ async def agent_wallet_call_service(
 
     base_url = os.getenv("X402_SELLER_BASE_URL", "http://x402-seller:8000").rstrip("/")
     request_url = f"{base_url}{service.path}"
+    call_error: Optional[Exception] = None
     try:
         result = _tool_result_payload(
             await call_chain_tool(
@@ -1567,8 +1568,11 @@ async def agent_wallet_call_service(
             )
         )
     except Exception as error:
+        call_error = error
         result = {
-            "error": str(error),
+            "error": {
+                "message": str(error),
+            },
             "payment": {"response": {"success": False}},
         }
 
@@ -1580,6 +1584,15 @@ async def agent_wallet_call_service(
         )
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
+    if call_error is not None:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "message": "x402 service call failed",
+                "error": str(call_error),
+                "payment": payment.model_dump(),
+            },
+        ) from call_error
     return {"payment": payment.model_dump(), "result": result}
 
 

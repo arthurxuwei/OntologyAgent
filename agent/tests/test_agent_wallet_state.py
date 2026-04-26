@@ -182,6 +182,48 @@ class AgentWalletStateStoreTests(unittest.TestCase):
         self.assertEqual(payment.sellerAgentId, agent.agentId)
         self.assertEqual(payment.sellerWalletAddress, agent.walletAddress)
 
+    def test_add_payment_persists_failed_x402_result_without_tx_hash(self) -> None:
+        wallet_payload = {
+            "circleWalletId": "circle-wallet-123",
+            "walletAddress": "0x3333333333333333333333333333333333333333",
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = AgentWalletStore(os.path.join(temp_dir, "agent-wallet.json"))
+            agent, _ = store.create_agent_wallet(
+                agent_name="Demo Agent",
+                agent_description=None,
+                wallet_payload=wallet_payload,
+            )
+            service = store.add_service(
+                agent_id=agent.agentId,
+                service_payload={
+                    "name": "Research Summary",
+                    "path": "/x402/agent-services/research-summary",
+                    "priceAtomic": "10000",
+                    "assetAddress": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+                    "network": "eip155:84532",
+                    "payTo": agent.walletAddress,
+                    "active": True,
+                },
+            )
+            payment = store.add_payment(
+                service_id=service.serviceId,
+                request_url="http://x402-seller:8000/x402/agent-services/research-summary",
+                result={
+                    "error": {"message": "missing buyer signer"},
+                    "payment": {"response": {"success": False}},
+                },
+            )
+
+        self.assertEqual(payment.status, "failed")
+        self.assertIsNone(payment.txHash)
+        self.assertIsNone(payment.settlementReference)
+        self.assertEqual(
+            payment.resultSummary["error"]["message"],
+            "missing buyer signer",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
