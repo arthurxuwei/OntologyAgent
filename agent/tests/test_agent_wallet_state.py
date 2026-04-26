@@ -133,6 +133,55 @@ class AgentWalletStateStoreTests(unittest.TestCase):
                 [],
             )
 
+    def test_add_service_and_payment_persist_demo_ledger(self) -> None:
+        wallet_payload = {
+            "circleWalletId": "circle-wallet-123",
+            "walletAddress": "0x3333333333333333333333333333333333333333",
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = AgentWalletStore(os.path.join(temp_dir, "agent-wallet.json"))
+            agent, _ = store.create_agent_wallet(
+                agent_name="Demo Agent",
+                agent_description=None,
+                wallet_payload=wallet_payload,
+            )
+            service = store.add_service(
+                agent_id=agent.agentId,
+                service_payload={
+                    "name": "Research Summary",
+                    "path": "/x402/agent-services/research-summary",
+                    "priceAtomic": "10000",
+                    "assetAddress": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+                    "network": "eip155:84532",
+                    "payTo": "0x3333333333333333333333333333333333333333",
+                    "active": True,
+                },
+            )
+            payment = store.add_payment(
+                service_id=service.serviceId,
+                request_url="http://x402-seller:8000/x402/agent-services/research-summary",
+                result={
+                    "upstream": {"status": 200, "payload": {"ok": True}},
+                    "payment": {
+                        "response": {
+                            "success": True,
+                            "transaction": "0xsettled",
+                            "network": "eip155:84532",
+                        }
+                    },
+                },
+            )
+
+            reloaded = store.load()
+
+        self.assertEqual(reloaded.services[0].serviceId, service.serviceId)
+        self.assertEqual(reloaded.services[0].payTo, agent.walletAddress)
+        self.assertEqual(payment.status, "settled")
+        self.assertEqual(payment.txHash, "0xsettled")
+        self.assertEqual(payment.sellerAgentId, agent.agentId)
+        self.assertEqual(payment.sellerWalletAddress, agent.walletAddress)
+
 
 if __name__ == "__main__":
     unittest.main()

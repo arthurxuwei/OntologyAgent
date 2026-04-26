@@ -160,6 +160,21 @@ class AgentWalletClaimRequest(BaseModel):
     claimCode: str = Field(min_length=1)
 
 
+class AgentWalletRegisterServiceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    agentId: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    path: str = Field(min_length=1)
+    priceAtomic: str = Field(min_length=1)
+
+
+class AgentWalletCallServiceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    serviceId: str = Field(min_length=1)
+
+
 class AgentRunRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
@@ -391,6 +406,29 @@ def _visible_agent_ids_for_owner(
         if agent.ownerId == owner_id
         or (agent.claimStatus == "unclaimed" and agent.ownerId is None)
     }
+
+
+def _require_owner_id(
+    session_cookie: Optional[str],
+    *,
+    action: str,
+) -> str:
+    owner = resolve_current_owner(session_cookie)
+    if owner is None:
+        raise HTTPException(
+            status_code=401,
+            detail=f"Authentication is required to {action}",
+        )
+    return str(owner["ownerId"])
+
+
+def _owner_agent_or_404(state: Any, agent_id: str, owner_id: str) -> Any:
+    agent = next((item for item in state.agents if item.agentId == agent_id), None)
+    if agent is None:
+        raise HTTPException(status_code=404, detail="agent not found")
+    if agent.ownerId != owner_id or agent.claimStatus != "claimed":
+        raise HTTPException(status_code=403, detail="agent wallet is not claimed by owner")
+    return agent
 
 
 @lru_cache(maxsize=1)
@@ -1470,6 +1508,79 @@ def agent_wallet_claim(
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     return {"agent": agent.model_dump()}
+
+
+@app.post("/agent-wallet/register-service")
+async def agent_wallet_register_service(
+    request: AgentWalletRegisterServiceRequest,
+    session_cookie: Optional[str] = Cookie(default=None, alias=SESSION_COOKIE),
+) -> dict[str, Any]:
+    owner_id = _require_owner_id(session_cookie, action="register an Agent Wallet service")
+    store = get_agent_wallet_store()
+    state = store.load()
+    agent = _owner_agent_or_404(state, request.agentId, owner_id)
+
+    service_payload = _tool_result_payload(
+        await call_chain_tool(
+            "agent_wallet_register_x402_service",
+            {
+                "name": request.name,
+                "path": request.path,
+                "priceAtomic": request.priceAtomic,
+                "payTo": agent.walletAddress,
+            },
+        )
+    )
+    try:
+        service = store.add_service(
+            agent_id=request.agentId,
+            service_payload=service_payload,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return {"service": service.model_dump()}
+
+
+@app.post("/agent-wallet/call-service")
+async def agent_wallet_call_service(
+    request: AgentWalletCallServiceRequest,
+    session_cookie: Optional[str] = Cookie(default=None, alias=SESSION_COOKIE),
+) -> dict[str, Any]:
+    owner_id = _require_owner_id(session_cookie, action="call an Agent Wallet service")
+    store = get_agent_wallet_store()
+    state = store.load()
+    service = next(
+        (item for item in state.services if item.serviceId == request.serviceId),
+        None,
+    )
+    if service is None:
+        raise HTTPException(status_code=404, detail="service not found")
+    _owner_agent_or_404(state, service.agentId, owner_id)
+
+    base_url = os.getenv("X402_SELLER_BASE_URL", "http://x402-seller:8000").rstrip("/")
+    request_url = f"{base_url}{service.path}"
+    try:
+        result = _tool_result_payload(
+            await call_chain_tool(
+                "agent_wallet_call_x402_service",
+                {"url": request_url, "method": "GET"},
+            )
+        )
+    except Exception as error:
+        result = {
+            "error": str(error),
+            "payment": {"response": {"success": False}},
+        }
+
+    try:
+        payment = store.add_payment(
+            service_id=request.serviceId,
+            result=result,
+            request_url=request_url,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return {"payment": payment.model_dump(), "result": result}
 
 
 @app.get("/autonomy/status")

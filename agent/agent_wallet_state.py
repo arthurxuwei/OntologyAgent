@@ -292,6 +292,106 @@ class AgentWalletStore:
 
         return self._mutate(mutate)
 
+    def add_service(
+        self,
+        *,
+        agent_id: str,
+        service_payload: dict[str, Any],
+    ) -> ServiceRegistration:
+        def mutate(state: AgentWalletState) -> ServiceRegistration:
+            agent = next(
+                (item for item in state.agents if item.agentId == agent_id),
+                None,
+            )
+            if agent is None:
+                raise ValueError("agent not found")
+
+            service = ServiceRegistration(
+                serviceId=f"service_{uuid.uuid4().hex}",
+                agentId=agent_id,
+                name=service_payload["name"],
+                path=service_payload["path"],
+                priceAtomic=service_payload["priceAtomic"],
+                assetAddress=service_payload["assetAddress"],
+                network=service_payload["network"],
+                payTo=service_payload["payTo"],
+                active=bool(service_payload["active"]),
+                createdAt=now_iso(),
+            )
+            state.services.append(service)
+            return service
+
+        return self._mutate(mutate)
+
+    def add_payment(
+        self,
+        *,
+        service_id: str,
+        result: dict[str, Any],
+        request_url: str,
+    ) -> PaymentRecord:
+        def mutate(state: AgentWalletState) -> PaymentRecord:
+            service = next(
+                (item for item in state.services if item.serviceId == service_id),
+                None,
+            )
+            if service is None:
+                raise ValueError("service not found")
+
+            agent = next(
+                (item for item in state.agents if item.agentId == service.agentId),
+                None,
+            )
+            if agent is None:
+                raise ValueError("seller agent not found")
+
+            payment = self._build_payment_record(
+                service=service,
+                agent=agent,
+                result=result,
+                request_url=request_url,
+            )
+            state.payments.append(payment)
+            return payment
+
+        return self._mutate(mutate)
+
+    @staticmethod
+    def _build_payment_record(
+        *,
+        service: ServiceRegistration,
+        agent: AgentRecord,
+        result: dict[str, Any],
+        request_url: str,
+    ) -> PaymentRecord:
+        payment_payload = result.get("payment")
+        if not isinstance(payment_payload, dict):
+            payment_payload = {}
+        settlement = payment_payload.get("response")
+        if not isinstance(settlement, dict):
+            settlement = {}
+
+        tx_hash = settlement.get("transaction")
+        if not isinstance(tx_hash, str):
+            tx_hash = None
+        success = bool(settlement.get("success"))
+
+        return PaymentRecord(
+            paymentId=f"payment_{uuid.uuid4().hex}",
+            serviceId=service.serviceId,
+            sellerAgentId=agent.agentId,
+            sellerWalletAddress=agent.walletAddress,
+            amountAtomic=service.priceAtomic,
+            assetAddress=service.assetAddress,
+            network=service.network,
+            status="settled" if success else "failed",
+            requestUrl=request_url,
+            resultSummary=result,
+            txHash=tx_hash,
+            settlementReference=tx_hash,
+            createdAt=now_iso(),
+        )
+
     @staticmethod
     def hash_claim_code(claim_code: str) -> str:
         return hashlib.sha256(claim_code.encode("utf-8")).hexdigest()
