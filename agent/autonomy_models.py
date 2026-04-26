@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -26,8 +26,8 @@ class CircuitBreakerState(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     state: Literal["closed", "open"] = "closed"
-    reason: str | None = None
-    openedAt: str | None = None
+    reason: Optional[str] = None
+    openedAt: Optional[str] = None
 
 
 class RuntimeIntent(BaseModel):
@@ -37,11 +37,11 @@ class RuntimeIntent(BaseModel):
     intentType: IntentType
     action: str
     parameters: dict[str, Any] = Field(default_factory=dict)
-    reason: str | None = None
-    confidence: float | None = None
-    expiry: str | None = None
+    reason: Optional[str] = None
+    confidence: Optional[float] = None
+    expiry: Optional[str] = None
     riskTags: list[str] = Field(default_factory=list)
-    createdAt: str | None = None
+    createdAt: Optional[str] = None
     stage: Stage = "planned"
 
 
@@ -53,9 +53,9 @@ class RuntimeExecutionRecord(BaseModel):
     intentType: IntentType
     stage: Stage
     status: Literal["active", "completed", "failed"] = "active"
-    externalId: str | None = None
-    failureCode: str | None = None
-    failureMessage: str | None = None
+    externalId: Optional[str] = None
+    failureCode: Optional[str] = None
+    failureMessage: Optional[str] = None
 
 
 class PolicyDecision(BaseModel):
@@ -72,8 +72,8 @@ class RuntimeLedger(BaseModel):
     activeIntents: list[RuntimeIntent] = Field(default_factory=list)
     activeExecutions: list[RuntimeExecutionRecord] = Field(default_factory=list)
     executionHistory: list[RuntimeExecutionRecord] = Field(default_factory=list)
-    latestObservation: dict[str, Any] | None = None
+    latestObservation: Optional[dict[str, Any]] = None
     failureCounts: dict[str, int] = Field(default_factory=dict)
     cooldowns: dict[str, str] = Field(default_factory=dict)
     circuitBreaker: CircuitBreakerState = Field(default_factory=CircuitBreakerState)
-    lastTickAt: str | None = None
+    lastTickAt: Optional[str] = None

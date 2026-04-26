@@ -1596,6 +1596,13 @@ async def agent_wallet_call_service(
     return {"payment": payment.model_dump(), "result": result}
 
 
+@app.post("/agent-wallet/reset")
+def agent_wallet_reset() -> dict[str, bool]:
+    if os.path.exists(AGENT_WALLET_STATE_PATH):
+        os.remove(AGENT_WALLET_STATE_PATH)
+    return {"ok": True}
+
+
 @app.get("/autonomy/status")
 async def autonomy_status() -> dict[str, Any]:
     return _with_autonomy_runtime_summary(await get_autonomy_controller().status())

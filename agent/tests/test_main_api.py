@@ -471,7 +471,9 @@ class AgentWalletAuthApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"ok": True})
-        self.assertEqual(client.cookies.get(main.SESSION_COOKIE), None)
+        set_cookie_header = response.headers["set-cookie"]
+        self.assertIn(f"{main.SESSION_COOKIE}=", set_cookie_header)
+        self.assertIn("Max-Age=0", set_cookie_header)
 
 
 class AgentWalletInitClaimApiTests(unittest.TestCase):
@@ -1050,6 +1052,39 @@ class AgentWalletServicePaymentApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 403)
 
 
+class AgentWalletResetApiTests(unittest.TestCase):
+    def setUp(self) -> None:
+        main.get_agent_wallet_store.cache_clear()
+
+    def test_agent_wallet_reset_removes_local_demo_state(self) -> None:
+        client = TestClient(main.app)
+        chain_call = AsyncMock(
+            return_value={
+                "circleWalletId": "cw_123",
+                "circleWalletSetId": "cws_123",
+                "blockchain": "BASE-SEPOLIA",
+                "walletAddress": "0x3333333333333333333333333333333333333333",
+            }
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir, patch.object(
+            main,
+            "AGENT_WALLET_STATE_PATH",
+            os.path.join(temp_dir, "state.json"),
+        ), patch.object(main, "call_chain_tool", chain_call):
+            main.get_agent_wallet_store.cache_clear()
+            client.post(
+                "/agent-wallet/init",
+                json={"agentName": "Research Agent"},
+            )
+            response = client.post("/agent-wallet/reset")
+            state = client.get("/agent-wallet/state").json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"ok": True})
+        self.assertEqual(state["agents"], [])
+
+
 class AgentWalletUiTests(unittest.TestCase):
     def test_chat_page_contains_agent_wallet_panel_and_api_calls(self) -> None:
         client = TestClient(main.app)
@@ -1238,8 +1273,8 @@ class MainApiTests(unittest.TestCase):
             )
 
         async def read_first_two_chunks(response: object) -> tuple[str, str]:
-            first = await anext(response.body_iterator)  # type: ignore[attr-defined]
-            second = await anext(response.body_iterator)  # type: ignore[attr-defined]
+            first = await response.body_iterator.__anext__()  # type: ignore[attr-defined]
+            second = await response.body_iterator.__anext__()  # type: ignore[attr-defined]
             return first, second
 
         with patch.object(main, "get_agent_graph", return_value=graph):
