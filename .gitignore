@@ -11,3 +11,5 @@ agent/data/
 .worktrees/
 .playwright-mcp/
 .DS_Store
+.ruff_cache
+chain/recovery_file_*.dat

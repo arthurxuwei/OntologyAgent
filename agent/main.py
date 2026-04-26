@@ -13,8 +13,13 @@ from typing import Any, AsyncIterator, Literal, Optional
 from urllib.parse import urlparse
 from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+from fastapi import Cookie, FastAPI, HTTPException, Response
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import StructuredTool
 from langchain_openai import ChatOpenAI
@@ -22,6 +27,12 @@ from langgraph.prebuilt import create_react_agent
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, ValidationError, model_validator
 
 from autonomy import AutonomyController, load_autonomy_config
+from agent_wallet_auth import (
+    build_github_login_url,
+    build_github_oauth_state,
+    verify_session,
+)
+from agent_wallet_state import AgentWalletStore
 from chain_mcp_client import ChainMcpClient
 from freqtrade_mcp_client import FreqtradeMcpClient, FreqtradeMcpClientError
 
@@ -51,6 +62,11 @@ NO_CACHE_HEADERS = {
     "Expires": "0",
 }
 EMPTY_FINAL_OUTPUT_FALLBACK = "模型返回了空回复，请重试或更换模型配置。"
+AGENT_WALLET_STATE_PATH = os.getenv(
+    "AGENT_WALLET_STATE_PATH", "agent/data/agent_wallet_state.json"
+)
+SESSION_COOKIE = "agent_wallet_session"
+OAUTH_STATE_COOKIE = "agent_wallet_oauth_state"
 _discovered_chain_tools: Optional[list[StructuredTool]] = None
 _discovered_freqtrade_tools: Optional[list[StructuredTool]] = None
 
@@ -129,6 +145,34 @@ class X402FetchIntent(BaseModel):
     )
     headers: Optional[dict[str, str]] = Field(default=None, description="可选请求头")
     body: Optional[Any] = Field(default=None, description="可选请求体")
+
+
+class AgentWalletInitRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    agentName: str = Field(min_length=1)
+    agentDescription: Optional[str] = None
+
+
+class AgentWalletClaimRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    claimCode: str = Field(min_length=1)
+
+
+class AgentWalletRegisterServiceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    agentId: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    path: str = Field(min_length=1)
+    priceAtomic: str = Field(min_length=1)
+
+
+class AgentWalletCallServiceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    serviceId: str = Field(min_length=1)
 
 
 class AgentRunRequest(BaseModel):
@@ -344,6 +388,89 @@ def get_session_store() -> AgentSessionStore:
 @lru_cache(maxsize=1)
 def get_chain_activity_store() -> ChainActivityStore:
     return ChainActivityStore()
+
+
+@lru_cache(maxsize=1)
+def get_agent_wallet_store() -> AgentWalletStore:
+    return AgentWalletStore(AGENT_WALLET_STATE_PATH)
+
+
+def _should_secure_oauth_state_cookie() -> bool:
+    public_base_url = os.getenv("PUBLIC_BASE_URL", "http://localhost:8000")
+    parsed = urlparse(public_base_url)
+    hostname = (parsed.hostname or "").lower()
+    return parsed.scheme == "https" and hostname not in {
+        "localhost",
+        "127.0.0.1",
+        "::1",
+    }
+
+
+def resolve_current_owner(session_cookie: Optional[str]) -> Optional[dict[str, object]]:
+    try:
+        session = verify_session(session_cookie)
+    except RuntimeError as error:
+        raise HTTPException(status_code=500, detail=str(error)) from error
+    if session is None:
+        return None
+
+    owner_id = session.get("ownerId")
+    if owner_id is None:
+        return None
+
+    state = get_agent_wallet_store().load()
+    for owner in state.owners:
+        if owner.ownerId == owner_id:
+            return owner.model_dump()
+    return None
+
+
+def _tool_result_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    result = payload.get("result")
+    if isinstance(result, dict):
+        return result
+    return payload
+
+
+def _visible_agent_ids_for_owner(
+    state: Any,
+    owner_id: Optional[str],
+) -> set[str]:
+    if owner_id is None:
+        return {
+            agent.agentId
+            for agent in state.agents
+            if agent.claimStatus == "unclaimed" and agent.ownerId is None
+        }
+    return {
+        agent.agentId
+        for agent in state.agents
+        if agent.ownerId == owner_id
+        or (agent.claimStatus == "unclaimed" and agent.ownerId is None)
+    }
+
+
+def _require_owner_id(
+    session_cookie: Optional[str],
+    *,
+    action: str,
+) -> str:
+    owner = resolve_current_owner(session_cookie)
+    if owner is None:
+        raise HTTPException(
+            status_code=401,
+            detail=f"Authentication is required to {action}",
+        )
+    return str(owner["ownerId"])
+
+
+def _owner_agent_or_404(state: Any, agent_id: str, owner_id: str) -> Any:
+    agent = next((item for item in state.agents if item.agentId == agent_id), None)
+    if agent is None:
+        raise HTTPException(status_code=404, detail="agent not found")
+    if agent.ownerId != owner_id or agent.claimStatus != "claimed":
+        raise HTTPException(status_code=403, detail="agent wallet is not claimed by owner")
+    return agent
 
 
 @lru_cache(maxsize=1)
@@ -1347,6 +1474,205 @@ def health() -> dict[str, Any]:
         "freqtradeStatus": freqtrade_status,
         "autonomy": autonomy_status,
     }
+
+
+@app.get("/auth/session")
+def auth_session(
+    session_cookie: Optional[str] = Cookie(default=None, alias=SESSION_COOKIE)
+) -> dict[str, Any]:
+    owner = resolve_current_owner(session_cookie)
+    return {"authenticated": owner is not None, "owner": owner}
+
+
+@app.get("/auth/github/login")
+def github_login() -> RedirectResponse:
+    oauth_state = build_github_oauth_state()
+    try:
+        login_url = build_github_login_url(oauth_state)
+    except RuntimeError as error:
+        raise HTTPException(status_code=500, detail=str(error)) from error
+
+    response = RedirectResponse(login_url)
+    response.set_cookie(
+        OAUTH_STATE_COOKIE,
+        f"{oauth_state.state}:{oauth_state.code_verifier}",
+        httponly=True,
+        samesite="lax",
+        secure=_should_secure_oauth_state_cookie(),
+    )
+    return response
+
+
+@app.post("/auth/logout")
+def auth_logout(response: Response) -> dict[str, bool]:
+    response.delete_cookie(SESSION_COOKIE)
+    return {"ok": True}
+
+
+@app.get("/agent-wallet/state")
+def agent_wallet_state(
+    session_cookie: Optional[str] = Cookie(default=None, alias=SESSION_COOKIE)
+) -> dict[str, Any]:
+    owner = resolve_current_owner(session_cookie)
+    state = get_agent_wallet_store().load()
+    owner_id = owner["ownerId"] if owner else None
+    visible_agent_ids = _visible_agent_ids_for_owner(state, owner_id)
+    agents = [
+        agent.model_dump()
+        for agent in state.agents
+        if agent.agentId in visible_agent_ids
+    ]
+    services = [
+        service.model_dump()
+        for service in state.services
+        if service.agentId in visible_agent_ids
+    ]
+    visible_service_ids = {service["serviceId"] for service in services}
+    payments = [
+        payment.model_dump()
+        for payment in state.payments
+        if payment.sellerAgentId in visible_agent_ids
+        and payment.serviceId in visible_service_ids
+    ]
+    return {
+        "owner": owner,
+        "agents": agents,
+        "services": services,
+        "payments": payments,
+    }
+
+
+@app.post("/agent-wallet/init")
+async def agent_wallet_init(request: AgentWalletInitRequest) -> dict[str, Any]:
+    wallet_payload = _tool_result_payload(
+        await call_chain_tool(
+            "agent_wallet_init",
+            {
+                "agentName": request.agentName,
+                "agentDescription": request.agentDescription,
+            },
+        )
+    )
+    agent, claim_code = get_agent_wallet_store().create_agent_wallet(
+        agent_name=request.agentName,
+        agent_description=request.agentDescription,
+        wallet_payload=wallet_payload,
+    )
+    return {"agent": agent.model_dump(), "claimCode": claim_code}
+
+
+@app.post("/agent-wallet/claim")
+def agent_wallet_claim(
+    request: AgentWalletClaimRequest,
+    session_cookie: Optional[str] = Cookie(default=None, alias=SESSION_COOKIE),
+) -> dict[str, Any]:
+    owner = resolve_current_owner(session_cookie)
+    if owner is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication is required to claim a wallet",
+        )
+    try:
+        agent = get_agent_wallet_store().claim_wallet(
+            request.claimCode,
+            str(owner["ownerId"]),
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return {"agent": agent.model_dump()}
+
+
+@app.post("/agent-wallet/register-service")
+async def agent_wallet_register_service(
+    request: AgentWalletRegisterServiceRequest,
+    session_cookie: Optional[str] = Cookie(default=None, alias=SESSION_COOKIE),
+) -> dict[str, Any]:
+    owner_id = _require_owner_id(session_cookie, action="register an Agent Wallet service")
+    store = get_agent_wallet_store()
+    state = store.load()
+    agent = _owner_agent_or_404(state, request.agentId, owner_id)
+
+    service_payload = _tool_result_payload(
+        await call_chain_tool(
+            "agent_wallet_register_x402_service",
+            {
+                "name": request.name,
+                "path": request.path,
+                "priceAtomic": request.priceAtomic,
+                "payTo": agent.walletAddress,
+            },
+        )
+    )
+    try:
+        service = store.add_service(
+            agent_id=request.agentId,
+            service_payload=service_payload,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return {"service": service.model_dump()}
+
+
+@app.post("/agent-wallet/call-service")
+async def agent_wallet_call_service(
+    request: AgentWalletCallServiceRequest,
+    session_cookie: Optional[str] = Cookie(default=None, alias=SESSION_COOKIE),
+) -> dict[str, Any]:
+    owner_id = _require_owner_id(session_cookie, action="call an Agent Wallet service")
+    store = get_agent_wallet_store()
+    state = store.load()
+    service = next(
+        (item for item in state.services if item.serviceId == request.serviceId),
+        None,
+    )
+    if service is None:
+        raise HTTPException(status_code=404, detail="service not found")
+    _owner_agent_or_404(state, service.agentId, owner_id)
+
+    base_url = os.getenv("X402_SELLER_BASE_URL", "http://x402-seller:8000").rstrip("/")
+    request_url = f"{base_url}{service.path}"
+    call_error: Optional[Exception] = None
+    try:
+        result = _tool_result_payload(
+            await call_chain_tool(
+                "agent_wallet_call_x402_service",
+                {"url": request_url, "method": "GET"},
+            )
+        )
+    except Exception as error:
+        call_error = error
+        result = {
+            "error": {
+                "message": str(error),
+            },
+            "payment": {"response": {"success": False}},
+        }
+
+    try:
+        payment = store.add_payment(
+            service_id=request.serviceId,
+            result=result,
+            request_url=request_url,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    if call_error is not None:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "message": "x402 service call failed",
+                "error": str(call_error),
+                "payment": payment.model_dump(),
+            },
+        ) from call_error
+    return {"payment": payment.model_dump(), "result": result}
+
+
+@app.post("/agent-wallet/reset")
+def agent_wallet_reset() -> dict[str, bool]:
+    if os.path.exists(AGENT_WALLET_STATE_PATH):
+        os.remove(AGENT_WALLET_STATE_PATH)
+    return {"ok": True}
 
 
 @app.get("/autonomy/status")

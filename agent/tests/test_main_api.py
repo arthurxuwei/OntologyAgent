@@ -2,13 +2,24 @@ import json
 import os
 import re
 import subprocess
+import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
+from uuid import uuid4
+from urllib.parse import parse_qs, urlparse
 
+from agent_wallet_state import (
+    AgentRecord,
+    AgentWalletState,
+    Owner,
+    PaymentRecord,
+    ServiceRegistration,
+)
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 from pydantic import ValidationError
 
+from agent_wallet_auth import sign_session
 import main
 
 
@@ -390,6 +401,834 @@ class RecordingMcpClient:
         return self._responses[tool_name]
 
 
+class AgentWalletAuthApiTests(unittest.TestCase):
+    def setUp(self) -> None:
+        main.get_agent_wallet_store.cache_clear()
+
+    def test_auth_session_returns_anonymous_without_cookie(self) -> None:
+        client = TestClient(main.app)
+
+        response = client.get("/auth/session")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json(),
+            {"authenticated": False, "owner": None},
+        )
+
+    def test_github_login_requires_config(self) -> None:
+        client = TestClient(main.app)
+
+        with patch.dict(os.environ, {}, clear=True):
+            response = client.get("/auth/github/login", follow_redirects=False)
+
+        self.assertEqual(response.status_code, 500)
+        self.assertIn("GITHUB_CLIENT_ID", response.json()["detail"])
+
+    def test_github_login_sets_secure_oauth_cookie_for_https_public_base_url(
+        self,
+    ) -> None:
+        client = TestClient(main.app)
+
+        with patch.dict(
+            os.environ,
+            {
+                "GITHUB_CLIENT_ID": "client-123",
+                "PUBLIC_BASE_URL": "https://example.com",
+                "AUTH_SESSION_SECRET": "secret",
+            },
+            clear=True,
+        ):
+            response = client.get("/auth/github/login", follow_redirects=False)
+
+        self.assertEqual(response.status_code, 307)
+        location = response.headers["location"]
+        parsed_location = urlparse(location)
+        query = parse_qs(parsed_location.query)
+        self.assertEqual(parsed_location.scheme, "https")
+        self.assertEqual(parsed_location.netloc, "github.com")
+        self.assertEqual(parsed_location.path, "/login/oauth/authorize")
+        self.assertEqual(
+            query["redirect_uri"], ["https://example.com/auth/github/callback"]
+        )
+
+        cookie = response.headers["set-cookie"]
+        self.assertIn(f"{main.OAUTH_STATE_COOKIE}=", cookie)
+        self.assertIn("Secure", cookie)
+        self.assertIn("HttpOnly", cookie)
+        self.assertIn("SameSite=lax", cookie)
+
+    def test_auth_session_returns_500_when_cookie_present_and_secret_missing(
+        self,
+    ) -> None:
+        client = TestClient(main.app)
+        client.cookies.set(main.SESSION_COOKIE, "body.signature")
+
+        with patch.dict(os.environ, {}, clear=True):
+            response = client.get("/auth/session")
+
+        self.assertEqual(response.status_code, 500)
+        self.assertIn("AUTH_SESSION_SECRET", response.json()["detail"])
+
+    def test_auth_session_returns_anonymous_for_invalid_signed_cookie(self) -> None:
+        client = TestClient(main.app)
+
+        with patch.dict(os.environ, {"AUTH_SESSION_SECRET": "secret"}, clear=True):
+            token = sign_session({"ownerId": "owner_123"})
+        client.cookies.set(main.SESSION_COOKIE, f"{token}tampered")
+
+        with patch.dict(os.environ, {"AUTH_SESSION_SECRET": "secret"}, clear=True):
+            response = client.get("/auth/session")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json(),
+            {"authenticated": False, "owner": None},
+        )
+
+    def test_logout_clears_session_cookie(self) -> None:
+        client = TestClient(main.app)
+        client.cookies.set(main.SESSION_COOKIE, "session-value")
+
+        response = client.post("/auth/logout")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"ok": True})
+        set_cookie_header = response.headers["set-cookie"]
+        self.assertIn(f"{main.SESSION_COOKIE}=", set_cookie_header)
+        self.assertIn("Max-Age=0", set_cookie_header)
+
+
+class AgentWalletInitClaimApiTests(unittest.TestCase):
+    def setUp(self) -> None:
+        main.get_agent_wallet_store.cache_clear()
+
+    def test_agent_wallet_state_returns_empty_demo_view(self) -> None:
+        client = TestClient(main.app)
+
+        with tempfile.TemporaryDirectory() as temp_dir, patch.object(
+            main,
+            "AGENT_WALLET_STATE_PATH",
+            os.path.join(temp_dir, "state.json"),
+        ):
+            main.get_agent_wallet_store.cache_clear()
+            response = client.get("/agent-wallet/state")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json(),
+            {"owner": None, "agents": [], "services": [], "payments": []},
+        )
+
+    def test_agent_wallet_state_filters_private_records_for_anonymous_callers(
+        self,
+    ) -> None:
+        client = TestClient(main.app)
+        current = "2026-04-24T00:00:00+00:00"
+
+        with tempfile.TemporaryDirectory() as temp_dir, patch.object(
+            main,
+            "AGENT_WALLET_STATE_PATH",
+            os.path.join(temp_dir, "state.json"),
+        ):
+            main.get_agent_wallet_store.cache_clear()
+            state = AgentWalletState(
+                owners=[
+                    Owner(
+                        ownerId="owner_123",
+                        provider="github",
+                        providerUserId="123",
+                        login="octocat",
+                        createdAt=current,
+                        updatedAt=current,
+                    )
+                ],
+                agents=[
+                    AgentRecord(
+                        agentId="agent_public",
+                        name="Public Demo",
+                        walletId="wallet_public",
+                        walletAddress="0x111",
+                        claimStatus="unclaimed",
+                        createdAt=current,
+                        updatedAt=current,
+                    ),
+                    AgentRecord(
+                        agentId="agent_private",
+                        name="Private Demo",
+                        ownerId="owner_123",
+                        walletId="wallet_private",
+                        walletAddress="0x222",
+                        claimStatus="claimed",
+                        createdAt=current,
+                        updatedAt=current,
+                    ),
+                ],
+                services=[
+                    ServiceRegistration(
+                        serviceId="service_public",
+                        agentId="agent_public",
+                        name="Public Service",
+                        path="/x402/public",
+                        priceAtomic="10000",
+                        assetAddress="0xasset",
+                        network="eip155:84532",
+                        payTo="0x111",
+                        active=True,
+                        createdAt=current,
+                    ),
+                    ServiceRegistration(
+                        serviceId="service_private",
+                        agentId="agent_private",
+                        name="Private Service",
+                        path="/x402/private",
+                        priceAtomic="10000",
+                        assetAddress="0xasset",
+                        network="eip155:84532",
+                        payTo="0x222",
+                        active=True,
+                        createdAt=current,
+                    ),
+                ],
+                payments=[
+                    PaymentRecord(
+                        paymentId="payment_public",
+                        serviceId="service_public",
+                        sellerAgentId="agent_public",
+                        sellerWalletAddress="0x111",
+                        amountAtomic="10000",
+                        assetAddress="0xasset",
+                        network="eip155:84532",
+                        status="settled",
+                        requestUrl="http://x402-seller/public",
+                        resultSummary={},
+                        txHash="0xpublic",
+                        createdAt=current,
+                    ),
+                    PaymentRecord(
+                        paymentId="payment_private",
+                        serviceId="service_private",
+                        sellerAgentId="agent_private",
+                        sellerWalletAddress="0x222",
+                        amountAtomic="10000",
+                        assetAddress="0xasset",
+                        network="eip155:84532",
+                        status="settled",
+                        requestUrl="http://x402-seller/private",
+                        resultSummary={"secret": True},
+                        txHash="0xprivate",
+                        createdAt=current,
+                    ),
+                ],
+            )
+            main.get_agent_wallet_store().save(state)
+
+            response = client.get("/agent-wallet/state")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(
+            [agent["agentId"] for agent in payload["agents"]],
+            ["agent_public"],
+        )
+        self.assertEqual(
+            [service["serviceId"] for service in payload["services"]],
+            ["service_public"],
+        )
+        self.assertEqual(
+            [payment["paymentId"] for payment in payload["payments"]],
+            ["payment_public"],
+        )
+        self.assertNotIn("agent_private", json.dumps(payload))
+        self.assertNotIn("0xprivate", json.dumps(payload))
+
+    def test_agent_wallet_state_filters_records_to_authenticated_owner(self) -> None:
+        client = TestClient(main.app)
+        current = "2026-04-24T00:00:00+00:00"
+
+        with tempfile.TemporaryDirectory() as temp_dir, patch.object(
+            main,
+            "AGENT_WALLET_STATE_PATH",
+            os.path.join(temp_dir, "state.json"),
+        ), patch.dict(
+            os.environ,
+            {"AUTH_SESSION_SECRET": "secret"},
+            clear=True,
+        ):
+            main.get_agent_wallet_store.cache_clear()
+            owner = Owner(
+                ownerId="owner_123",
+                provider="github",
+                providerUserId="123",
+                login="octocat",
+                createdAt=current,
+                updatedAt=current,
+            )
+            state = AgentWalletState(
+                owners=[owner],
+                agents=[
+                    AgentRecord(
+                        agentId="agent_owned",
+                        name="Owned Demo",
+                        ownerId=owner.ownerId,
+                        walletId="wallet_owned",
+                        walletAddress="0x111",
+                        claimStatus="claimed",
+                        createdAt=current,
+                        updatedAt=current,
+                    ),
+                    AgentRecord(
+                        agentId="agent_other",
+                        name="Other Demo",
+                        ownerId="owner_other",
+                        walletId="wallet_other",
+                        walletAddress="0x222",
+                        claimStatus="claimed",
+                        createdAt=current,
+                        updatedAt=current,
+                    ),
+                ],
+                services=[
+                    ServiceRegistration(
+                        serviceId="service_owned",
+                        agentId="agent_owned",
+                        name="Owned Service",
+                        path="/x402/owned",
+                        priceAtomic="10000",
+                        assetAddress="0xasset",
+                        network="eip155:84532",
+                        payTo="0x111",
+                        active=True,
+                        createdAt=current,
+                    ),
+                    ServiceRegistration(
+                        serviceId="service_other",
+                        agentId="agent_other",
+                        name="Other Service",
+                        path="/x402/other",
+                        priceAtomic="10000",
+                        assetAddress="0xasset",
+                        network="eip155:84532",
+                        payTo="0x222",
+                        active=True,
+                        createdAt=current,
+                    ),
+                ],
+                payments=[
+                    PaymentRecord(
+                        paymentId="payment_owned",
+                        serviceId="service_owned",
+                        sellerAgentId="agent_owned",
+                        sellerWalletAddress="0x111",
+                        amountAtomic="10000",
+                        assetAddress="0xasset",
+                        network="eip155:84532",
+                        status="settled",
+                        requestUrl="http://x402-seller/owned",
+                        resultSummary={},
+                        txHash="0xowned",
+                        createdAt=current,
+                    ),
+                    PaymentRecord(
+                        paymentId="payment_other",
+                        serviceId="service_other",
+                        sellerAgentId="agent_other",
+                        sellerWalletAddress="0x222",
+                        amountAtomic="10000",
+                        assetAddress="0xasset",
+                        network="eip155:84532",
+                        status="settled",
+                        requestUrl="http://x402-seller/other",
+                        resultSummary={"secret": True},
+                        txHash="0xother",
+                        createdAt=current,
+                    ),
+                ],
+            )
+            main.get_agent_wallet_store().save(state)
+            client.cookies.set(
+                main.SESSION_COOKIE,
+                sign_session({"ownerId": owner.ownerId, "nonce": uuid4().hex}),
+            )
+
+            response = client.get("/agent-wallet/state")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["owner"]["ownerId"], owner.ownerId)
+        self.assertEqual(
+            [agent["agentId"] for agent in payload["agents"]],
+            ["agent_owned"],
+        )
+        self.assertEqual(
+            [service["serviceId"] for service in payload["services"]],
+            ["service_owned"],
+        )
+        self.assertEqual(
+            [payment["paymentId"] for payment in payload["payments"]],
+            ["payment_owned"],
+        )
+        self.assertNotIn("agent_other", json.dumps(payload))
+        self.assertNotIn("0xother", json.dumps(payload))
+
+    def test_agent_wallet_init_calls_chain_and_returns_claim_code(self) -> None:
+        client = TestClient(main.app)
+        chain_call = AsyncMock(
+            return_value={
+                "circleWalletId": "cw_123",
+                "circleWalletSetId": "cws_123",
+                "blockchain": "BASE-SEPOLIA",
+                "walletAddress": "0x3333333333333333333333333333333333333333",
+            }
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir, patch.object(
+            main,
+            "AGENT_WALLET_STATE_PATH",
+            os.path.join(temp_dir, "state.json"),
+        ), patch.object(main, "call_chain_tool", chain_call):
+            main.get_agent_wallet_store.cache_clear()
+            response = client.post(
+                "/agent-wallet/init",
+                json={
+                    "agentName": "Research Agent",
+                    "agentDescription": "demo",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["agent"]["claimStatus"], "unclaimed")
+        self.assertEqual(
+            payload["agent"]["walletAddress"],
+            "0x3333333333333333333333333333333333333333",
+        )
+        self.assertRegex(payload["claimCode"], r".+")
+        chain_call.assert_awaited_once_with(
+            "agent_wallet_init",
+            {"agentName": "Research Agent", "agentDescription": "demo"},
+        )
+
+    def test_agent_wallet_claim_rejects_unauthenticated_request(self) -> None:
+        client = TestClient(main.app)
+
+        response = client.post("/agent-wallet/claim", json={"claimCode": "abc"})
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(
+            response.json()["detail"],
+            "Authentication is required to claim a wallet",
+        )
+
+
+class AgentWalletServicePaymentApiTests(unittest.TestCase):
+    def setUp(self) -> None:
+        main.get_agent_wallet_store.cache_clear()
+
+    def _owner_cookie(self, owner_id: str) -> str:
+        with patch.dict(os.environ, {"AUTH_SESSION_SECRET": "secret"}, clear=True):
+            return sign_session({"ownerId": owner_id, "nonce": uuid4().hex})
+
+    def _create_claimed_agent(self, store_path: str) -> tuple[str, str]:
+        main.get_agent_wallet_store.cache_clear()
+        store = main.get_agent_wallet_store()
+        owner = store.upsert_owner(
+            provider="github",
+            provider_user_id="123",
+            login="octocat",
+            email=None,
+            display_name=None,
+            avatar_url=None,
+        )
+        agent, claim_code = store.create_agent_wallet(
+            agent_name="Research Agent",
+            agent_description=None,
+            wallet_payload={
+                "circleWalletId": "cw_123",
+                "circleWalletSetId": "cws_123",
+                "blockchain": "BASE-SEPOLIA",
+                "walletAddress": "0x3333333333333333333333333333333333333333",
+            },
+        )
+        store.claim_wallet(claim_code, owner.ownerId)
+        self.assertTrue(os.path.exists(store_path))
+        return owner.ownerId, agent.agentId
+
+    def test_register_service_uses_agent_wallet_pay_to(self) -> None:
+        client = TestClient(main.app)
+        chain_call = AsyncMock(
+            return_value={
+                "name": "Research Summary",
+                "path": "/x402/agent-services/research-summary",
+                "priceAtomic": "10000",
+                "assetAddress": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+                "network": "eip155:84532",
+                "payTo": "0x3333333333333333333333333333333333333333",
+                "active": True,
+            }
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir, patch.object(
+            main,
+            "AGENT_WALLET_STATE_PATH",
+            os.path.join(temp_dir, "state.json"),
+        ), patch.object(main, "call_chain_tool", chain_call), patch.dict(
+            os.environ,
+            {"AUTH_SESSION_SECRET": "secret"},
+            clear=True,
+        ):
+            owner_id, agent_id = self._create_claimed_agent(
+                os.path.join(temp_dir, "state.json")
+            )
+            client.cookies.set(main.SESSION_COOKIE, self._owner_cookie(owner_id))
+            response = client.post(
+                "/agent-wallet/register-service",
+                json={
+                    "agentId": agent_id,
+                    "name": "Research Summary",
+                    "path": "/x402/agent-services/research-summary",
+                    "priceAtomic": "10000",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        service = response.json()["service"]
+        self.assertEqual(
+            service["payTo"],
+            "0x3333333333333333333333333333333333333333",
+        )
+        chain_call.assert_awaited_once_with(
+            "agent_wallet_register_x402_service",
+            {
+                "name": "Research Summary",
+                "path": "/x402/agent-services/research-summary",
+                "priceAtomic": "10000",
+                "payTo": "0x3333333333333333333333333333333333333333",
+            },
+        )
+
+    def test_call_service_persists_successful_payment_record(self) -> None:
+        client = TestClient(main.app)
+        chain_results = [
+            {
+                "name": "Research Summary",
+                "path": "/x402/agent-services/research-summary",
+                "priceAtomic": "10000",
+                "assetAddress": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+                "network": "eip155:84532",
+                "payTo": "0x3333333333333333333333333333333333333333",
+                "active": True,
+            },
+            {
+                "upstream": {"status": 200, "payload": {"ok": True}},
+                "payment": {
+                    "response": {
+                        "success": True,
+                        "transaction": "0xsettled",
+                        "network": "eip155:84532",
+                    }
+                },
+                "decision": {"amountAtomic": "10000"},
+                "policy": {},
+            },
+        ]
+        chain_call = AsyncMock(side_effect=chain_results)
+
+        with tempfile.TemporaryDirectory() as temp_dir, patch.object(
+            main,
+            "AGENT_WALLET_STATE_PATH",
+            os.path.join(temp_dir, "state.json"),
+        ), patch.object(main, "call_chain_tool", chain_call), patch.dict(
+            os.environ,
+            {
+                "AUTH_SESSION_SECRET": "secret",
+                "X402_SELLER_BASE_URL": "http://x402-seller:8000",
+            },
+            clear=True,
+        ):
+            owner_id, agent_id = self._create_claimed_agent(
+                os.path.join(temp_dir, "state.json")
+            )
+            client.cookies.set(main.SESSION_COOKIE, self._owner_cookie(owner_id))
+            service = client.post(
+                "/agent-wallet/register-service",
+                json={
+                    "agentId": agent_id,
+                    "name": "Research Summary",
+                    "path": "/x402/agent-services/research-summary",
+                    "priceAtomic": "10000",
+                },
+            ).json()["service"]
+            response = client.post(
+                "/agent-wallet/call-service",
+                json={"serviceId": service["serviceId"]},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payment = response.json()["payment"]
+        self.assertEqual(payment["txHash"], "0xsettled")
+        self.assertEqual(payment["status"], "settled")
+        self.assertEqual(
+            payment["requestUrl"],
+            "http://x402-seller:8000/x402/agent-services/research-summary",
+        )
+        self.assertEqual(chain_call.await_count, 2)
+
+    def test_call_service_persists_failure_and_returns_bad_gateway(self) -> None:
+        client = TestClient(main.app)
+        chain_call = AsyncMock(
+            side_effect=[
+                {
+                    "name": "Research Summary",
+                    "path": "/x402/agent-services/research-summary",
+                    "priceAtomic": "10000",
+                    "assetAddress": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+                    "network": "eip155:84532",
+                    "payTo": "0x3333333333333333333333333333333333333333",
+                    "active": True,
+                },
+                RuntimeError("missing x402 buyer signer"),
+            ]
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir, patch.object(
+            main,
+            "AGENT_WALLET_STATE_PATH",
+            os.path.join(temp_dir, "state.json"),
+        ), patch.object(main, "call_chain_tool", chain_call), patch.dict(
+            os.environ,
+            {
+                "AUTH_SESSION_SECRET": "secret",
+                "X402_SELLER_BASE_URL": "http://x402-seller:8000",
+            },
+            clear=True,
+        ):
+            owner_id, agent_id = self._create_claimed_agent(
+                os.path.join(temp_dir, "state.json")
+            )
+            client.cookies.set(main.SESSION_COOKIE, self._owner_cookie(owner_id))
+            service = client.post(
+                "/agent-wallet/register-service",
+                json={
+                    "agentId": agent_id,
+                    "name": "Research Summary",
+                    "path": "/x402/agent-services/research-summary",
+                    "priceAtomic": "10000",
+                },
+            ).json()["service"]
+            response = client.post(
+                "/agent-wallet/call-service",
+                json={"serviceId": service["serviceId"]},
+            )
+            payments = main.get_agent_wallet_store().load().payments
+
+        self.assertEqual(response.status_code, 502)
+        detail = response.json()["detail"]
+        self.assertEqual(detail["message"], "x402 service call failed")
+        self.assertIn("missing x402 buyer signer", detail["error"])
+        self.assertEqual(detail["payment"]["status"], "failed")
+        self.assertIsNone(detail["payment"]["txHash"])
+        self.assertEqual(len(payments), 1)
+        self.assertEqual(payments[0].status, "failed")
+
+    def test_register_service_rejects_unclaimed_agent(self) -> None:
+        client = TestClient(main.app)
+
+        with tempfile.TemporaryDirectory() as temp_dir, patch.object(
+            main,
+            "AGENT_WALLET_STATE_PATH",
+            os.path.join(temp_dir, "state.json"),
+        ), patch.dict(
+            os.environ,
+            {"AUTH_SESSION_SECRET": "secret"},
+            clear=True,
+        ):
+            main.get_agent_wallet_store.cache_clear()
+            store = main.get_agent_wallet_store()
+            owner = store.upsert_owner(
+                provider="github",
+                provider_user_id="123",
+                login="octocat",
+                email=None,
+                display_name=None,
+                avatar_url=None,
+            )
+            agent, _ = store.create_agent_wallet(
+                agent_name="Research Agent",
+                agent_description=None,
+                wallet_payload={
+                    "circleWalletId": "cw_123",
+                    "walletAddress": "0x3333333333333333333333333333333333333333",
+                },
+            )
+            client.cookies.set(main.SESSION_COOKIE, self._owner_cookie(owner.ownerId))
+            response = client.post(
+                "/agent-wallet/register-service",
+                json={
+                    "agentId": agent.agentId,
+                    "name": "Research Summary",
+                    "path": "/x402/agent-services/research-summary",
+                    "priceAtomic": "10000",
+                },
+            )
+
+        self.assertEqual(response.status_code, 403)
+
+
+class AgentWalletResetApiTests(unittest.TestCase):
+    def setUp(self) -> None:
+        main.get_agent_wallet_store.cache_clear()
+
+    def test_agent_wallet_reset_removes_local_demo_state(self) -> None:
+        client = TestClient(main.app)
+        chain_call = AsyncMock(
+            return_value={
+                "circleWalletId": "cw_123",
+                "circleWalletSetId": "cws_123",
+                "blockchain": "BASE-SEPOLIA",
+                "walletAddress": "0x3333333333333333333333333333333333333333",
+            }
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir, patch.object(
+            main,
+            "AGENT_WALLET_STATE_PATH",
+            os.path.join(temp_dir, "state.json"),
+        ), patch.object(main, "call_chain_tool", chain_call):
+            main.get_agent_wallet_store.cache_clear()
+            client.post(
+                "/agent-wallet/init",
+                json={"agentName": "Research Agent"},
+            )
+            response = client.post("/agent-wallet/reset")
+            state = client.get("/agent-wallet/state").json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"ok": True})
+        self.assertEqual(state["agents"], [])
+
+
+class AgentWalletUiTests(unittest.TestCase):
+    def test_chat_page_contains_agent_wallet_panel_and_api_calls(self) -> None:
+        client = TestClient(main.app)
+
+        response = client.get("/")
+
+        self.assertEqual(response.status_code, 200)
+        html = response.text
+        self.assertIn("Agent Wallet MVP", html)
+        self.assertIn('aria-label="Agent Wallet MVP"', html)
+        self.assertIn('id="wallet-auth-state"', html)
+        self.assertIn('id="wallet-state-summary"', html)
+        self.assertIn('id="wallet-sign-in-button"', html)
+        self.assertIn('id="wallet-sign-out-button"', html)
+        self.assertIn('id="wallet-create-form"', html)
+        self.assertIn('id="wallet-claim-form"', html)
+        self.assertIn('id="wallet-register-service-form"', html)
+        self.assertIn('id="wallet-call-service-form"', html)
+        self.assertIn("function selectedWalletAgentId()", html)
+        self.assertIn("function selectedWalletServiceId()", html)
+        self.assertIn("async function walletApi(", html)
+        self.assertIn("async function refreshAgentWalletState()", html)
+        self.assertIn("/auth/session", html)
+        self.assertIn("/agent-wallet/init", html)
+        self.assertIn("/agent-wallet/claim", html)
+        self.assertIn("/agent-wallet/register-service", html)
+        self.assertIn("/agent-wallet/call-service", html)
+
+    def test_chat_page_agent_wallet_helpers_render_state_and_payloads(self) -> None:
+        client = TestClient(main.app)
+
+        response = client.get("/")
+
+        self.assertEqual(response.status_code, 200)
+        script_text = _extract_inline_script(response.text)
+        node_result = subprocess.run(
+            [
+                "node",
+                "-e",
+                "const fs = require('fs');"
+                "const scriptText = fs.readFileSync(0, 'utf8');"
+                "const elements = new Map();"
+                "const listeners = new Map();"
+                "const fetchCalls = [];"
+                "const makeElement = (id = '') => ({"
+                "id, textContent: '', style: {}, disabled: false, value: '', children: [],"
+                "appendChild(child) { this.children.push(child); if (!this.value && child.value) this.value = child.value; },"
+                "replaceChildren() { this.children = []; this.value = ''; },"
+                "addEventListener(event, handler) { listeners.set(`${id}:${event}`, handler.name || 'anonymous'); },"
+                "focus() {}, scrollTop: 0, scrollHeight: 0"
+                "});"
+                "global.document = {"
+                "getElementById(id) { if (!elements.has(id)) elements.set(id, makeElement(id)); return elements.get(id); },"
+                "querySelectorAll() { return []; },"
+                "createElement(tag) { return makeElement(tag); },"
+                "createTextNode(text) { return text; }"
+                "};"
+                "global.window = { location: { href: '' } };"
+                "global.fetch = async (url, options = {}) => {"
+                "fetchCalls.push({ url, method: options.method || 'GET', headers: options.headers || {}, body: options.body || null });"
+                "if (url === '/health') return { ok: true, json: async () => ({}) };"
+                "if (url === '/auth/session') return { ok: true, json: async () => ({ authenticated: true, owner: { login: 'octocat' } }) };"
+                "if (url === '/agent-wallet/state') return { ok: true, json: async () => ({ owner: { login: 'octocat' }, agents: [], services: [], payments: [] }) };"
+                "return { ok: true, json: async () => ({ ok: true }) };"
+                "};"
+                "global.setInterval = () => 0;"
+                "(async () => {"
+                "eval(scriptText);"
+                "renderAgentWalletState({ owner: null, agents: [{ agentId: 'agent_unclaimed', name: 'Draft', walletAddress: '0x1', claimStatus: 'unclaimed' }], services: [], payments: [] });"
+                "const unclaimedSelection = selectedWalletAgentId();"
+                "renderAgentWalletState({"
+                "owner: { login: 'octocat' },"
+                "agents: [{ agentId: 'agent_claimed', name: 'Research Agent', walletAddress: '0x2', claimStatus: 'claimed' }],"
+                "services: [{ serviceId: 'service_1', name: 'Research Summary', priceAtomic: '10000' }],"
+                "payments: [{ status: 'settled', txHash: '0xsettled' }]"
+                "});"
+                "await walletApi('/agent-wallet/init', { method: 'POST', body: JSON.stringify({ agentName: 'Research Agent' }) });"
+                "process.stdout.write(JSON.stringify({"
+                "unclaimedSelection,"
+                "claimedSelection: selectedWalletAgentId(),"
+                "serviceSelection: selectedWalletServiceId(),"
+                "summary: elements.get('wallet-state-summary').textContent,"
+                "authState: elements.get('wallet-auth-state').textContent,"
+                "signInDisabled: elements.get('wallet-sign-in-button').disabled,"
+                "signOutDisabled: elements.get('wallet-sign-out-button').disabled,"
+                "createListener: listeners.get('wallet-create-form:submit'),"
+                "claimListener: listeners.get('wallet-claim-form:submit'),"
+                "registerListener: listeners.get('wallet-register-service-form:submit'),"
+                "callListener: listeners.get('wallet-call-service-form:submit'),"
+                "initCall: fetchCalls.find((call) => call.url === '/agent-wallet/init')"
+                "}));"
+                "})().catch((error) => { console.error(error); process.exit(1); });",
+            ],
+            input=script_text,
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(node_result.returncode, 0, node_result.stderr)
+        helper_output = json.loads(node_result.stdout)
+        self.assertEqual(helper_output["unclaimedSelection"], "")
+        self.assertEqual(helper_output["claimedSelection"], "agent_claimed")
+        self.assertEqual(helper_output["serviceSelection"], "service_1")
+        self.assertIn("Owner: octocat", helper_output["summary"])
+        self.assertIn("Latest Payment: settled 0xsettled", helper_output["summary"])
+        self.assertEqual(helper_output["authState"], "Signed in as octocat")
+        self.assertTrue(helper_output["signInDisabled"])
+        self.assertFalse(helper_output["signOutDisabled"])
+        self.assertEqual(helper_output["createListener"], "createAgentWallet")
+        self.assertEqual(helper_output["claimListener"], "claimAgentWallet")
+        self.assertEqual(
+            helper_output["registerListener"],
+            "registerAgentWalletService",
+        )
+        self.assertEqual(helper_output["callListener"], "callAgentWalletService")
+        self.assertEqual(helper_output["initCall"]["method"], "POST")
+        self.assertEqual(
+            helper_output["initCall"]["headers"]["content-type"],
+            "application/json",
+        )
+
+
 class MainApiTests(unittest.TestCase):
     def setUp(self) -> None:
         main.get_session_store.cache_clear()
@@ -457,8 +1296,8 @@ class MainApiTests(unittest.TestCase):
             )
 
         async def read_first_two_chunks(response: object) -> tuple[str, str]:
-            first = await anext(response.body_iterator)  # type: ignore[attr-defined]
-            second = await anext(response.body_iterator)  # type: ignore[attr-defined]
+            first = await response.body_iterator.__anext__()  # type: ignore[attr-defined]
+            second = await response.body_iterator.__anext__()  # type: ignore[attr-defined]
             return first, second
 
         with patch.object(main, "get_agent_graph", return_value=graph):
@@ -1248,8 +2087,13 @@ class MainApiTests(unittest.TestCase):
         for marker in ["console-shell", "observability-grid", "detail-grid"]:
             self.assertIn(marker, response.text)
         normalized_html = " ".join(response.text.split())
+        self.assertIn("@media (max-width: 960px)", normalized_html)
         self.assertIn(
-            "@media (max-width: 960px) { .topbar { padding: 16px; } .console-layout { gap: 16px; } .topbar-actions, .observability-grid, .detail-grid { grid-template-columns: 1fr; } .chat-panel { min-height: auto; } .composer-actions { flex-direction: column; align-items: stretch; }",
+            ".topbar-actions, .observability-grid, .detail-grid, .wallet-grid { grid-template-columns: 1fr; }",
+            normalized_html,
+        )
+        self.assertIn(
+            ".composer-actions { flex-direction: column; align-items: stretch; }",
             normalized_html,
         )
 
@@ -1299,6 +2143,7 @@ class MainApiTests(unittest.TestCase):
         script_text = _extract_inline_script(response.text)
         self.assertIn("async function streamAgentMessage", script_text)
         self.assertIn("function appendOrUpdateStreamingAgentMessage", script_text)
+        self.assertIn("if (state.busy) {\n          return;\n        }", script_text)
 
     def test_chat_page_streaming_placeholder_state_is_separate_from_message_body(
         self,

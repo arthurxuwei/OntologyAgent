@@ -284,6 +284,13 @@ PRIVATE_KEY=0x... \
 - `AUTONOMY_FORCE_EXIT_BALANCE_USD`：低于该值时自治子 Agent 可强制平仓，默认 `75`
 - `AUTONOMY_MAX_DRAWDOWN_RATIO`：最大回撤阈值比例，默认 `0.15`
 - `AUTONOMY_MODEL`：自治循环专用模型；为空时回退到 `BRAIN_AGENT_MODEL`
+- `GITHUB_CLIENT_ID`：Agent Wallet MVP 的 GitHub OAuth client id
+- `GITHUB_CLIENT_SECRET`：Agent Wallet MVP 的 GitHub OAuth client secret
+- `AUTH_SESSION_SECRET`：签名 Agent Wallet owner session cookie；Docker 默认使用本地开发 secret
+- `PUBLIC_BASE_URL`：OAuth callback 使用的公开 base URL，默认 `http://localhost:8000`
+- `AGENT_WALLET_STATE_PATH`：Agent Wallet 本地 demo 状态文件，Docker 默认 `/app/data/agent_wallet_state.json`
+- `X402_SELLER_BASE_URL`：Agent Wallet UI 调用 seller 服务时使用的内部 base URL，默认 `http://x402-seller:8000`
+
 
 `update_wealth_config` 和 `POST /autonomy/config` 可以在运行时修改以下自治配置，并会把覆盖值写入 `AUTONOMY_STATE_PATH`，重启后继续生效：
 
@@ -315,6 +322,41 @@ PRIVATE_KEY=0x... \
 - `X402_BUYER_PRIVATE_KEY`：x402 buyer 专用私钥；为空时回退到 `PRIVATE_KEY`
 - `X402_USDC_SINGLE_CAP`：x402 单笔 USDC 上限，默认 `1.0`
 - `X402_USDC_DAILY_CAP`：x402 每日 USDC 上限，默认 `2.0`
+- `CIRCLE_API_KEY`：Circle sandbox API key；`CHAIN_MOCK=false` 且创建真实 Agent Wallet 时需要
+- `CIRCLE_ENTITY_SECRET`：Circle entity secret；用于按请求生成 entity secret ciphertext
+- `CIRCLE_ENTITY_SECRET_CIPHERTEXT`：兼容旧配置，仅用于本地 mock/迁移场景；真实 Circle 请求会要求 `CIRCLE_ENTITY_SECRET`
+- `CIRCLE_WALLET_SET_ID`：已有 Circle wallet set id；为空时由 Circle wallet service 创建/使用默认流程
+- `CIRCLE_BASE_URL`：Circle Web3 Services base URL，默认 `https://api.circle.com/v1/w3s`
+
+## Agent Wallet MVP x402 Demo
+
+Agent Wallet MVP 在现有 Web Console 中增加了一个 `Agent Wallet MVP` 面板，用来跑通第一版 A2A 付费服务流程：
+
+1. 使用 GitHub OAuth 登录 owner session
+2. 创建 Circle sandbox Agent Wallet
+3. 用一次性 claim code 认领该钱包
+4. 注册 `/x402/agent-services/research-summary`
+5. 在 Base Sepolia 上触发一次 x402 paid service call
+6. 在本地 ledger 中查看 service 与 payment 记录
+
+最小配置：
+
+- `GITHUB_CLIENT_ID`
+- `GITHUB_CLIENT_SECRET`
+- `AUTH_SESSION_SECRET`
+- `PUBLIC_BASE_URL`
+- `CIRCLE_API_KEY`
+- `CIRCLE_ENTITY_SECRET`
+- `CIRCLE_WALLET_SET_ID`
+- `X402_BUYER_PRIVATE_KEY`
+- `X402_NETWORK=eip155:84532`
+- `X402_USDC_ASSET_ADDRESS=0x036CbD53842c5426634e7929541eC2318f3dCF7e`
+
+本地 demo 状态存储在 `AGENT_WALLET_STATE_PATH`，Docker 默认路径是 `/app/data/agent_wallet_state.json`。需要清空本地 Agent Wallet demo 状态时，可以调用：
+
+```bash
+curl -X POST http://localhost:8000/agent-wallet/reset
+```
 
 ### Base 链上交易意图桥接（V1）
 

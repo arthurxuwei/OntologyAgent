@@ -35,6 +35,16 @@ export type AppConfig = {
     usdcSingleCapAtomic: bigint;
     usdcDailyCapAtomic: bigint;
   };
+  circle: {
+    apiKey?: string;
+    entitySecret?: string;
+    // Static ciphertext is loaded only so live wallet creation can reject unsafe reuse.
+    // Circle requires a fresh entitySecretCiphertext for each API request.
+    entitySecretCiphertext?: string;
+    walletSetId?: string;
+    baseUrl: string;
+    blockchain: "BASE-SEPOLIA";
+  };
 };
 
 const DEFAULT_TESTNET_RPC_URL = "https://base-sepolia-rpc.publicnode.com";
@@ -42,6 +52,7 @@ const DEFAULT_TESTNET_CHAIN_ID = 84532;
 const DEFAULT_X402_NETWORK = "eip155:84532";
 const DEFAULT_BASE_SEPOLIA_USDC = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
 const DEFAULT_BASE_SEPOLIA_WETH = "0x4200000000000000000000000000000000000006";
+const DEFAULT_CIRCLE_BASE_URL = "https://api.circle.com/v1/w3s";
 const X402_USDC_DECIMALS = 6;
 
 function parseEthEnv(
@@ -188,6 +199,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       usdcDecimals: X402_USDC_DECIMALS,
       usdcSingleCapAtomic: parseUnitsEnv(env, "X402_USDC_SINGLE_CAP", "1.0", X402_USDC_DECIMALS),
       usdcDailyCapAtomic: parseUnitsEnv(env, "X402_USDC_DAILY_CAP", "2.0", X402_USDC_DECIMALS),
+    },
+    circle: {
+      apiKey: pickOptionalEnv(env.CIRCLE_API_KEY),
+      entitySecret: pickOptionalEnv(env.CIRCLE_ENTITY_SECRET),
+      entitySecretCiphertext: pickOptionalEnv(env.CIRCLE_ENTITY_SECRET_CIPHERTEXT),
+      walletSetId: pickOptionalEnv(env.CIRCLE_WALLET_SET_ID),
+      baseUrl: env.CIRCLE_BASE_URL ?? DEFAULT_CIRCLE_BASE_URL,
+      blockchain: "BASE-SEPOLIA",
     },
   };
 }
