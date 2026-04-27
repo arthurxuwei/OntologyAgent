@@ -637,19 +637,6 @@
           <div class="wallet-summary" id="wallet-state-summary">Loading wallet state…</div>
 
           <div class="wallet-grid">
-            <form class="wallet-form meta-box" id="wallet-create-form">
-              <h3 class="panel-title">Create Wallet</h3>
-              <label class="wallet-field">
-                <span>Agent Name</span>
-                <input id="wallet-agent-name" name="agentName" value="Research Agent" autocomplete="off" required />
-              </label>
-              <label class="wallet-field">
-                <span>Description</span>
-                <input id="wallet-agent-description" name="agentDescription" value="x402 research seller" autocomplete="off" />
-              </label>
-              <button class="primary" type="submit" data-wallet-button>Create</button>
-            </form>
-
             <form class="wallet-form meta-box" id="wallet-claim-form">
               <h3 class="panel-title">Claim Wallet</h3>
               <label class="wallet-field">
@@ -657,36 +644,6 @@
                 <input id="wallet-claim-code" name="claimCode" autocomplete="off" required />
               </label>
               <button class="secondary" type="submit" data-wallet-button>Claim</button>
-            </form>
-
-            <form class="wallet-form meta-box" id="wallet-register-service-form">
-              <h3 class="panel-title">Register Service</h3>
-              <label class="wallet-field">
-                <span>Agent</span>
-                <select id="wallet-agent-select" name="agentId" required></select>
-              </label>
-              <label class="wallet-field">
-                <span>Name</span>
-                <input id="wallet-service-name" name="name" value="Research Summary" autocomplete="off" required />
-              </label>
-              <label class="wallet-field">
-                <span>Path</span>
-                <input id="wallet-service-path" name="path" value="/x402/agent-services/research-summary" autocomplete="off" required />
-              </label>
-              <label class="wallet-field">
-                <span>Price Atomic</span>
-                <input id="wallet-service-price" name="priceAtomic" value="10000" autocomplete="off" required />
-              </label>
-              <button class="secondary" type="submit" data-wallet-button>Register</button>
-            </form>
-
-            <form class="wallet-form meta-box" id="wallet-call-service-form">
-              <h3 class="panel-title">Trigger Payment</h3>
-              <label class="wallet-field">
-                <span>Service</span>
-                <select id="wallet-service-select" name="serviceId" required></select>
-              </label>
-              <button class="primary" type="submit" data-wallet-button>Call x402</button>
             </form>
           </div>
         </section>
@@ -753,18 +710,8 @@
       const walletStateSummaryEl = document.getElementById("wallet-state-summary");
       const walletSignInButtonEl = document.getElementById("wallet-sign-in-button");
       const walletSignOutButtonEl = document.getElementById("wallet-sign-out-button");
-      const walletCreateFormEl = document.getElementById("wallet-create-form");
       const walletClaimFormEl = document.getElementById("wallet-claim-form");
-      const walletRegisterServiceFormEl = document.getElementById("wallet-register-service-form");
-      const walletCallServiceFormEl = document.getElementById("wallet-call-service-form");
-      const walletAgentNameEl = document.getElementById("wallet-agent-name");
-      const walletAgentDescriptionEl = document.getElementById("wallet-agent-description");
       const walletClaimCodeEl = document.getElementById("wallet-claim-code");
-      const walletAgentSelectEl = document.getElementById("wallet-agent-select");
-      const walletServiceNameEl = document.getElementById("wallet-service-name");
-      const walletServicePathEl = document.getElementById("wallet-service-path");
-      const walletServicePriceEl = document.getElementById("wallet-service-price");
-      const walletServiceSelectEl = document.getElementById("wallet-service-select");
 
       const GUARD_ACTION_LABELS = {
         "/autonomy/start": "启动理财子",
@@ -1153,38 +1100,6 @@
         warningsTextEl.textContent = warnings.length > 0 ? warnings.join("\n") : "No active warnings.";
       }
 
-      function selectedWalletAgentId() {
-        return walletAgentSelectEl.value || "";
-      }
-
-      function selectedWalletServiceId() {
-        return walletServiceSelectEl.value || "";
-      }
-
-      function setSelectOptions(selectEl, items, valueKey, labelBuilder, emptyLabel) {
-        const previousValue = selectEl.value;
-        selectEl.replaceChildren();
-
-        if (items.length === 0) {
-          const option = document.createElement("option");
-          option.value = "";
-          option.textContent = emptyLabel;
-          selectEl.appendChild(option);
-          return;
-        }
-
-        items.forEach((item) => {
-          const option = document.createElement("option");
-          option.value = item[valueKey];
-          option.textContent = labelBuilder(item);
-          selectEl.appendChild(option);
-        });
-
-        if (items.some((item) => item[valueKey] === previousValue)) {
-          selectEl.value = previousValue;
-        }
-      }
-
       function renderAgentWalletState(payload) {
         const owner = payload?.owner ?? null;
         const agents = Array.isArray(payload?.agents) ? payload.agents : [];
@@ -1195,21 +1110,6 @@
         walletAuthStateEl.textContent = owner ? `Signed in as ${owner.login}` : "Not signed in";
         walletSignInButtonEl.disabled = state.busy || Boolean(owner);
         walletSignOutButtonEl.disabled = state.busy || !owner;
-
-        setSelectOptions(
-          walletAgentSelectEl,
-          agents.filter((agent) => agent.claimStatus === "claimed"),
-          "agentId",
-          (agent) => `${agent.name} | ${agent.walletAddress}`,
-          "No claimed wallets",
-        );
-        setSelectOptions(
-          walletServiceSelectEl,
-          services,
-          "serviceId",
-          (service) => `${service.name} | ${service.priceAtomic}`,
-          "No services",
-        );
 
         const latestPayment = payments[payments.length - 1];
         walletStateSummaryEl.textContent = [
@@ -1379,27 +1279,6 @@
         }
       }
 
-      async function createAgentWallet(event) {
-        event.preventDefault();
-        setBusy(true, "Creating wallet");
-        try {
-          const payload = await walletApi("/agent-wallet/init", {
-            method: "POST",
-            body: JSON.stringify({
-              agentName: walletAgentNameEl.value.trim(),
-              agentDescription: walletAgentDescriptionEl.value.trim() || null,
-            }),
-          });
-          walletClaimCodeEl.value = payload.claimCode ?? "";
-          updateGuardResult("Agent Wallet created", payload);
-          await refreshAgentWalletState();
-        } catch (error) {
-          updateGuardResult("Agent Wallet create failed", error.message, true);
-        } finally {
-          setBusy(false);
-        }
-      }
-
       async function claimAgentWallet(event) {
         event.preventDefault();
         setBusy(true, "Claiming wallet");
@@ -1415,58 +1294,6 @@
           await refreshAgentWalletState();
         } catch (error) {
           updateGuardResult("Agent Wallet claim failed", error.message, true);
-        } finally {
-          setBusy(false);
-        }
-      }
-
-      async function registerAgentWalletService(event) {
-        event.preventDefault();
-        const agentId = selectedWalletAgentId();
-        if (!agentId) {
-          updateGuardResult("Service registration failed", "Select a claimed wallet first.", true);
-          return;
-        }
-
-        setBusy(true, "Registering service");
-        try {
-          const payload = await walletApi("/agent-wallet/register-service", {
-            method: "POST",
-            body: JSON.stringify({
-              agentId,
-              name: walletServiceNameEl.value.trim(),
-              path: walletServicePathEl.value.trim(),
-              priceAtomic: walletServicePriceEl.value.trim(),
-            }),
-          });
-          updateGuardResult("Agent Wallet service registered", payload);
-          await refreshAgentWalletState();
-        } catch (error) {
-          updateGuardResult("Service registration failed", error.message, true);
-        } finally {
-          setBusy(false);
-        }
-      }
-
-      async function callAgentWalletService(event) {
-        event.preventDefault();
-        const serviceId = selectedWalletServiceId();
-        if (!serviceId) {
-          updateGuardResult("x402 service call failed", "Select a registered service first.", true);
-          return;
-        }
-
-        setBusy(true, "Calling x402");
-        try {
-          const payload = await walletApi("/agent-wallet/call-service", {
-            method: "POST",
-            body: JSON.stringify({ serviceId }),
-          });
-          updateGuardResult("x402 service call complete", payload);
-          await refreshAgentWalletState();
-        } catch (error) {
-          updateGuardResult("x402 service call failed", error.message, true);
-          await refreshAgentWalletState();
         } finally {
           setBusy(false);
         }
@@ -1499,10 +1326,7 @@
         window.location.href = "/auth/github/login";
       });
       walletSignOutButtonEl.addEventListener("click", signOutWalletOwner);
-      walletCreateFormEl.addEventListener("submit", createAgentWallet);
       walletClaimFormEl.addEventListener("submit", claimAgentWallet);
-      walletRegisterServiceFormEl.addEventListener("submit", registerAgentWalletService);
-      walletCallServiceFormEl.addEventListener("submit", callAgentWalletService);
       composerEl.addEventListener("keydown", (event) => {
         if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
           event.preventDefault();

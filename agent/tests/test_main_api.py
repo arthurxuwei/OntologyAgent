@@ -1152,19 +1152,19 @@ class AgentWalletUiTests(unittest.TestCase):
         self.assertIn('id="wallet-state-summary"', html)
         self.assertIn('id="wallet-sign-in-button"', html)
         self.assertIn('id="wallet-sign-out-button"', html)
-        self.assertIn('id="wallet-create-form"', html)
         self.assertIn('id="wallet-claim-form"', html)
-        self.assertIn('id="wallet-register-service-form"', html)
-        self.assertIn('id="wallet-call-service-form"', html)
-        self.assertIn("function selectedWalletAgentId()", html)
-        self.assertIn("function selectedWalletServiceId()", html)
+        self.assertNotIn('id="wallet-create-form"', html)
+        self.assertNotIn('id="wallet-register-service-form"', html)
+        self.assertNotIn('id="wallet-call-service-form"', html)
+        self.assertNotIn("function selectedWalletAgentId()", html)
+        self.assertNotIn("function selectedWalletServiceId()", html)
         self.assertIn("async function walletApi(", html)
         self.assertIn("async function refreshAgentWalletState()", html)
         self.assertIn("/auth/session", html)
-        self.assertIn("/agent-wallet/init", html)
         self.assertIn("/agent-wallet/claim", html)
-        self.assertIn("/agent-wallet/register-service", html)
-        self.assertIn("/agent-wallet/call-service", html)
+        self.assertNotIn("/agent-wallet/init", html)
+        self.assertNotIn("/agent-wallet/register-service", html)
+        self.assertNotIn("/agent-wallet/call-service", html)
 
     def test_chat_page_agent_wallet_helpers_render_state_and_payloads(self) -> None:
         client = TestClient(main.app)
@@ -1207,27 +1207,21 @@ class AgentWalletUiTests(unittest.TestCase):
                 "(async () => {"
                 "eval(scriptText);"
                 "renderAgentWalletState({ owner: null, agents: [{ agentId: 'agent_unclaimed', name: 'Draft', walletAddress: '0x1', claimStatus: 'unclaimed' }], services: [], payments: [] });"
-                "const unclaimedSelection = selectedWalletAgentId();"
                 "renderAgentWalletState({"
                 "owner: { login: 'octocat' },"
                 "agents: [{ agentId: 'agent_claimed', name: 'Research Agent', walletAddress: '0x2', claimStatus: 'claimed' }],"
                 "services: [{ serviceId: 'service_1', name: 'Research Summary', priceAtomic: '10000' }],"
                 "payments: [{ status: 'settled', txHash: '0xsettled' }]"
                 "});"
-                "await walletApi('/agent-wallet/init', { method: 'POST', body: JSON.stringify({ agentName: 'Research Agent' }) });"
                 "process.stdout.write(JSON.stringify({"
-                "unclaimedSelection,"
-                "claimedSelection: selectedWalletAgentId(),"
-                "serviceSelection: selectedWalletServiceId(),"
                 "summary: elements.get('wallet-state-summary').textContent,"
                 "authState: elements.get('wallet-auth-state').textContent,"
                 "signInDisabled: elements.get('wallet-sign-in-button').disabled,"
                 "signOutDisabled: elements.get('wallet-sign-out-button').disabled,"
-                "createListener: listeners.get('wallet-create-form:submit'),"
                 "claimListener: listeners.get('wallet-claim-form:submit'),"
-                "registerListener: listeners.get('wallet-register-service-form:submit'),"
-                "callListener: listeners.get('wallet-call-service-form:submit'),"
-                "initCall: fetchCalls.find((call) => call.url === '/agent-wallet/init')"
+                "initCall: fetchCalls.find((call) => call.url === '/agent-wallet/init') ?? null,"
+                "registerCall: fetchCalls.find((call) => call.url === '/agent-wallet/register-service') ?? null,"
+                "paymentCall: fetchCalls.find((call) => call.url === '/agent-wallet/call-service') ?? null"
                 "}));"
                 "})().catch((error) => { console.error(error); process.exit(1); });",
             ],
@@ -1237,26 +1231,15 @@ class AgentWalletUiTests(unittest.TestCase):
         )
         self.assertEqual(node_result.returncode, 0, node_result.stderr)
         helper_output = json.loads(node_result.stdout)
-        self.assertEqual(helper_output["unclaimedSelection"], "")
-        self.assertEqual(helper_output["claimedSelection"], "agent_claimed")
-        self.assertEqual(helper_output["serviceSelection"], "service_1")
         self.assertIn("Owner: octocat", helper_output["summary"])
         self.assertIn("Latest Payment: settled 0xsettled", helper_output["summary"])
         self.assertEqual(helper_output["authState"], "Signed in as octocat")
         self.assertTrue(helper_output["signInDisabled"])
         self.assertFalse(helper_output["signOutDisabled"])
-        self.assertEqual(helper_output["createListener"], "createAgentWallet")
         self.assertEqual(helper_output["claimListener"], "claimAgentWallet")
-        self.assertEqual(
-            helper_output["registerListener"],
-            "registerAgentWalletService",
-        )
-        self.assertEqual(helper_output["callListener"], "callAgentWalletService")
-        self.assertEqual(helper_output["initCall"]["method"], "POST")
-        self.assertEqual(
-            helper_output["initCall"]["headers"]["content-type"],
-            "application/json",
-        )
+        self.assertIsNone(helper_output["initCall"])
+        self.assertIsNone(helper_output["registerCall"])
+        self.assertIsNone(helper_output["paymentCall"])
 
 
 class MainApiTests(unittest.TestCase):
