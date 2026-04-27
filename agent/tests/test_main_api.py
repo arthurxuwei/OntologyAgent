@@ -1105,6 +1105,288 @@ class AgentWalletServicePaymentApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 403)
 
 
+class FakeLedgerClient:
+    def __init__(self, state: dict[str, object] | None = None) -> None:
+        self.state = state or {"accounts": [], "entries": [], "escrows": []}
+        self.calls: list[tuple[str, dict[str, object]]] = []
+
+    async def get_state(self) -> dict[str, object]:
+        self.calls.append(("get_state", {}))
+        return self.state
+
+    async def credit_balance(
+        self, agent_id: str, *, amount_atomic: str, reason: str | None = None
+    ) -> dict[str, object]:
+        self.calls.append(
+            (
+                "credit_balance",
+                {
+                    "agent_id": agent_id,
+                    "amount_atomic": amount_atomic,
+                    "reason": reason,
+                },
+            )
+        )
+        return {"account": {"agentId": agent_id, "availableAtomic": amount_atomic}}
+
+    async def create_escrow(
+        self,
+        *,
+        buyer_agent_id: str,
+        seller_agent_id: str,
+        amount_atomic: str,
+        task_id: str | None = None,
+        description: str | None = None,
+    ) -> dict[str, object]:
+        self.calls.append(
+            (
+                "create_escrow",
+                {
+                    "buyer_agent_id": buyer_agent_id,
+                    "seller_agent_id": seller_agent_id,
+                    "amount_atomic": amount_atomic,
+                    "task_id": task_id,
+                    "description": description,
+                },
+            )
+        )
+        return {"escrow": {"escrowId": "escrow_1", "status": "locked"}}
+
+    async def release_escrow(self, escrow_id: str) -> dict[str, object]:
+        self.calls.append(("release_escrow", {"escrow_id": escrow_id}))
+        return {"escrow": {"escrowId": escrow_id, "status": "released"}}
+
+    async def refund_escrow(self, escrow_id: str) -> dict[str, object]:
+        self.calls.append(("refund_escrow", {"escrow_id": escrow_id}))
+        return {"escrow": {"escrowId": escrow_id, "status": "refunded"}}
+
+
+class AgentWalletLedgerApiTests(unittest.TestCase):
+    def setUp(self) -> None:
+        main.get_agent_wallet_store.cache_clear()
+        main.get_ledger_client.cache_clear()
+
+    def test_ledger_state_filters_to_visible_agents(self) -> None:
+        ledger_client = FakeLedgerClient(
+            {
+                "accounts": [
+                    {"agentId": "agent_owned", "availableAtomic": "5000000"},
+                    {"agentId": "agent_other", "availableAtomic": "9000000"},
+                ],
+                "entries": [
+                    {"entryId": "entry_owned", "agentId": "agent_owned"},
+                    {"entryId": "entry_other", "agentId": "agent_other"},
+                ],
+                "escrows": [
+                    {
+                        "escrowId": "escrow_owned",
+                        "buyerAgentId": "agent_owned",
+                        "sellerAgentId": "agent_other",
+                    },
+                    {
+                        "escrowId": "escrow_other",
+                        "buyerAgentId": "agent_other",
+                        "sellerAgentId": "agent_other",
+                    },
+                ],
+            }
+        )
+        with tempfile.TemporaryDirectory() as temp_dir, patch.dict(
+            "os.environ", {"AUTH_SESSION_SECRET": "test-secret"}, clear=False
+        ), patch.object(main, "get_ledger_client", return_value=ledger_client):
+            main.AGENT_WALLET_STATE_PATH = os.path.join(temp_dir, "state.json")
+            owner = Owner(
+                ownerId="owner_1",
+                provider="github",
+                providerUserId="123",
+                login="octocat",
+                createdAt="2026-01-01T00:00:00+00:00",
+                updatedAt="2026-01-01T00:00:00+00:00",
+            )
+            state = AgentWalletState(
+                owners=[owner],
+                agents=[
+                    AgentRecord(
+                        agentId="agent_owned",
+                        name="Owned",
+                        ownerId="owner_1",
+                        walletId="wallet_1",
+                        walletAddress="0x1",
+                        claimStatus="claimed",
+                        createdAt="2026-01-01T00:00:00+00:00",
+                        updatedAt="2026-01-01T00:00:00+00:00",
+                    )
+                ],
+            )
+            main.get_agent_wallet_store().save(state)
+            client = TestClient(main.app)
+            client.cookies.set(
+                main.SESSION_COOKIE,
+                sign_session({"ownerId": "owner_1"}),
+            )
+
+            response = client.get("/agent-wallet/ledger/state")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual([item["agentId"] for item in body["accounts"]], ["agent_owned"])
+        self.assertEqual([item["entryId"] for item in body["entries"]], ["entry_owned"])
+        self.assertEqual([item["escrowId"] for item in body["escrows"]], ["escrow_owned"])
+
+    def test_ledger_credit_requires_owned_claimed_agent(self) -> None:
+        ledger_client = FakeLedgerClient()
+        with tempfile.TemporaryDirectory() as temp_dir, patch.dict(
+            "os.environ", {"AUTH_SESSION_SECRET": "test-secret"}, clear=False
+        ), patch.object(main, "get_ledger_client", return_value=ledger_client):
+            main.AGENT_WALLET_STATE_PATH = os.path.join(temp_dir, "state.json")
+            owner = Owner(
+                ownerId="owner_1",
+                provider="github",
+                providerUserId="123",
+                login="octocat",
+                createdAt="2026-01-01T00:00:00+00:00",
+                updatedAt="2026-01-01T00:00:00+00:00",
+            )
+            state = AgentWalletState(
+                owners=[owner],
+                agents=[
+                    AgentRecord(
+                        agentId="agent_owned",
+                        name="Owned",
+                        ownerId="owner_1",
+                        walletId="wallet_1",
+                        walletAddress="0x1",
+                        claimStatus="claimed",
+                        createdAt="2026-01-01T00:00:00+00:00",
+                        updatedAt="2026-01-01T00:00:00+00:00",
+                    )
+                ],
+            )
+            main.get_agent_wallet_store().save(state)
+            client = TestClient(main.app)
+            client.cookies.set(
+                main.SESSION_COOKIE,
+                sign_session({"ownerId": "owner_1"}),
+            )
+
+            response = client.post(
+                "/agent-wallet/ledger/credit",
+                json={
+                    "agentId": "agent_owned",
+                    "amountAtomic": "5000000",
+                    "reason": "demo funding",
+                },
+            )
+            denied = client.post(
+                "/agent-wallet/ledger/credit",
+                json={"agentId": "agent_missing", "amountAtomic": "1"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            ledger_client.calls[0],
+            (
+                "credit_balance",
+                {
+                    "agent_id": "agent_owned",
+                    "amount_atomic": "5000000",
+                    "reason": "demo funding",
+                },
+            ),
+        )
+        self.assertEqual(denied.status_code, 404)
+
+    def test_ledger_escrow_actions_proxy_to_ledger_service(self) -> None:
+        ledger_client = FakeLedgerClient(
+            {
+                "accounts": [],
+                "entries": [],
+                "escrows": [
+                    {
+                        "escrowId": "escrow_1",
+                        "buyerAgentId": "agent_buyer",
+                        "sellerAgentId": "agent_seller",
+                    }
+                ],
+            }
+        )
+        with tempfile.TemporaryDirectory() as temp_dir, patch.dict(
+            "os.environ", {"AUTH_SESSION_SECRET": "test-secret"}, clear=False
+        ), patch.object(main, "get_ledger_client", return_value=ledger_client):
+            main.AGENT_WALLET_STATE_PATH = os.path.join(temp_dir, "state.json")
+            owner = Owner(
+                ownerId="owner_1",
+                provider="github",
+                providerUserId="123",
+                login="octocat",
+                createdAt="2026-01-01T00:00:00+00:00",
+                updatedAt="2026-01-01T00:00:00+00:00",
+            )
+            state = AgentWalletState(
+                owners=[owner],
+                agents=[
+                    AgentRecord(
+                        agentId="agent_buyer",
+                        name="Buyer",
+                        ownerId="owner_1",
+                        walletId="wallet_1",
+                        walletAddress="0x1",
+                        claimStatus="claimed",
+                        createdAt="2026-01-01T00:00:00+00:00",
+                        updatedAt="2026-01-01T00:00:00+00:00",
+                    ),
+                    AgentRecord(
+                        agentId="agent_seller",
+                        name="Seller",
+                        ownerId="owner_1",
+                        walletId="wallet_2",
+                        walletAddress="0x2",
+                        claimStatus="claimed",
+                        createdAt="2026-01-01T00:00:00+00:00",
+                        updatedAt="2026-01-01T00:00:00+00:00",
+                    ),
+                ],
+            )
+            main.get_agent_wallet_store().save(state)
+            client = TestClient(main.app)
+            client.cookies.set(
+                main.SESSION_COOKIE,
+                sign_session({"ownerId": "owner_1"}),
+            )
+
+            created = client.post(
+                "/agent-wallet/ledger/escrows",
+                json={
+                    "buyerAgentId": "agent_buyer",
+                    "sellerAgentId": "agent_seller",
+                    "amountAtomic": "3000000",
+                    "taskId": "task_123",
+                    "description": "Research task",
+                },
+            )
+            released = client.post("/agent-wallet/ledger/escrows/escrow_1/release")
+            refunded = client.post("/agent-wallet/ledger/escrows/escrow_1/refund")
+
+        self.assertEqual(created.status_code, 200)
+        self.assertEqual(released.status_code, 200)
+        self.assertEqual(refunded.status_code, 200)
+        self.assertIn(
+            (
+                "create_escrow",
+                {
+                    "buyer_agent_id": "agent_buyer",
+                    "seller_agent_id": "agent_seller",
+                    "amount_atomic": "3000000",
+                    "task_id": "task_123",
+                    "description": "Research task",
+                },
+            ),
+            ledger_client.calls,
+        )
+        self.assertIn(("release_escrow", {"escrow_id": "escrow_1"}), ledger_client.calls)
+        self.assertIn(("refund_escrow", {"escrow_id": "escrow_1"}), ledger_client.calls)
+
+
 class AgentWalletResetApiTests(unittest.TestCase):
     def setUp(self) -> None:
         main.get_agent_wallet_store.cache_clear()
@@ -1156,8 +1438,13 @@ class AgentWalletUiTests(unittest.TestCase):
         self.assertIn('id="wallet-claim-form"', html)
         self.assertIn('id="wallet-register-service-form"', html)
         self.assertIn('id="wallet-call-service-form"', html)
+        self.assertIn('id="wallet-ledger-summary"', html)
+        self.assertIn('id="wallet-ledger-credit-form"', html)
+        self.assertIn('id="wallet-ledger-create-escrow-form"', html)
+        self.assertIn('id="wallet-ledger-action-form"', html)
         self.assertIn("function selectedWalletAgentId()", html)
         self.assertIn("function selectedWalletServiceId()", html)
+        self.assertIn("function selectedWalletLedgerEscrowId()", html)
         self.assertIn("async function walletApi(", html)
         self.assertIn("async function refreshAgentWalletState()", html)
         self.assertIn("/auth/session", html)
@@ -1165,6 +1452,9 @@ class AgentWalletUiTests(unittest.TestCase):
         self.assertIn("/agent-wallet/claim", html)
         self.assertIn("/agent-wallet/register-service", html)
         self.assertIn("/agent-wallet/call-service", html)
+        self.assertIn("/agent-wallet/ledger/state", html)
+        self.assertIn("/agent-wallet/ledger/credit", html)
+        self.assertIn("/agent-wallet/ledger/escrows", html)
 
     def test_chat_page_agent_wallet_helpers_render_state_and_payloads(self) -> None:
         client = TestClient(main.app)
@@ -1201,6 +1491,7 @@ class AgentWalletUiTests(unittest.TestCase):
                 "if (url === '/health') return { ok: true, json: async () => ({}) };"
                 "if (url === '/auth/session') return { ok: true, json: async () => ({ authenticated: true, owner: { login: 'octocat' } }) };"
                 "if (url === '/agent-wallet/state') return { ok: true, json: async () => ({ owner: { login: 'octocat' }, agents: [], services: [], payments: [] }) };"
+                "if (url === '/agent-wallet/ledger/state') return { ok: true, json: async () => ({ accounts: [], entries: [], escrows: [] }) };"
                 "return { ok: true, json: async () => ({ ok: true }) };"
                 "};"
                 "global.setInterval = () => 0;"
@@ -1212,14 +1503,29 @@ class AgentWalletUiTests(unittest.TestCase):
                 "owner: { login: 'octocat' },"
                 "agents: [{ agentId: 'agent_claimed', name: 'Research Agent', walletAddress: '0x2', claimStatus: 'claimed' }],"
                 "services: [{ serviceId: 'service_1', name: 'Research Summary', priceAtomic: '10000' }],"
-                "payments: [{ status: 'settled', txHash: '0xsettled' }]"
+                "payments: [{ status: 'settled', txHash: '0xsettled' }],"
+                "ledger: {"
+                "accounts: [{ agentId: 'agent_claimed', availableAtomic: '5000000', lockedAtomic: '3000000' }],"
+                "entries: [{ entryId: 'entry_1', entryType: 'credit' }],"
+                "escrows: [{ escrowId: 'escrow_1', buyerAgentId: 'agent_claimed', sellerAgentId: 'agent_claimed', amountAtomic: '3000000', status: 'locked' }]"
+                "}"
                 "});"
+                "const claimedSelection = selectedWalletAgentId();"
+                "const serviceSelection = selectedWalletServiceId();"
+                "const ledgerEscrowSelection = selectedWalletLedgerEscrowId();"
+                "const summary = elements.get('wallet-state-summary').textContent;"
+                "const ledgerSummary = elements.get('wallet-ledger-summary').textContent;"
+                "elements.get('wallet-ledger-credit-amount').value = '5000000';"
+                "elements.get('wallet-ledger-credit-reason').value = 'demo funding';"
+                "await creditLedgerBalance({ preventDefault() {} });"
                 "await walletApi('/agent-wallet/init', { method: 'POST', body: JSON.stringify({ agentName: 'Research Agent' }) });"
                 "process.stdout.write(JSON.stringify({"
                 "unclaimedSelection,"
-                "claimedSelection: selectedWalletAgentId(),"
-                "serviceSelection: selectedWalletServiceId(),"
-                "summary: elements.get('wallet-state-summary').textContent,"
+                "claimedSelection,"
+                "serviceSelection,"
+                "ledgerEscrowSelection,"
+                "summary,"
+                "ledgerSummary,"
                 "authState: elements.get('wallet-auth-state').textContent,"
                 "signInDisabled: elements.get('wallet-sign-in-button').disabled,"
                 "signOutDisabled: elements.get('wallet-sign-out-button').disabled,"
@@ -1227,7 +1533,10 @@ class AgentWalletUiTests(unittest.TestCase):
                 "claimListener: listeners.get('wallet-claim-form:submit'),"
                 "registerListener: listeners.get('wallet-register-service-form:submit'),"
                 "callListener: listeners.get('wallet-call-service-form:submit'),"
+                "creditLedgerListener: listeners.get('wallet-ledger-credit-form:submit'),"
+                "createEscrowListener: listeners.get('wallet-ledger-create-escrow-form:submit'),"
                 "initCall: fetchCalls.find((call) => call.url === '/agent-wallet/init')"
+                ", creditLedgerCall: fetchCalls.find((call) => call.url === '/agent-wallet/ledger/credit')"
                 "}));"
                 "})().catch((error) => { console.error(error); process.exit(1); });",
             ],
@@ -1240,8 +1549,12 @@ class AgentWalletUiTests(unittest.TestCase):
         self.assertEqual(helper_output["unclaimedSelection"], "")
         self.assertEqual(helper_output["claimedSelection"], "agent_claimed")
         self.assertEqual(helper_output["serviceSelection"], "service_1")
+        self.assertEqual(helper_output["ledgerEscrowSelection"], "escrow_1")
         self.assertIn("Owner: octocat", helper_output["summary"])
         self.assertIn("Latest Payment: settled 0xsettled", helper_output["summary"])
+        self.assertIn("Accounts: 1", helper_output["ledgerSummary"])
+        self.assertIn("Escrows: 1", helper_output["ledgerSummary"])
+        self.assertIn("Latest Escrow: locked escrow_1", helper_output["ledgerSummary"])
         self.assertEqual(helper_output["authState"], "Signed in as octocat")
         self.assertTrue(helper_output["signInDisabled"])
         self.assertFalse(helper_output["signOutDisabled"])
@@ -1252,10 +1565,21 @@ class AgentWalletUiTests(unittest.TestCase):
             "registerAgentWalletService",
         )
         self.assertEqual(helper_output["callListener"], "callAgentWalletService")
+        self.assertEqual(helper_output["creditLedgerListener"], "creditLedgerBalance")
+        self.assertEqual(helper_output["createEscrowListener"], "createLedgerEscrow")
         self.assertEqual(helper_output["initCall"]["method"], "POST")
         self.assertEqual(
             helper_output["initCall"]["headers"]["content-type"],
             "application/json",
+        )
+        self.assertEqual(helper_output["creditLedgerCall"]["method"], "POST")
+        self.assertEqual(
+            json.loads(helper_output["creditLedgerCall"]["body"]),
+            {
+                "agentId": "agent_claimed",
+                "amountAtomic": "5000000",
+                "reason": "demo funding",
+            },
         )
 
 

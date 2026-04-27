@@ -179,6 +179,24 @@ class AgentWalletCallServiceRequest(BaseModel):
     serviceId: str = Field(min_length=1)
 
 
+class AgentWalletLedgerCreditRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    agentId: str = Field(min_length=1)
+    amountAtomic: str = Field(min_length=1, pattern=r"^[1-9]\d*$")
+    reason: Optional[str] = None
+
+
+class AgentWalletLedgerCreateEscrowRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    buyerAgentId: str = Field(min_length=1)
+    sellerAgentId: str = Field(min_length=1)
+    amountAtomic: str = Field(min_length=1, pattern=r"^[1-9]\d*$")
+    taskId: Optional[str] = None
+    description: Optional[str] = None
+
+
 class LedgerCreditIntent(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
@@ -507,6 +525,47 @@ def _owner_agent_or_404(state: Any, agent_id: str, owner_id: str) -> Any:
     if agent.ownerId != owner_id or agent.claimStatus != "claimed":
         raise HTTPException(status_code=403, detail="agent wallet is not claimed by owner")
     return agent
+
+
+def _ledger_state_for_visible_agents(
+    ledger_state: dict[str, Any],
+    visible_agent_ids: set[str],
+) -> dict[str, Any]:
+    accounts = [
+        item
+        for item in ledger_state.get("accounts", [])
+        if isinstance(item, dict) and item.get("agentId") in visible_agent_ids
+    ]
+    entries = [
+        item
+        for item in ledger_state.get("entries", [])
+        if isinstance(item, dict) and item.get("agentId") in visible_agent_ids
+    ]
+    escrows = [
+        item
+        for item in ledger_state.get("escrows", [])
+        if isinstance(item, dict)
+        and (
+            item.get("buyerAgentId") in visible_agent_ids
+            or item.get("sellerAgentId") in visible_agent_ids
+        )
+    ]
+    return {"accounts": accounts, "entries": entries, "escrows": escrows}
+
+
+async def _ledger_state_payload() -> dict[str, Any]:
+    try:
+        return await get_ledger_client().get_state()
+    except LedgerClientError as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+
+
+async def _ledger_escrow_or_404(escrow_id: str) -> dict[str, Any]:
+    ledger_state = await _ledger_state_payload()
+    for escrow in ledger_state.get("escrows", []):
+        if isinstance(escrow, dict) and escrow.get("escrowId") == escrow_id:
+            return escrow
+    raise HTTPException(status_code=404, detail="escrow not found")
 
 
 @lru_cache(maxsize=1)
@@ -1818,6 +1877,87 @@ async def agent_wallet_call_service(
             },
         ) from call_error
     return {"payment": payment.model_dump(), "result": result}
+
+
+@app.get("/agent-wallet/ledger/state")
+async def agent_wallet_ledger_state(
+    session_cookie: Optional[str] = Cookie(default=None, alias=SESSION_COOKIE)
+) -> dict[str, Any]:
+    owner = resolve_current_owner(session_cookie)
+    owner_id = owner["ownerId"] if owner else None
+    wallet_state = get_agent_wallet_store().load()
+    visible_agent_ids = _visible_agent_ids_for_owner(wallet_state, owner_id)
+    ledger_state = await _ledger_state_payload()
+    return _ledger_state_for_visible_agents(ledger_state, visible_agent_ids)
+
+
+@app.post("/agent-wallet/ledger/credit")
+async def agent_wallet_ledger_credit(
+    request: AgentWalletLedgerCreditRequest,
+    session_cookie: Optional[str] = Cookie(default=None, alias=SESSION_COOKIE),
+) -> dict[str, Any]:
+    owner_id = _require_owner_id(session_cookie, action="credit an Agent Wallet ledger account")
+    wallet_state = get_agent_wallet_store().load()
+    _owner_agent_or_404(wallet_state, request.agentId, owner_id)
+    try:
+        return await get_ledger_client().credit_balance(
+            request.agentId,
+            amount_atomic=request.amountAtomic,
+            reason=request.reason,
+        )
+    except LedgerClientError as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+
+
+@app.post("/agent-wallet/ledger/escrows")
+async def agent_wallet_ledger_create_escrow(
+    request: AgentWalletLedgerCreateEscrowRequest,
+    session_cookie: Optional[str] = Cookie(default=None, alias=SESSION_COOKIE),
+) -> dict[str, Any]:
+    owner_id = _require_owner_id(session_cookie, action="create an Agent Wallet escrow")
+    wallet_state = get_agent_wallet_store().load()
+    _owner_agent_or_404(wallet_state, request.buyerAgentId, owner_id)
+    _owner_agent_or_404(wallet_state, request.sellerAgentId, owner_id)
+    try:
+        return await get_ledger_client().create_escrow(
+            buyer_agent_id=request.buyerAgentId,
+            seller_agent_id=request.sellerAgentId,
+            amount_atomic=request.amountAtomic,
+            task_id=request.taskId,
+            description=request.description,
+        )
+    except LedgerClientError as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+
+
+@app.post("/agent-wallet/ledger/escrows/{escrow_id}/release")
+async def agent_wallet_ledger_release_escrow(
+    escrow_id: str,
+    session_cookie: Optional[str] = Cookie(default=None, alias=SESSION_COOKIE),
+) -> dict[str, Any]:
+    owner_id = _require_owner_id(session_cookie, action="release an Agent Wallet escrow")
+    wallet_state = get_agent_wallet_store().load()
+    escrow = await _ledger_escrow_or_404(escrow_id)
+    _owner_agent_or_404(wallet_state, str(escrow.get("buyerAgentId")), owner_id)
+    try:
+        return await get_ledger_client().release_escrow(escrow_id)
+    except LedgerClientError as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+
+
+@app.post("/agent-wallet/ledger/escrows/{escrow_id}/refund")
+async def agent_wallet_ledger_refund_escrow(
+    escrow_id: str,
+    session_cookie: Optional[str] = Cookie(default=None, alias=SESSION_COOKIE),
+) -> dict[str, Any]:
+    owner_id = _require_owner_id(session_cookie, action="refund an Agent Wallet escrow")
+    wallet_state = get_agent_wallet_store().load()
+    escrow = await _ledger_escrow_or_404(escrow_id)
+    _owner_agent_or_404(wallet_state, str(escrow.get("buyerAgentId")), owner_id)
+    try:
+        return await get_ledger_client().refund_escrow(escrow_id)
+    except LedgerClientError as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
 
 
 @app.post("/agent-wallet/reset")

@@ -382,6 +382,21 @@ Agent Wallet MVP 在现有 Web Console 中增加了一个 `Agent Wallet MVP` 面
 
 注意：Agent Wallet 的 x402 demo payment 记录仍存储在 `agent` 的 demo state 中；撮合型 A2A 的内部余额和 Escrow 状态由独立 `ledger` 服务负责。
 
+Web Console 的 `Agent Wallet MVP` 面板也提供 Ledger 验证区，可以直接执行：
+
+- 给已 claim 的 Agent 记一笔 demo credit
+- 创建 buyer → seller 的 escrow
+- 对 escrow 执行 release
+- 对 escrow 执行 refund
+
+浏览器不会直接访问 Docker 内部的 `ledger:8092`。页面会调用 `agent` 代理接口，再由 `agent` 访问独立 `ledger` 服务：
+
+- `GET /agent-wallet/ledger/state`
+- `POST /agent-wallet/ledger/credit`
+- `POST /agent-wallet/ledger/escrows`
+- `POST /agent-wallet/ledger/escrows/{escrowId}/release`
+- `POST /agent-wallet/ledger/escrows/{escrowId}/refund`
+
 最小配置：
 
 - `GITHUB_CLIENT_ID`

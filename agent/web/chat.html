@@ -689,6 +689,62 @@
               <button class="primary" type="submit" data-wallet-button>Call x402</button>
             </form>
           </div>
+
+          <div class="wallet-summary" id="wallet-ledger-summary">Loading ledger state…</div>
+
+          <div class="wallet-grid">
+            <form class="wallet-form meta-box" id="wallet-ledger-credit-form">
+              <h3 class="panel-title">Credit Ledger</h3>
+              <label class="wallet-field">
+                <span>Agent</span>
+                <select id="wallet-ledger-credit-agent-select" name="agentId" required></select>
+              </label>
+              <label class="wallet-field">
+                <span>Amount Atomic</span>
+                <input id="wallet-ledger-credit-amount" name="amountAtomic" value="5000000" autocomplete="off" required />
+              </label>
+              <label class="wallet-field">
+                <span>Reason</span>
+                <input id="wallet-ledger-credit-reason" name="reason" value="demo funding" autocomplete="off" />
+              </label>
+              <button class="secondary" type="submit" data-wallet-button>Credit</button>
+            </form>
+
+            <form class="wallet-form meta-box" id="wallet-ledger-create-escrow-form">
+              <h3 class="panel-title">Create Escrow</h3>
+              <label class="wallet-field">
+                <span>Buyer</span>
+                <select id="wallet-ledger-buyer-select" name="buyerAgentId" required></select>
+              </label>
+              <label class="wallet-field">
+                <span>Seller</span>
+                <select id="wallet-ledger-seller-select" name="sellerAgentId" required></select>
+              </label>
+              <label class="wallet-field">
+                <span>Amount Atomic</span>
+                <input id="wallet-ledger-escrow-amount" name="amountAtomic" value="3000000" autocomplete="off" required />
+              </label>
+              <label class="wallet-field">
+                <span>Task ID</span>
+                <input id="wallet-ledger-task-id" name="taskId" value="task_demo" autocomplete="off" />
+              </label>
+              <label class="wallet-field">
+                <span>Description</span>
+                <input id="wallet-ledger-description" name="description" value="Research task" autocomplete="off" />
+              </label>
+              <button class="primary" type="submit" data-wallet-button>Create Escrow</button>
+            </form>
+
+            <form class="wallet-form meta-box" id="wallet-ledger-action-form">
+              <h3 class="panel-title">Settle Escrow</h3>
+              <label class="wallet-field">
+                <span>Escrow</span>
+                <select id="wallet-ledger-escrow-select" name="escrowId" required></select>
+              </label>
+              <button class="primary" type="button" id="wallet-ledger-release-button" data-wallet-button>Release</button>
+              <button class="ghost" type="button" id="wallet-ledger-refund-button" data-wallet-button>Refund</button>
+            </form>
+          </div>
         </section>
 
         <section class="card chat-panel">
@@ -729,6 +785,11 @@
           agents: [],
           services: [],
           payments: [],
+          ledger: {
+            accounts: [],
+            entries: [],
+            escrows: [],
+          },
         },
       };
 
@@ -757,6 +818,10 @@
       const walletClaimFormEl = document.getElementById("wallet-claim-form");
       const walletRegisterServiceFormEl = document.getElementById("wallet-register-service-form");
       const walletCallServiceFormEl = document.getElementById("wallet-call-service-form");
+      const walletLedgerSummaryEl = document.getElementById("wallet-ledger-summary");
+      const walletLedgerCreditFormEl = document.getElementById("wallet-ledger-credit-form");
+      const walletLedgerCreateEscrowFormEl = document.getElementById("wallet-ledger-create-escrow-form");
+      const walletLedgerActionFormEl = document.getElementById("wallet-ledger-action-form");
       const walletAgentNameEl = document.getElementById("wallet-agent-name");
       const walletAgentDescriptionEl = document.getElementById("wallet-agent-description");
       const walletClaimCodeEl = document.getElementById("wallet-claim-code");
@@ -765,6 +830,17 @@
       const walletServicePathEl = document.getElementById("wallet-service-path");
       const walletServicePriceEl = document.getElementById("wallet-service-price");
       const walletServiceSelectEl = document.getElementById("wallet-service-select");
+      const walletLedgerCreditAgentSelectEl = document.getElementById("wallet-ledger-credit-agent-select");
+      const walletLedgerCreditAmountEl = document.getElementById("wallet-ledger-credit-amount");
+      const walletLedgerCreditReasonEl = document.getElementById("wallet-ledger-credit-reason");
+      const walletLedgerBuyerSelectEl = document.getElementById("wallet-ledger-buyer-select");
+      const walletLedgerSellerSelectEl = document.getElementById("wallet-ledger-seller-select");
+      const walletLedgerEscrowAmountEl = document.getElementById("wallet-ledger-escrow-amount");
+      const walletLedgerTaskIdEl = document.getElementById("wallet-ledger-task-id");
+      const walletLedgerDescriptionEl = document.getElementById("wallet-ledger-description");
+      const walletLedgerEscrowSelectEl = document.getElementById("wallet-ledger-escrow-select");
+      const walletLedgerReleaseButtonEl = document.getElementById("wallet-ledger-release-button");
+      const walletLedgerRefundButtonEl = document.getElementById("wallet-ledger-refund-button");
 
       const GUARD_ACTION_LABELS = {
         "/autonomy/start": "启动理财子",
@@ -1154,11 +1230,15 @@
       }
 
       function selectedWalletAgentId() {
-        return walletAgentSelectEl.value || "";
+        return walletAgentSelectEl.value || walletAgentSelectEl.children?.[0]?.value || "";
       }
 
       function selectedWalletServiceId() {
-        return walletServiceSelectEl.value || "";
+        return walletServiceSelectEl.value || walletServiceSelectEl.children?.[0]?.value || "";
+      }
+
+      function selectedWalletLedgerEscrowId() {
+        return walletLedgerEscrowSelectEl.value || walletLedgerEscrowSelectEl.children?.[0]?.value || "";
       }
 
       function setSelectOptions(selectEl, items, valueKey, labelBuilder, emptyLabel) {
@@ -1182,6 +1262,8 @@
 
         if (items.some((item) => item[valueKey] === previousValue)) {
           selectEl.value = previousValue;
+        } else {
+          selectEl.value = items[0][valueKey];
         }
       }
 
@@ -1190,17 +1272,43 @@
         const agents = Array.isArray(payload?.agents) ? payload.agents : [];
         const services = Array.isArray(payload?.services) ? payload.services : [];
         const payments = Array.isArray(payload?.payments) ? payload.payments : [];
+        const ledger = payload?.ledger ?? {};
+        const ledgerAccounts = Array.isArray(ledger.accounts) ? ledger.accounts : [];
+        const ledgerEntries = Array.isArray(ledger.entries) ? ledger.entries : [];
+        const ledgerEscrows = Array.isArray(ledger.escrows) ? ledger.escrows : [];
+        const claimedAgents = agents.filter((agent) => agent.claimStatus === "claimed");
 
-        state.wallet = { owner, agents, services, payments };
+        state.wallet = { owner, agents, services, payments, ledger: { accounts: ledgerAccounts, entries: ledgerEntries, escrows: ledgerEscrows } };
         walletAuthStateEl.textContent = owner ? `Signed in as ${owner.login}` : "Not signed in";
         walletSignInButtonEl.disabled = state.busy || Boolean(owner);
         walletSignOutButtonEl.disabled = state.busy || !owner;
 
         setSelectOptions(
           walletAgentSelectEl,
-          agents.filter((agent) => agent.claimStatus === "claimed"),
+          claimedAgents,
           "agentId",
           (agent) => `${agent.name} | ${agent.walletAddress}`,
+          "No claimed wallets",
+        );
+        setSelectOptions(
+          walletLedgerCreditAgentSelectEl,
+          claimedAgents,
+          "agentId",
+          (agent) => `${agent.name} | ${agent.agentId}`,
+          "No claimed wallets",
+        );
+        setSelectOptions(
+          walletLedgerBuyerSelectEl,
+          claimedAgents,
+          "agentId",
+          (agent) => `${agent.name} | ${agent.agentId}`,
+          "No claimed wallets",
+        );
+        setSelectOptions(
+          walletLedgerSellerSelectEl,
+          claimedAgents,
+          "agentId",
+          (agent) => `${agent.name} | ${agent.agentId}`,
           "No claimed wallets",
         );
         setSelectOptions(
@@ -1210,14 +1318,28 @@
           (service) => `${service.name} | ${service.priceAtomic}`,
           "No services",
         );
+        setSelectOptions(
+          walletLedgerEscrowSelectEl,
+          ledgerEscrows,
+          "escrowId",
+          (escrow) => `${escrow.status} | ${escrow.escrowId} | ${escrow.amountAtomic}`,
+          "No escrows",
+        );
 
         const latestPayment = payments[payments.length - 1];
+        const latestEscrow = ledgerEscrows[ledgerEscrows.length - 1];
         walletStateSummaryEl.textContent = [
           `Owner: ${owner ? owner.login : "anonymous"}`,
           `Wallets: ${agents.length}`,
           `Services: ${services.length}`,
           `Payments: ${payments.length}`,
           `Latest Payment: ${latestPayment ? `${latestPayment.status} ${latestPayment.txHash ?? ""}`.trim() : "none"}`,
+        ].join("\n");
+        walletLedgerSummaryEl.textContent = [
+          `Accounts: ${ledgerAccounts.length}`,
+          `Entries: ${ledgerEntries.length}`,
+          `Escrows: ${ledgerEscrows.length}`,
+          `Latest Escrow: ${latestEscrow ? `${latestEscrow.status} ${latestEscrow.escrowId}`.trim() : "none"}`,
         ].join("\n");
       }
 
@@ -1229,10 +1351,16 @@
         try {
           const authPayload = await walletApi("/auth/session", { method: "GET" });
           const walletPayload = await walletApi("/agent-wallet/state", { method: "GET" });
-          renderAgentWalletState({ ...walletPayload, owner: authPayload.owner ?? walletPayload.owner });
+          const ledgerPayload = await walletApi("/agent-wallet/ledger/state", { method: "GET" });
+          renderAgentWalletState({
+            ...walletPayload,
+            owner: authPayload.owner ?? walletPayload.owner,
+            ledger: ledgerPayload,
+          });
         } catch (error) {
           walletAuthStateEl.textContent = "Wallet state unavailable";
           walletStateSummaryEl.textContent = error.message;
+          walletLedgerSummaryEl.textContent = error.message;
         }
       }
 
@@ -1472,6 +1600,87 @@
         }
       }
 
+      async function creditLedgerBalance(event) {
+        event.preventDefault();
+        const agentId = walletLedgerCreditAgentSelectEl.value || "";
+        if (!agentId) {
+          updateGuardResult("Ledger credit failed", "Select a claimed wallet first.", true);
+          return;
+        }
+
+        setBusy(true, "Crediting ledger");
+        try {
+          const reason = walletLedgerCreditReasonEl.value.trim();
+          const payload = await walletApi("/agent-wallet/ledger/credit", {
+            method: "POST",
+            body: JSON.stringify({
+              agentId,
+              amountAtomic: walletLedgerCreditAmountEl.value.trim(),
+              reason: reason || null,
+            }),
+          });
+          updateGuardResult("Ledger credited", payload);
+          await refreshAgentWalletState();
+        } catch (error) {
+          updateGuardResult("Ledger credit failed", error.message, true);
+        } finally {
+          setBusy(false);
+        }
+      }
+
+      async function createLedgerEscrow(event) {
+        event.preventDefault();
+        const buyerAgentId = walletLedgerBuyerSelectEl.value || "";
+        const sellerAgentId = walletLedgerSellerSelectEl.value || "";
+        if (!buyerAgentId || !sellerAgentId) {
+          updateGuardResult("Escrow creation failed", "Select buyer and seller wallets first.", true);
+          return;
+        }
+
+        setBusy(true, "Creating escrow");
+        try {
+          const taskId = walletLedgerTaskIdEl.value.trim();
+          const description = walletLedgerDescriptionEl.value.trim();
+          const payload = await walletApi("/agent-wallet/ledger/escrows", {
+            method: "POST",
+            body: JSON.stringify({
+              buyerAgentId,
+              sellerAgentId,
+              amountAtomic: walletLedgerEscrowAmountEl.value.trim(),
+              taskId: taskId || null,
+              description: description || null,
+            }),
+          });
+          updateGuardResult("Escrow created", payload);
+          await refreshAgentWalletState();
+        } catch (error) {
+          updateGuardResult("Escrow creation failed", error.message, true);
+        } finally {
+          setBusy(false);
+        }
+      }
+
+      async function submitLedgerEscrowAction(action) {
+        const escrowId = selectedWalletLedgerEscrowId();
+        if (!escrowId) {
+          updateGuardResult("Escrow action failed", "Select an escrow first.", true);
+          return;
+        }
+
+        setBusy(true, `${action} escrow`);
+        try {
+          const payload = await walletApi(`/agent-wallet/ledger/escrows/${escrowId}/${action}`, {
+            method: "POST",
+          });
+          updateGuardResult(`Escrow ${action} complete`, payload);
+          await refreshAgentWalletState();
+        } catch (error) {
+          updateGuardResult(`Escrow ${action} failed`, error.message, true);
+        } finally {
+          setBusy(false);
+        }
+      }
+
       async function signOutWalletOwner() {
         setBusy(true, "Signing out");
         try {
@@ -1503,6 +1712,11 @@
       walletClaimFormEl.addEventListener("submit", claimAgentWallet);
       walletRegisterServiceFormEl.addEventListener("submit", registerAgentWalletService);
       walletCallServiceFormEl.addEventListener("submit", callAgentWalletService);
+      walletLedgerCreditFormEl.addEventListener("submit", creditLedgerBalance);
+      walletLedgerCreateEscrowFormEl.addEventListener("submit", createLedgerEscrow);
+      walletLedgerActionFormEl.addEventListener("submit", (event) => event.preventDefault());
+      walletLedgerReleaseButtonEl.addEventListener("click", () => submitLedgerEscrowAction("release"));
+      walletLedgerRefundButtonEl.addEventListener("click", () => submitLedgerEscrowAction("refund"));
       composerEl.addEventListener("keydown", (event) => {
         if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
           event.preventDefault();
