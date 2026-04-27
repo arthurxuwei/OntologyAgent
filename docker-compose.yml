@@ -29,13 +29,27 @@ services:
       AUTH_SESSION_SECRET: ${AUTH_SESSION_SECRET:-dev-agent-wallet-session-secret}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8000}
       AGENT_WALLET_STATE_PATH: ${AGENT_WALLET_STATE_PATH:-/app/data/agent_wallet_state.json}
+      LEDGER_URL: ${LEDGER_URL:-http://ledger:8092}
       X402_SELLER_BASE_URL: ${X402_SELLER_BASE_URL:-http://x402-seller:8000}
     volumes:
       - ./agent/data:/app/data
     restart: unless-stopped
     depends_on:
       - chain
+      - ledger
       - freqtrade
+
+  ledger:
+    build:
+      context: ./ledger
+    container_name: ledger
+    ports:
+      - "8092:8092"
+    environment:
+      LEDGER_STATE_PATH: ${LEDGER_STATE_PATH:-/app/data/offchain_ledger.json}
+    volumes:
+      - ./ledger/data:/app/data
+    restart: unless-stopped
 
   chain:
     build:
