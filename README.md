@@ -78,6 +78,12 @@ docker compose --env-file "$(dirname "$(git rev-parse --git-common-dir)")/.env" 
   - `run_wealth_tick`
   - `update_wealth_config`
   - `execute_freqtrade_trade_intent`（让 `freqtrade` 生成 trade intent，再由 `chain` 用 Base 钱包执行）
+- 本地 Agent Wallet ledger 工具
+  - `agent_wallet_get_ledger_state`
+  - `agent_wallet_credit_balance`
+  - `agent_wallet_create_escrow`
+  - `agent_wallet_release_escrow`
+  - `agent_wallet_refund_escrow`
 - `chain` MCP tools
   - `chain_get_wallet_state`（内部账本 / 自治循环使用）
   - `chain_sign_transfer`
@@ -319,6 +325,7 @@ PRIVATE_KEY=0x... \
 - `PUBLIC_BASE_URL`：OAuth callback 使用的公开 base URL，默认 `http://localhost:8000`
 - `AGENT_WALLET_STATE_PATH`：Agent Wallet 本地 demo 状态文件，Docker 默认 `/app/data/agent_wallet_state.json`
 - `LEDGER_URL`：`agent` 访问独立链下账本服务的内部地址，默认 `http://ledger:8092`
+- `LEDGER_TIMEOUT_SECONDS`：`agent` 请求链下账本服务的超时时间，默认 `20`
 - `X402_SELLER_BASE_URL`：Agent Wallet UI 调用 seller 服务时使用的内部 base URL，默认 `http://x402-seller:8000`
 
 

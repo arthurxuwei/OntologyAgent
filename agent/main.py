@@ -35,6 +35,7 @@ from agent_wallet_auth import (
 from agent_wallet_state import AgentWalletStore
 from chain_mcp_client import ChainMcpClient
 from freqtrade_mcp_client import FreqtradeMcpClient, FreqtradeMcpClientError
+from ledger_client import LedgerClient, LedgerClientError
 
 app = FastAPI(title="OntologyAgent agent")
 logger = logging.getLogger(__name__)
@@ -42,6 +43,7 @@ logger = logging.getLogger(__name__)
 SYSTEM_PROMPT = (
     "你是一个金融助理。链上相关动作只能通过 chain MCP 工具完成；"
     "中心化交易和量化相关动作只能通过 Freqtrade MCP 工具完成。"
+    "Agent Wallet 内部余额和撮合型 Escrow 只能通过 ledger 工具完成。"
     "在决定是否调用 x402、是否给 Freqtrade 增加 dry-run 资金前，应先查看理财子状态。"
     "你可以启动、停止或手动驱动理财子 Agent，但只有在确有需要时才这么做。"
     "执行任何会改变链上状态、Freqtrade 运行状态或交易状态的动作前，先清晰总结当前状态、"
@@ -55,6 +57,8 @@ REQUEST_TIMEOUT_SECONDS = float(
     os.getenv("CHAIN_TIMEOUT_SECONDS", os.getenv("EXECUTOR_TIMEOUT_SECONDS", "20"))
 )
 FREQTRADE_MCP_URL = os.getenv("FREQTRADE_MCP_URL", "http://freqtrade:8090/mcp/")
+LEDGER_URL = os.getenv("LEDGER_URL", "http://ledger:8092")
+LEDGER_TIMEOUT_SECONDS = float(os.getenv("LEDGER_TIMEOUT_SECONDS", "20"))
 CHAT_PAGE_PATH = Path(__file__).resolve().parent / "web" / "chat.html"
 NO_CACHE_HEADERS = {
     "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
@@ -173,6 +177,38 @@ class AgentWalletCallServiceRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     serviceId: str = Field(min_length=1)
+
+
+class LedgerCreditIntent(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    agentId: str = Field(min_length=1, description="要入账的 Agent ID")
+    amountAtomic: str = Field(
+        min_length=1,
+        pattern=r"^[1-9]\d*$",
+        description="USDC atomic amount，例如 5000000 表示 5 USDC",
+    )
+    reason: Optional[str] = Field(default=None, description="入账原因")
+
+
+class LedgerCreateEscrowIntent(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    buyerAgentId: str = Field(min_length=1, description="付款方 Agent ID")
+    sellerAgentId: str = Field(min_length=1, description="收款方 Agent ID")
+    amountAtomic: str = Field(
+        min_length=1,
+        pattern=r"^[1-9]\d*$",
+        description="锁定的 USDC atomic amount",
+    )
+    taskId: Optional[str] = Field(default=None, description="可选任务 ID")
+    description: Optional[str] = Field(default=None, description="可选任务说明")
+
+
+class LedgerEscrowActionIntent(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    escrowId: str = Field(min_length=1, description="Escrow ID")
 
 
 class AgentRunRequest(BaseModel):
@@ -481,6 +517,11 @@ def get_chain_mcp_client() -> ChainMcpClient:
 @lru_cache(maxsize=1)
 def get_freqtrade_mcp_client() -> FreqtradeMcpClient:
     return FreqtradeMcpClient(FREQTRADE_MCP_URL)
+
+
+@lru_cache(maxsize=1)
+def get_ledger_client() -> LedgerClient:
+    return LedgerClient(LEDGER_URL, timeout_seconds=LEDGER_TIMEOUT_SECONDS)
 
 
 def _unwrap_mcp_result(tool_name: str, result: dict[str, Any]) -> dict[str, Any]:
@@ -867,6 +908,82 @@ async def execute_freqtrade_trade_intent_tool(
     }
 
 
+async def call_ledger(operation: str, handler) -> dict[str, Any]:
+    try:
+        return await handler()
+    except LedgerClientError as error:
+        raise RuntimeError(f"Ledger operation failed: {operation}: {error}") from error
+
+
+async def agent_wallet_get_ledger_state_tool() -> dict[str, Any]:
+    return await call_ledger(
+        "get_state",
+        lambda: get_ledger_client().get_state(),
+    )
+
+
+async def agent_wallet_credit_balance_tool(
+    agentId: str,
+    amountAtomic: str,
+    reason: Optional[str] = None,
+) -> dict[str, Any]:
+    intent = LedgerCreditIntent(
+        agentId=agentId,
+        amountAtomic=amountAtomic,
+        reason=reason,
+    )
+    return await call_ledger(
+        "credit_balance",
+        lambda: get_ledger_client().credit_balance(
+            intent.agentId,
+            amount_atomic=intent.amountAtomic,
+            reason=intent.reason,
+        ),
+    )
+
+
+async def agent_wallet_create_escrow_tool(
+    buyerAgentId: str,
+    sellerAgentId: str,
+    amountAtomic: str,
+    taskId: Optional[str] = None,
+    description: Optional[str] = None,
+) -> dict[str, Any]:
+    intent = LedgerCreateEscrowIntent(
+        buyerAgentId=buyerAgentId,
+        sellerAgentId=sellerAgentId,
+        amountAtomic=amountAtomic,
+        taskId=taskId,
+        description=description,
+    )
+    return await call_ledger(
+        "create_escrow",
+        lambda: get_ledger_client().create_escrow(
+            buyer_agent_id=intent.buyerAgentId,
+            seller_agent_id=intent.sellerAgentId,
+            amount_atomic=intent.amountAtomic,
+            task_id=intent.taskId,
+            description=intent.description,
+        ),
+    )
+
+
+async def agent_wallet_release_escrow_tool(escrowId: str) -> dict[str, Any]:
+    intent = LedgerEscrowActionIntent(escrowId=escrowId)
+    return await call_ledger(
+        "release_escrow",
+        lambda: get_ledger_client().release_escrow(intent.escrowId),
+    )
+
+
+async def agent_wallet_refund_escrow_tool(escrowId: str) -> dict[str, Any]:
+    intent = LedgerEscrowActionIntent(escrowId=escrowId)
+    return await call_ledger(
+        "refund_escrow",
+        lambda: get_ledger_client().refund_escrow(intent.escrowId),
+    )
+
+
 async def get_wealth_status_tool() -> dict[str, Any]:
     return await get_autonomy_controller().status()
 
@@ -1022,6 +1139,35 @@ FREQTRADE_TOOL_REGISTRY: dict[str, dict[str, Any]] = {
         "description": "先让 Freqtrade 生成 trade intent，再交给链上执行器执行；仅支持 V1 的 long market 下单。",
         "args_schema": ExecuteFreqtradeTradeIntentIntent,
         "coroutine": execute_freqtrade_trade_intent_tool,
+    },
+}
+
+
+LEDGER_TOOL_REGISTRY: dict[str, dict[str, Any]] = {
+    "agent_wallet_get_ledger_state": {
+        "description": "查看 Agent Wallet 链下账本的账户余额、Escrow 和流水。",
+        "args_schema": EmptyIntent,
+        "coroutine": agent_wallet_get_ledger_state_tool,
+    },
+    "agent_wallet_credit_balance": {
+        "description": "给指定 Agent 的链下账本可用余额入账；仅用于 demo 资金或已确认充值后的记账。",
+        "args_schema": LedgerCreditIntent,
+        "coroutine": agent_wallet_credit_balance_tool,
+    },
+    "agent_wallet_create_escrow": {
+        "description": "为撮合型 A2A 任务创建 Escrow，把 buyer 可用余额锁定给 seller。",
+        "args_schema": LedgerCreateEscrowIntent,
+        "coroutine": agent_wallet_create_escrow_tool,
+    },
+    "agent_wallet_release_escrow": {
+        "description": "验收通过后释放 Escrow，把 buyer 锁定资金转给 seller 可用余额。",
+        "args_schema": LedgerEscrowActionIntent,
+        "coroutine": agent_wallet_release_escrow_tool,
+    },
+    "agent_wallet_refund_escrow": {
+        "description": "任务失败或超时后退款 Escrow，把 buyer 锁定资金退回 buyer 可用余额。",
+        "args_schema": LedgerEscrowActionIntent,
+        "coroutine": agent_wallet_refund_escrow_tool,
     },
 }
 
@@ -1202,6 +1348,10 @@ def build_tools() -> list[StructuredTool]:
             args_schema=UpdateWealthConfigIntent,
             coroutine=update_wealth_config_tool,
         ),
+        *[
+            _make_structured_tool(tool_name, spec)
+            for tool_name, spec in LEDGER_TOOL_REGISTRY.items()
+        ],
         *_load_discovered_chain_tools(),
         *_load_discovered_freqtrade_tools(),
     ]
