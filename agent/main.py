@@ -1544,13 +1544,15 @@ def agent_wallet_state(
 
 @app.post("/agent-wallet/init")
 async def agent_wallet_init(request: AgentWalletInitRequest) -> dict[str, Any]:
+    chain_args: dict[str, Any] = {
+        "agentName": request.agentName,
+    }
+    if request.agentDescription is not None:
+        chain_args["agentDescription"] = request.agentDescription
+
     wallet_payload = _tool_result_payload(
         await call_chain_tool(
-            "agent_wallet_init",
-            {
-                "agentName": request.agentName,
-                "agentDescription": request.agentDescription,
-            },
+            "agent_wallet_init", chain_args
         )
     )
     agent, claim_code = get_agent_wallet_store().create_agent_wallet(

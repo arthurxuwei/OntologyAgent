@@ -1,7 +1,9 @@
+import asyncio
 import os
 import unittest
 from unittest.mock import AsyncMock, patch
 
+import httpx
 from fastapi.testclient import TestClient
 
 import main
@@ -158,6 +160,62 @@ class X402SellerTests(unittest.TestCase):
         self.assertEqual(
             response.json()["settlement"]["transaction"],
             payment_response["transaction"],
+        )
+
+    def test_verify_payment_follows_facilitator_redirects(self) -> None:
+        requests_seen = []
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            requests_seen.append(str(request.url))
+            if len(requests_seen) == 1:
+                return httpx.Response(
+                    308,
+                    headers={"location": "http://facilitator.test/verify/"},
+                    text="Redirecting...\n",
+                    request=request,
+                )
+
+            return httpx.Response(
+                200,
+                json={"isValid": True},
+                request=request,
+            )
+
+        service = X402SellerService(
+            X402SellerConfig(
+                pay_to="0x2222222222222222222222222222222222222222",
+                facilitator_url="http://facilitator.test",
+                price="$0.01",
+            ),
+            transport=httpx.MockTransport(handler),
+        )
+
+        result = asyncio.run(
+            service.verify_payment(
+                {"x402Version": 2},
+                {
+                    "accepts": [
+                        {
+                            "scheme": "exact",
+                            "network": "eip155:84532",
+                            "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+                            "amount": "10000",
+                            "payTo": "0x2222222222222222222222222222222222222222",
+                            "maxTimeoutSeconds": 300,
+                            "extra": {"name": "USDC", "version": "2"},
+                        }
+                    ]
+                },
+            )
+        )
+
+        self.assertEqual(result["isValid"], True)
+        self.assertEqual(
+            requests_seen,
+            [
+                "http://facilitator.test/verify",
+                "http://facilitator.test/verify/",
+            ],
         )
 
 

@@ -1,4 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { generateEntitySecretCiphertext } from "@circle-fin/developer-controlled-wallets";
 import { z } from "zod/v4";
 
 import { createTransactionSender } from "../chain-executor.js";
@@ -9,6 +10,7 @@ import { NetworkClient } from "../infra/network-client.js";
 import { PrivateKeySigner } from "../infra/signers/private-key-signer.js";
 import { PolicyGuard } from "../policies/policy-guard.js";
 import { AgentWalletService } from "../services/agent-wallet-service.js";
+import { CircleWalletService } from "../services/circle-wallet-service.js";
 import { ExecutionService } from "../services/execution-service.js";
 import { SettlementService } from "../services/settlement-service.js";
 import { SignTransferService } from "../services/sign-transfer-service.js";
@@ -104,6 +106,13 @@ export function createChainRuntime(
   const settlementService = new SettlementService();
   const x402FetchService =
     overrides?.x402FetchService ?? new X402FetchService(config, policyGuard);
+  const circleWalletService = new CircleWalletService(config, {
+    createEntitySecretCiphertext: (entitySecret) =>
+      generateEntitySecretCiphertext({
+        apiKey: config.circle.apiKey ?? "",
+        entitySecret,
+      }),
+  });
 
   return {
     walletStateService: new WalletStateService(config, policyGuard, networkClient, signer),
@@ -117,7 +126,11 @@ export function createChainRuntime(
       new UserOperationStatusService(config, bundlerClient),
     userOperationService: new UserOperationService(bundlerClient, policyGuard, settlementService),
     x402FetchService,
-    agentWalletService: new AgentWalletService(config, x402FetchService),
+    agentWalletService: new AgentWalletService(
+      config,
+      x402FetchService,
+      circleWalletService,
+    ),
   };
 }
 
