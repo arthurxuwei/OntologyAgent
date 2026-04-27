@@ -156,6 +156,7 @@ class X402SellerService:
         async with httpx.AsyncClient(
             timeout=self.config.timeout_seconds,
             transport=self.transport,
+            follow_redirects=True,
         ) as client:
             response = await client.post(
                 f"{self.config.facilitator_url.rstrip('/')}{path}",

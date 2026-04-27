@@ -78,6 +78,20 @@ test("chain MCP exposes the expected tool names", async () => {
   });
 });
 
+test("chain runtime wires live Circle wallet creation with a per-request ciphertext factory", () => {
+  const runtime = createChainRuntime(
+    loadConfig({
+      PRIVATE_KEY: "0x59c6995e998f97a5a0044966f0945382d7fb8f3c2b5b2dd8f04c208dbb0f4f8d",
+      CIRCLE_API_KEY: "circle-api-key",
+      CIRCLE_WALLET_SET_ID: "circle-wallet-set",
+      CIRCLE_ENTITY_SECRET: "entity-secret",
+    }),
+  );
+
+  const circleWalletService = (runtime.agentWalletService as any).circleWalletService;
+  assert.equal(typeof circleWalletService.createEntitySecretCiphertext, "function");
+});
+
 test("chain runtime exposes trade intent execution results in mock mode for the supported pair", async () => {
   const tradeIntentExecutionService = new TradeIntentExecutionService(createMockConfig());
   const result = await tradeIntentExecutionService.execute({
