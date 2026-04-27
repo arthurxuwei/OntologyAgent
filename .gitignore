@@ -12,4 +12,6 @@ agent/data/
 .playwright-mcp/
 .DS_Store
 .ruff_cache
+__pycache__/
+*.py[cod]
 chain/recovery_file_*.dat

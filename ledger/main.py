@@ -7,14 +7,17 @@ import threading
 import uuid
 from datetime import datetime, timezone
 from functools import lru_cache
+from pathlib import Path
 from typing import Any, Literal, Optional
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 
 DEFAULT_ASSET = "USDC"
 DEFAULT_LEDGER_STATE_PATH = "ledger/data/offchain_ledger.json"
+LEDGER_CONSOLE_PATH = Path(__file__).resolve().parent / "web" / "index.html"
 
 app = FastAPI(title="OntologyAgent offchain ledger")
 
@@ -399,6 +402,11 @@ def http_error(error: Exception) -> HTTPException:
 @app.get("/health")
 def health() -> dict[str, Any]:
     return {"service": "OntologyAgent-ledger", "status": "ok"}
+
+
+@app.get("/")
+def ledger_console() -> FileResponse:
+    return FileResponse(LEDGER_CONSOLE_PATH, media_type="text/html")
 
 
 @app.get("/ledger/state")

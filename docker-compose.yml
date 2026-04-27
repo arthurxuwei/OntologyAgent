@@ -30,6 +30,7 @@ services:
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8000}
       AGENT_WALLET_STATE_PATH: ${AGENT_WALLET_STATE_PATH:-/app/data/agent_wallet_state.json}
       LEDGER_URL: ${LEDGER_URL:-http://ledger:8092}
+      LEDGER_TIMEOUT_SECONDS: ${LEDGER_TIMEOUT_SECONDS:-20}
       X402_SELLER_BASE_URL: ${X402_SELLER_BASE_URL:-http://x402-seller:8000}
     volumes:
       - ./agent/data:/app/data

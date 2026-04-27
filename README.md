@@ -5,6 +5,7 @@
 - `agent`：Python Agent 本体，负责交互式会话、tool orchestration，以及对子 Agent 的管理
 - `chain`：TypeScript 链上 MCP skill provider，负责钱包、执行、UserOperation 和 x402 buyer flow
 - `freqtrade`：单容器 Freqtrade + MCP skill provider，负责量化策略和 CEX 交易技能
+- `ledger`：独立链下账本服务，负责 Agent Wallet 内部余额、Escrow 锁款、放款、退款和流水记录
 
 另外还有一个仅用于本地测试的辅助服务：
 
@@ -26,6 +27,9 @@ docker compose up -d --build
 - `agent` 单轮调用：`POST /agent/run`
 - `agent` 交互式会话：`POST /agent/sessions` 和 `POST /agent/sessions/{sessionId}/messages`
 - `agent` 子 Agent 管理：`POST /autonomy/start`、`POST /autonomy/stop`、`POST /autonomy/tick`
+- `ledger` 管理页面：`http://localhost:8092/`
+- `ledger` 健康检查：`http://localhost:8092/health`
+- `ledger` 账本状态：`GET http://localhost:8092/ledger/state`
 - `x402-seller` 演示资源：`GET /x402/demo-resource`
 - `chain` MCP：`http://localhost:8091/mcp/`
 - `freqtrade` REST API：`http://localhost:8080/api/v1`
@@ -60,9 +64,11 @@ docker compose --env-file "$(dirname "$(git rev-parse --git-common-dir)")/.env" 
 当前设计里：
 
 - `agent` 是 agent 本体，不承载 seller resource
+- `ledger` 是独立链下账本服务，不属于 `agent` 或 `chain` 进程
 - 链上动作只能通过 `chain` MCP tools 完成
 - 中心化交易和量化动作只能通过 `freqtrade` MCP tools 完成
 - `chain` 不再提供 Fastify HTTP 业务接口
+- 撮合型 A2A 的 Escrow/余额状态应落在 `ledger`，而不是用 x402 或链上交易直接承担
 
 `agent` 启动后会同时发现三类内部工具：
 
@@ -73,6 +79,13 @@ docker compose --env-file "$(dirname "$(git rev-parse --git-common-dir)")/.env" 
   - `run_wealth_tick`
   - `update_wealth_config`
   - `execute_freqtrade_trade_intent`（让 `freqtrade` 生成 trade intent，再由 `chain` 用 Base 钱包执行）
+- 本地 Agent Wallet ledger 工具
+  - `route_payment_intent`（任何付款、x402、转账或 Escrow 动作前先选择支付方式）
+  - `agent_wallet_get_ledger_state`
+  - `agent_wallet_credit_balance`
+  - `agent_wallet_create_escrow`
+  - `agent_wallet_release_escrow`
+  - `agent_wallet_refund_escrow`
 - `chain` MCP tools
   - `chain_get_wallet_state`（内部账本 / 自治循环使用）
   - `chain_sign_transfer`
@@ -101,6 +114,43 @@ docker compose --env-file "$(dirname "$(git rev-parse --git-common-dir)")/.env" 
 - `evaluate_trade_signal` 是只读工具，不会创建 trade intent，也不会触发链上执行
 - V1 仅支持 `ETH/USDC`
 - V1 返回 `buy` / `sell` / `hold`，并附带 `reason`、`confidence` 和仓位上下文
+
+### Offchain Ledger Service（V1）
+
+`ledger` 是独立 FastAPI 服务，用本地 JSON 文件保存第一版 Agent Wallet 链下账本。它面向撮合型 A2A 场景，提供内部余额和 Escrow 状态机，不负责链上签名、x402 付款或 owner 鉴权。
+
+主要接口：
+
+- `GET /health`
+- `GET /ledger/state`
+- `POST /ledger/accounts/{agentId}/credit`
+- `POST /ledger/escrows`
+- `POST /ledger/escrows/{escrowId}/release`
+- `POST /ledger/escrows/{escrowId}/refund`
+
+账本规则：
+
+- 金额使用 USDC atomic amount 字符串，不使用浮点数
+- `credit` 增加 Agent 可用余额
+- 创建 escrow 会把 buyer 的可用余额转为锁定余额
+- `release` 会把 buyer 锁定余额转给 seller 可用余额
+- `refund` 会把 buyer 锁定余额退回 buyer 可用余额
+- 已 release/refund 的 escrow 不能再次变更
+
+本地状态文件由 `LEDGER_STATE_PATH` 控制，Docker 默认是 `/app/data/offchain_ledger.json`，并挂载到仓库的 `./ledger/data`。
+
+`ledger` 自带独立管理页面：`http://localhost:8092/`。页面可以直接验证 credit、create escrow、release 和 refund。`agent` 的 Web Console 不承载 ledger 管理功能；agent 只通过本地工具在对话/编排时调用 ledger 能力。
+
+### Payment Routing
+
+Agent 同时具备 `ledger`、x402 和链上转账能力。为了避免模型自行猜测支付方式，所有付款相关动作必须先调用 `route_payment_intent`：
+
+- `deliveryMode=async_task` 或 `requiresAcceptance=true` 且不是外部服务：返回 `ledger_escrow`
+- `deliveryMode=immediate_api` 且是外部服务：返回 `x402`
+- `deliveryMode=withdrawal`：返回 `chain_transfer`
+- 信息不足或外部异步交付：返回 `needs_clarification`
+
+Agent 只能继续使用路由结果里的 `allowedTools`。如果返回 `needs_clarification`，应先向用户澄清交易类型、交付方式和对方是否为外部服务。
 
 ### Default Freqtrade Strategy（V1）
 
@@ -289,6 +339,8 @@ PRIVATE_KEY=0x... \
 - `AUTH_SESSION_SECRET`：签名 Agent Wallet owner session cookie；Docker 默认使用本地开发 secret
 - `PUBLIC_BASE_URL`：OAuth callback 使用的公开 base URL，默认 `http://localhost:8000`
 - `AGENT_WALLET_STATE_PATH`：Agent Wallet 本地 demo 状态文件，Docker 默认 `/app/data/agent_wallet_state.json`
+- `LEDGER_URL`：`agent` 访问独立链下账本服务的内部地址，默认 `http://ledger:8092`
+- `LEDGER_TIMEOUT_SECONDS`：`agent` 请求链下账本服务的超时时间，默认 `20`
 - `X402_SELLER_BASE_URL`：Agent Wallet UI 调用 seller 服务时使用的内部 base URL，默认 `http://x402-seller:8000`
 
 
@@ -328,6 +380,10 @@ PRIVATE_KEY=0x... \
 - `CIRCLE_WALLET_SET_ID`：已有 Circle wallet set id；为空时由 Circle wallet service 创建/使用默认流程
 - `CIRCLE_BASE_URL`：Circle Web3 Services base URL，默认 `https://api.circle.com/v1/w3s`
 
+### ledger
+
+- `LEDGER_STATE_PATH`：链下账本 JSON 状态文件路径；Docker 默认 `/app/data/offchain_ledger.json`
+
 ## Agent Wallet MVP x402 Demo
 
 Agent Wallet MVP 在现有 Web Console 中增加了一个 `Agent Wallet MVP` 面板，用来跑通第一版 A2A 付费服务流程：
@@ -337,7 +393,9 @@ Agent Wallet MVP 在现有 Web Console 中增加了一个 `Agent Wallet MVP` 面
 3. 用一次性 claim code 认领该钱包
 4. 注册 `/x402/agent-services/research-summary`
 5. 在 Base Sepolia 上触发一次 x402 paid service call
-6. 在本地 ledger 中查看 service 与 payment 记录
+6. 在 Agent Wallet demo 状态中查看 service 与 x402 payment 记录
+
+注意：Agent Wallet 的 x402 demo payment 记录仍存储在 `agent` 的 demo state 中；撮合型 A2A 的内部余额和 Escrow 状态由独立 `ledger` 服务负责。
 
 最小配置：
 
@@ -357,6 +415,8 @@ Agent Wallet MVP 在现有 Web Console 中增加了一个 `Agent Wallet MVP` 面
 ```bash
 curl -X POST http://localhost:8000/agent-wallet/reset
 ```
+
+独立链下账本状态存储在 `LEDGER_STATE_PATH`。本地清空账本可删除 `ledger/data/offchain_ledger.json` 后重启 `ledger` 服务。
 
 ### Base 链上交易意图桥接（V1）
 
