@@ -27,6 +27,7 @@ docker compose up -d --build
 - `agent` 单轮调用：`POST /agent/run`
 - `agent` 交互式会话：`POST /agent/sessions` 和 `POST /agent/sessions/{sessionId}/messages`
 - `agent` 子 Agent 管理：`POST /autonomy/start`、`POST /autonomy/stop`、`POST /autonomy/tick`
+- `ledger` 管理页面：`http://localhost:8092/`
 - `ledger` 健康检查：`http://localhost:8092/health`
 - `ledger` 账本状态：`GET http://localhost:8092/ledger/state`
 - `x402-seller` 演示资源：`GET /x402/demo-resource`
@@ -136,6 +137,8 @@ docker compose --env-file "$(dirname "$(git rev-parse --git-common-dir)")/.env" 
 - 已 release/refund 的 escrow 不能再次变更
 
 本地状态文件由 `LEDGER_STATE_PATH` 控制，Docker 默认是 `/app/data/offchain_ledger.json`，并挂载到仓库的 `./ledger/data`。
+
+`ledger` 自带独立管理页面：`http://localhost:8092/`。页面可以直接验证 credit、create escrow、release 和 refund。`agent` 的 Web Console 不承载 ledger 管理功能；agent 只通过本地工具在对话/编排时调用 ledger 能力。
 
 ### Default Freqtrade Strategy（V1）
 
