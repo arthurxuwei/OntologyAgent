@@ -109,6 +109,35 @@ class MainToolRegistryTests(unittest.TestCase):
         self.assertIn("agent_wallet_release_escrow", tool_names)
         self.assertIn("agent_wallet_refund_escrow", tool_names)
 
+    def test_build_tools_includes_payment_router_tool(self) -> None:
+        with patch.object(main, "_load_discovered_chain_tools", return_value=[]), patch.object(
+            main, "_load_discovered_freqtrade_tools", return_value=[]
+        ):
+            tools = main.build_tools()
+
+        tool_names = {tool.name for tool in tools}
+        self.assertIn("route_payment_intent", tool_names)
+
+    def test_route_payment_intent_tool_returns_router_decision(self) -> None:
+        result = asyncio.run(
+            main.route_payment_intent_tool(
+                purpose="commission research report",
+                deliveryMode="async_task",
+                requiresAcceptance=True,
+                externalService=False,
+            )
+        )
+
+        self.assertEqual(result["method"], "ledger_escrow")
+        self.assertEqual(
+            result["allowedTools"],
+            [
+                "agent_wallet_create_escrow",
+                "agent_wallet_release_escrow",
+                "agent_wallet_refund_escrow",
+            ],
+        )
+
     def test_agent_wallet_ledger_tools_call_ledger_client(self) -> None:
         client = _FakeLedgerClient()
 

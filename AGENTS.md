@@ -14,6 +14,8 @@
 - Chain actions ONLY via chain MCP tools (signing, execution, UserOperations, x402 fetch)
 - Trading/quant actions ONLY via Freqtrade MCP tools (start/stop bot, evaluate signal, force trades)
 - Offchain balances and Escrow state live in the standalone `ledger` service, not in `agent` or `chain`
+- Any payment, x402 call, chain transfer, escrow lock, release, or refund MUST call route_payment_intent first
+- After routing, use only the returned allowedTools; if the router returns needs_clarification, ask the user before paying
 - Agent-facing ledger access is through local tools: agent_wallet_get_ledger_state, agent_wallet_credit_balance, agent_wallet_create_escrow, agent_wallet_release_escrow, agent_wallet_refund_escrow
 - Matched A2A task settlement should use `ledger` escrow flows; x402 is for immediate paid HTTP/API calls
 - Never call x402 or fund Freqtrade dry-run without checking wealth status first

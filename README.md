@@ -80,6 +80,7 @@ docker compose --env-file "$(dirname "$(git rev-parse --git-common-dir)")/.env" 
   - `update_wealth_config`
   - `execute_freqtrade_trade_intent`（让 `freqtrade` 生成 trade intent，再由 `chain` 用 Base 钱包执行）
 - 本地 Agent Wallet ledger 工具
+  - `route_payment_intent`（任何付款、x402、转账或 Escrow 动作前先选择支付方式）
   - `agent_wallet_get_ledger_state`
   - `agent_wallet_credit_balance`
   - `agent_wallet_create_escrow`
@@ -139,6 +140,17 @@ docker compose --env-file "$(dirname "$(git rev-parse --git-common-dir)")/.env" 
 本地状态文件由 `LEDGER_STATE_PATH` 控制，Docker 默认是 `/app/data/offchain_ledger.json`，并挂载到仓库的 `./ledger/data`。
 
 `ledger` 自带独立管理页面：`http://localhost:8092/`。页面可以直接验证 credit、create escrow、release 和 refund。`agent` 的 Web Console 不承载 ledger 管理功能；agent 只通过本地工具在对话/编排时调用 ledger 能力。
+
+### Payment Routing
+
+Agent 同时具备 `ledger`、x402 和链上转账能力。为了避免模型自行猜测支付方式，所有付款相关动作必须先调用 `route_payment_intent`：
+
+- `deliveryMode=async_task` 或 `requiresAcceptance=true` 且不是外部服务：返回 `ledger_escrow`
+- `deliveryMode=immediate_api` 且是外部服务：返回 `x402`
+- `deliveryMode=withdrawal`：返回 `chain_transfer`
+- 信息不足或外部异步交付：返回 `needs_clarification`
+
+Agent 只能继续使用路由结果里的 `allowedTools`。如果返回 `needs_clarification`，应先向用户澄清交易类型、交付方式和对方是否为外部服务。
 
 ### Default Freqtrade Strategy（V1）
 

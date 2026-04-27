@@ -36,6 +36,7 @@ from agent_wallet_state import AgentWalletStore
 from chain_mcp_client import ChainMcpClient
 from freqtrade_mcp_client import FreqtradeMcpClient, FreqtradeMcpClientError
 from ledger_client import LedgerClient, LedgerClientError
+from payment_router import PaymentIntent, route_payment_intent
 
 app = FastAPI(title="OntologyAgent agent")
 logger = logging.getLogger(__name__)
@@ -44,6 +45,8 @@ SYSTEM_PROMPT = (
     "你是一个金融助理。链上相关动作只能通过 chain MCP 工具完成；"
     "中心化交易和量化相关动作只能通过 Freqtrade MCP 工具完成。"
     "Agent Wallet 内部余额和撮合型 Escrow 只能通过 ledger 工具完成。"
+    "凡是涉及付款、付费 API、转账、锁款、放款或退款，必须先调用 route_payment_intent；"
+    "只能使用该工具返回的 allowedTools，若返回 needs_clarification 必须先向用户澄清。"
     "在决定是否调用 x402、是否给 Freqtrade 增加 dry-run 资金前，应先查看理财子状态。"
     "你可以启动、停止或手动驱动理财子 Agent，但只有在确有需要时才这么做。"
     "执行任何会改变链上状态、Freqtrade 运行状态或交易状态的动作前，先清晰总结当前状态、"
@@ -209,6 +212,28 @@ class LedgerEscrowActionIntent(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     escrowId: str = Field(min_length=1, description="Escrow ID")
+
+
+class PaymentRouteIntent(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    purpose: str = Field(min_length=1, description="付款目的或业务场景")
+    deliveryMode: Literal["async_task", "immediate_api", "withdrawal", "unknown"] = Field(
+        default="unknown",
+        description="交付模式：异步任务、即时 API、提现转账或未知",
+    )
+    requiresAcceptance: bool = Field(
+        default=False,
+        description="是否需要交付验收后再放款",
+    )
+    externalService: bool = Field(
+        default=False,
+        description="是否是平台外部服务或外部钱包",
+    )
+    serviceUrl: Optional[HttpUrl] = Field(
+        default=None,
+        description="外部 paid API 或 x402 endpoint URL",
+    )
 
 
 class AgentRunRequest(BaseModel):
@@ -915,6 +940,23 @@ async def call_ledger(operation: str, handler) -> dict[str, Any]:
         raise RuntimeError(f"Ledger operation failed: {operation}: {error}") from error
 
 
+async def route_payment_intent_tool(
+    purpose: str,
+    deliveryMode: Literal["async_task", "immediate_api", "withdrawal", "unknown"] = "unknown",
+    requiresAcceptance: bool = False,
+    externalService: bool = False,
+    serviceUrl: Optional[HttpUrl] = None,
+) -> dict[str, Any]:
+    intent = PaymentIntent(
+        purpose=purpose,
+        deliveryMode=deliveryMode,
+        requiresAcceptance=requiresAcceptance,
+        externalService=externalService,
+        serviceUrl=serviceUrl,
+    )
+    return route_payment_intent(intent)
+
+
 async def agent_wallet_get_ledger_state_tool() -> dict[str, Any]:
     return await call_ledger(
         "get_state",
@@ -1143,6 +1185,18 @@ FREQTRADE_TOOL_REGISTRY: dict[str, dict[str, Any]] = {
 }
 
 
+PAYMENT_ROUTER_TOOL_REGISTRY: dict[str, dict[str, Any]] = {
+    "route_payment_intent": {
+        "description": (
+            "在任何付款、x402、链上转账、Escrow 锁款、放款或退款前选择支付方式；"
+            "返回 ledger_escrow、x402、chain_transfer 或 needs_clarification。"
+        ),
+        "args_schema": PaymentRouteIntent,
+        "coroutine": route_payment_intent_tool,
+    },
+}
+
+
 LEDGER_TOOL_REGISTRY: dict[str, dict[str, Any]] = {
     "agent_wallet_get_ledger_state": {
         "description": "查看 Agent Wallet 链下账本的账户余额、Escrow 和流水。",
@@ -1348,6 +1402,10 @@ def build_tools() -> list[StructuredTool]:
             args_schema=UpdateWealthConfigIntent,
             coroutine=update_wealth_config_tool,
         ),
+        *[
+            _make_structured_tool(tool_name, spec)
+            for tool_name, spec in PAYMENT_ROUTER_TOOL_REGISTRY.items()
+        ],
         *[
             _make_structured_tool(tool_name, spec)
             for tool_name, spec in LEDGER_TOOL_REGISTRY.items()
