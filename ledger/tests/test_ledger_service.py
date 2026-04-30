@@ -1,6 +1,8 @@
+import asyncio
 import os
-import tempfile
+import shutil
 import unittest
+import uuid
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -10,8 +12,11 @@ import main
 
 class LedgerServiceTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.temp_dir = tempfile.TemporaryDirectory()
-        self.state_path = str(Path(self.temp_dir.name) / "ledger.json")
+        temp_root = Path(__file__).resolve().parents[2] / ".codex-tmp"
+        temp_root.mkdir(exist_ok=True)
+        self.temp_dir = temp_root / f"ledger-test-{uuid.uuid4().hex}"
+        self.temp_dir.mkdir()
+        self.state_path = str(self.temp_dir / "ledger.json")
         self.previous_state_path = os.environ.get("LEDGER_STATE_PATH")
         os.environ["LEDGER_STATE_PATH"] = self.state_path
         main.get_store.cache_clear()
@@ -23,13 +28,18 @@ class LedgerServiceTests(unittest.TestCase):
             os.environ.pop("LEDGER_STATE_PATH", None)
         else:
             os.environ["LEDGER_STATE_PATH"] = self.previous_state_path
-        self.temp_dir.cleanup()
 
     def test_health_returns_ok(self) -> None:
         response = self.client.get("/health")
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "ok")
+
+    def test_mcp_endpoint_initializes_with_ledger_app_lifespan(self) -> None:
+        with TestClient(main.app) as client:
+            response = client.get("/mcp/")
+
+        self.assertNotEqual(response.status_code, 500)
 
     def test_root_serves_ledger_management_page(self) -> None:
         response = self.client.get("/")
@@ -46,6 +56,9 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertIn("/ledger/escrows", html)
 
     def test_management_page_helpers_render_and_call_ledger_api(self) -> None:
+        if shutil.which("node") is None:
+            self.skipTest("node is required to execute ledger page helpers")
+
         response = self.client.get("/")
 
         self.assertEqual(response.status_code, 200)
@@ -290,6 +303,78 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertEqual(state["accounts"][0]["agentId"], "agent_buyer")
         self.assertEqual(state["accounts"][0]["availableAtomic"], "5000000")
         self.assertTrue(Path(self.state_path).exists())
+
+    def test_route_payment_intent_tool_is_served_by_ledger(self) -> None:
+        tool = getattr(main, "route_payment_intent_tool", None)
+        self.assertIsNotNone(tool)
+
+        result = asyncio.run(
+            tool(
+                purpose="paid api",
+                deliveryMode="immediate_api",
+                requiresAcceptance=False,
+                externalService=True,
+                serviceUrl="https://seller.example/x402",
+            )
+        )
+
+        self.assertEqual(result["method"], "x402")
+        self.assertEqual(result["allowedTools"], ["chain_x402_fetch"])
+
+    def test_ledger_mcp_tools_operate_on_local_store(self) -> None:
+        credit_tool = getattr(main, "agent_wallet_credit_balance_tool", None)
+        state_tool = getattr(main, "agent_wallet_get_ledger_state_tool", None)
+        create_tool = getattr(main, "agent_wallet_create_escrow_tool", None)
+        release_tool = getattr(main, "agent_wallet_release_escrow_tool", None)
+        refund_tool = getattr(main, "agent_wallet_refund_escrow_tool", None)
+        self.assertIsNotNone(credit_tool)
+        self.assertIsNotNone(state_tool)
+        self.assertIsNotNone(create_tool)
+        self.assertIsNotNone(release_tool)
+        self.assertIsNotNone(refund_tool)
+
+        asyncio.run(
+            credit_tool(
+                agentId="agent_buyer",
+                amountAtomic="5000000",
+                reason="demo funding",
+            )
+        )
+        escrow = asyncio.run(
+            create_tool(
+                buyerAgentId="agent_buyer",
+                sellerAgentId="agent_seller",
+                amountAtomic="3000000",
+                taskId="task_123",
+                description="Research task",
+            )
+        )["escrow"]
+        released = asyncio.run(release_tool(escrow["escrowId"]))["escrow"]
+        state = asyncio.run(state_tool())
+
+        self.assertEqual(released["status"], "released")
+        accounts = {item["agentId"]: item for item in state["accounts"]}
+        self.assertEqual(accounts["agent_buyer"]["availableAtomic"], "2000000")
+        self.assertEqual(accounts["agent_buyer"]["lockedAtomic"], "0")
+        self.assertEqual(accounts["agent_seller"]["availableAtomic"], "3000000")
+
+        asyncio.run(
+            credit_tool(
+                agentId="agent_refund_buyer",
+                amountAtomic="4000000",
+                reason="demo funding",
+            )
+        )
+        refund_escrow = asyncio.run(
+            create_tool(
+                buyerAgentId="agent_refund_buyer",
+                sellerAgentId="agent_refund_seller",
+                amountAtomic="1000000",
+            )
+        )["escrow"]
+        refunded = asyncio.run(refund_tool(refund_escrow["escrowId"]))["escrow"]
+
+        self.assertEqual(refunded["status"], "refunded")
 
 
 if __name__ == "__main__":

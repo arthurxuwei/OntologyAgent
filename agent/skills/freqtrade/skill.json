@@ -1,0 +1,31 @@
+{
+  "name": "freqtrade",
+  "enabled": true,
+  "description": "Expose Freqtrade MCP read and controlled write actions.",
+  "instructions": "instructions.md",
+  "mcpServers": {
+    "freqtrade": {
+      "url": "http://freqtrade:8090/mcp/",
+      "tools": [
+        "get_trading_status",
+        "list_strategies",
+        "evaluate_trade_signal",
+        "emit_trade_intent",
+        "get_open_trades",
+        "get_closed_trades",
+        "get_performance_summary",
+        "get_budget_snapshot",
+        "sync_dry_run_wallet",
+        "start_bot",
+        "stop_bot",
+        "pause_trading",
+        "resume_trading",
+        "force_enter_trade",
+        "force_exit_trade"
+      ]
+    }
+  },
+  "hiddenTools": {
+    "freqtrade": []
+  }
+}

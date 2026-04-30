@@ -34,9 +34,8 @@
           linear-gradient(180deg, #fbf7ef 0%, var(--bg) 100%);
       }
 
-      .shell,
-      .console-shell {
-        max-width: 1240px;
+      .shell {
+        max-width: 1180px;
         margin: 0 auto;
         padding: 32px 20px 28px;
       }
@@ -58,7 +57,12 @@
         margin: 0;
         font-size: clamp(32px, 5vw, 52px);
         line-height: 0.95;
-        font-weight: 700;
+      }
+
+      .layout {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 340px;
+        gap: 22px;
       }
 
       .card {
@@ -69,10 +73,99 @@
         overflow: hidden;
       }
 
-      .panel-title {
-        margin: 0 0 8px;
-        font-size: 16px;
-        font-weight: 700;
+      .chat-panel {
+        min-height: 68vh;
+        display: grid;
+        grid-template-rows: auto 1fr auto;
+      }
+
+      .chat-header,
+      .side-header {
+        padding: 20px 22px;
+        border-bottom: 1px solid rgba(215, 201, 170, 0.7);
+      }
+
+      .chat-header h2,
+      .side-header h2 {
+        margin: 0;
+        font-size: 20px;
+      }
+
+      .messages {
+        padding: 22px;
+        display: grid;
+        gap: 14px;
+        align-content: start;
+        overflow-y: auto;
+      }
+
+      .message {
+        max-width: 78%;
+        padding: 12px 14px;
+        border-radius: 16px;
+        line-height: 1.55;
+        white-space: pre-wrap;
+      }
+
+      .message.user {
+        justify-self: end;
+        background: var(--accent);
+        color: #fff;
+        border-bottom-right-radius: 4px;
+      }
+
+      .message.agent {
+        justify-self: start;
+        background: var(--panel-strong);
+        border-bottom-left-radius: 4px;
+      }
+
+      .composer {
+        border-top: 1px solid rgba(215, 201, 170, 0.7);
+        padding: 16px;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 12px;
+      }
+
+      textarea {
+        width: 100%;
+        min-height: 54px;
+        resize: vertical;
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        padding: 12px 14px;
+        font: inherit;
+        background: #fffdf7;
+        color: var(--ink);
+      }
+
+      button {
+        border: 0;
+        border-radius: 14px;
+        padding: 12px 16px;
+        font: inherit;
+        cursor: pointer;
+        background: linear-gradient(135deg, var(--accent) 0%, var(--accent-strong) 100%);
+        color: #fff;
+        box-shadow: 0 14px 28px rgba(15, 118, 110, 0.24);
+      }
+
+      button:disabled {
+        cursor: wait;
+        opacity: 0.7;
+      }
+
+      .side {
+        display: grid;
+        gap: 16px;
+        align-content: start;
+      }
+
+      .side-body {
+        padding: 18px;
+        display: grid;
+        gap: 14px;
       }
 
       .meta-box {
@@ -80,16 +173,6 @@
         border-radius: 16px;
         background: rgba(242, 229, 198, 0.5);
         border: 1px solid rgba(215, 201, 170, 0.9);
-      }
-
-      .meta-row {
-        display: grid;
-        gap: 4px;
-        margin-bottom: 10px;
-      }
-
-      .meta-row:last-child {
-        margin-bottom: 0;
       }
 
       .meta-label {
@@ -100,1243 +183,187 @@
       }
 
       .meta-value {
+        margin-top: 5px;
         font-size: 13px;
-        line-height: 1.4;
+        line-height: 1.5;
         word-break: break-word;
-      }
-
-      .detail-copy {
         white-space: pre-wrap;
       }
 
-      .button-grid {
-        display: grid;
-        gap: 10px;
-      }
-
-      button {
-        border: 0;
-        border-radius: 14px;
-        padding: 12px 14px;
-        font: inherit;
-        font-size: 14px;
-        cursor: pointer;
-        transition: transform 140ms ease, box-shadow 140ms ease, background 140ms ease;
-      }
-
-      button:hover {
-        transform: translateY(-1px);
-      }
-
-      button:disabled {
-        cursor: wait;
-        opacity: 0.7;
-        transform: none;
-      }
-
-      .primary {
-        background: linear-gradient(135deg, var(--accent) 0%, var(--accent-strong) 100%);
-        color: #fff;
-        box-shadow: 0 14px 28px rgba(15, 118, 110, 0.24);
-      }
-
-      .secondary {
-        background: var(--panel-strong);
-        color: var(--ink);
-      }
-
-      .ghost {
-        background: transparent;
-        border: 1px solid var(--border);
-        color: var(--ink);
-      }
-
-      .topbar {
-        margin-bottom: 22px;
-        padding: 18px 20px;
-        display: grid;
-        gap: 16px;
-      }
-
-      .topbar-main {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 12px;
-        flex-wrap: wrap;
-      }
-
-      .topbar-main h2 {
-        margin: 0;
-        font-size: 20px;
-      }
-
-      .topbar-actions {
-        display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 10px;
-      }
-
-      .console-layout {
-        display: grid;
-        gap: 22px;
-      }
-
-      .observability-grid,
-      .detail-grid {
-        display: grid;
-        gap: 16px;
-      }
-
-      .observability-grid {
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-      }
-
-      .detail-grid {
-        grid-template-columns: repeat(4, minmax(0, 1fr));
-      }
-
-      .console-card,
-      .panel-card {
-        padding: 18px;
-        display: grid;
-        gap: 14px;
-        align-content: start;
-      }
-
-      .console-card-header,
-      .panel-card-header {
-        display: flex;
-        align-items: baseline;
-        justify-content: space-between;
-        gap: 12px;
-      }
-
-      .console-card-header .panel-title,
-      .panel-card-header .panel-title {
-        margin-bottom: 0;
-      }
-
-      .chat-panel {
-        min-height: 58vh;
-        display: grid;
-        grid-template-rows: auto 1fr auto;
-      }
-
-      .chat-header {
-        padding: 22px 24px 14px;
-        border-bottom: 1px solid rgba(215, 201, 170, 0.7);
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 12px;
-      }
-
-      .chat-header h2 {
-        margin: 0;
-        font-size: 20px;
-      }
-
-      .status-pill {
-        display: inline-flex;
-        align-items: center;
-        gap: 8px;
-        padding: 10px 14px;
-        background: var(--accent-soft);
-        border-radius: 999px;
-        color: var(--accent-strong);
-        font-size: 13px;
-      }
-
-      .status-pill::before {
-        content: "";
-        width: 8px;
-        height: 8px;
-        border-radius: 999px;
-        background: currentColor;
-      }
-
-      .messages {
-        padding: 22px 24px;
-        overflow: auto;
-        display: grid;
-        gap: 14px;
-        align-content: start;
-        background:
-          linear-gradient(180deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0)),
-          linear-gradient(180deg, rgba(244, 239, 228, 0.32), rgba(255, 249, 239, 0.12));
-      }
-
-      .message {
-        max-width: min(84%, 760px);
-        padding: 14px 16px;
-        border-radius: 20px;
-        border: 1px solid rgba(215, 201, 170, 0.85);
-        font-size: 14px;
-        line-height: 1.55;
-        white-space: pre-wrap;
-        word-break: break-word;
-      }
-
-      .message.user {
-        margin-left: auto;
-        background: #f6efe1;
-      }
-
-      .message.agent {
-        background: #fffdf8;
-      }
-
-      .message.agent[data-streaming-state="loading"]::after {
-        content: "正在生成回复...";
-        display: block;
-        margin-top: 8px;
-        color: var(--muted);
-      }
-
-      .message[data-streaming-state="error"]::after {
-        content: attr(data-streaming-status);
-        display: block;
-        margin-top: 8px;
+      .error {
         color: var(--danger);
       }
 
-      .message.intro-message {
-        max-width: 380px;
-        padding: 8px 10px;
-        border-radius: 16px;
-        font-size: 13px;
-        line-height: 1.45;
-        white-space: normal;
-      }
-
-      .message.intro-message .message-label {
-        margin-bottom: 4px;
-        font-size: 11px;
-      }
-
-      .message.system {
-        max-width: 100%;
-        background: #fff5f5;
-        border-color: rgba(185, 28, 28, 0.2);
-        color: var(--danger);
-      }
-
-      .message-label {
-        display: block;
-        margin-bottom: 8px;
-        font-size: 12px;
-        text-transform: uppercase;
-        letter-spacing: 0.12em;
-        color: var(--muted);
-      }
-
-      .composer {
-        padding: 18px 24px 24px;
-        border-top: 1px solid rgba(215, 201, 170, 0.7);
-        display: grid;
-        gap: 12px;
-      }
-
-      .guard-select {
-        width: 100%;
-        border-radius: 14px;
-        border: 1px solid var(--border);
-        background: rgba(255, 255, 255, 0.86);
-        padding: 12px 14px;
-        font: inherit;
-        font-size: 14px;
-        color: var(--ink);
-      }
-
-      .guard-select:focus {
-        outline: 2px solid rgba(15, 118, 110, 0.18);
-        border-color: var(--accent);
-      }
-
-      .agent-wallet-panel {
-        padding: 18px;
-        display: grid;
-        gap: 16px;
-      }
-
-      .agent-wallet-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        gap: 12px;
-        flex-wrap: wrap;
-      }
-
-      .wallet-auth-actions {
-        display: flex;
-        gap: 10px;
-        flex-wrap: wrap;
-      }
-
-      .wallet-grid {
-        display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
-        gap: 14px;
-      }
-
-      .wallet-form {
-        display: grid;
-        gap: 10px;
-        align-content: start;
-      }
-
-      .wallet-field {
-        display: grid;
-        gap: 6px;
-      }
-
-      .wallet-field span {
-        font-size: 12px;
-        color: var(--muted);
-        text-transform: uppercase;
-        letter-spacing: 0.12em;
-      }
-
-      input,
-      select {
-        width: 100%;
-        border-radius: 14px;
-        border: 1px solid var(--border);
-        background: rgba(255, 255, 255, 0.78);
-        padding: 11px 12px;
-        font: inherit;
-        font-size: 14px;
-        color: var(--ink);
-      }
-
-      input:focus,
-      select:focus {
-        outline: 2px solid rgba(15, 118, 110, 0.18);
-        border-color: var(--accent);
-      }
-
-      .wallet-summary {
-        min-height: 124px;
-        padding: 14px;
-        border-radius: 16px;
-        background: rgba(255, 255, 255, 0.72);
-        border: 1px solid rgba(215, 201, 170, 0.9);
-        font-size: 13px;
-        line-height: 1.55;
-        white-space: pre-wrap;
-        word-break: break-word;
-      }
-
-      .guard-result {
-        height: 240px;
-        padding: 14px;
-        border-radius: 16px;
-        background: rgba(255, 255, 255, 0.72);
-        border: 1px solid rgba(215, 201, 170, 0.9);
-        font-size: 13px;
-        line-height: 1.55;
-        white-space: pre-wrap;
-        word-break: break-word;
-        overflow: auto;
-      }
-
-      textarea {
-        width: 100%;
-        min-height: 104px;
-        resize: vertical;
-        border-radius: 18px;
-        border: 1px solid var(--border);
-        background: rgba(255, 255, 255, 0.72);
-        padding: 16px 18px;
-        font: inherit;
-        font-size: 14px;
-        color: var(--ink);
-      }
-
-      textarea:focus {
-        outline: 2px solid rgba(15, 118, 110, 0.18);
-        border-color: var(--accent);
-      }
-
-      .composer-actions {
-        display: flex;
-        justify-content: space-between;
-        gap: 12px;
-        align-items: center;
-      }
-
-      .hint {
-        color: var(--muted);
-        font-size: 13px;
-      }
-
-      @media (max-width: 960px) {
-        .topbar {
-          padding: 16px;
-        }
-
-        .console-layout {
-          gap: 16px;
-        }
-
-        .topbar-actions,
-        .observability-grid,
-        .detail-grid,
-        .wallet-grid {
+      @media (max-width: 900px) {
+        .layout {
           grid-template-columns: 1fr;
         }
 
-        .chat-panel {
-          min-height: auto;
-        }
-
-        .composer-actions {
-          flex-direction: column;
-          align-items: stretch;
+        .composer {
+          grid-template-columns: 1fr;
         }
 
         .message {
           max-width: 100%;
         }
-
-        .guard-result {
-          height: 180px;
-        }
-
-        .agent-wallet-header,
-        .wallet-auth-actions {
-          align-items: stretch;
-          flex-direction: column;
-        }
       }
     </style>
   </head>
   <body>
-    <div class="shell console-shell">
+    <main class="shell">
       <section class="hero">
-        <span class="eyebrow">OntologyAgent Console</span>
-        <h1>和管家持续对话，同时管理理财子。</h1>
+        <div class="eyebrow">Pure Core / Dynamic Skills</div>
+        <h1>OntologyAgent</h1>
       </section>
 
-      <section class="card topbar">
-        <div class="topbar-main">
-          <div>
-            <h2>Console Controls</h2>
-          </div>
-          <div class="status-pill" id="connection-status">Ready</div>
-        </div>
-
-        <div class="topbar-actions">
-          <button class="primary" id="new-session-button" data-control-button>新建会话</button>
-          <button class="secondary" id="start-button" data-control-button>启动理财子</button>
-          <button class="ghost" id="tick-button" data-control-button>执行一轮理财子 Tick</button>
-          <button class="ghost" id="stop-button" data-control-button>停止理财子</button>
-        </div>
-      </section>
-
-      <div class="console-layout">
-        <section class="observability-grid">
-          <article class="card console-card panel-card">
-            <div class="console-card-header panel-card-header">
-              <h3 class="panel-title">Runtime</h3>
-            </div>
-            <div class="meta-box">
-              <div class="meta-row">
-                <span class="meta-label">Session ID</span>
-                <span class="meta-value" id="session-id">未创建</span>
-              </div>
-              <div class="meta-row">
-                <span class="meta-label">消息数</span>
-                <span class="meta-value" id="message-count">0</span>
-              </div>
-              <div class="meta-row">
-                <span class="meta-label">状态概览</span>
-                <span class="meta-value detail-copy" id="runtime-status">未查询</span>
-              </div>
-            </div>
-          </article>
-
-          <article class="card console-card panel-card">
-            <div class="console-card-header panel-card-header">
-              <h3 class="panel-title">Freqtrade</h3>
-            </div>
-            <div class="meta-box">
-              <div class="meta-row">
-                <span class="meta-label">交易状态</span>
-                <span class="meta-value detail-copy" id="freqtrade-state">未查询</span>
-              </div>
-            </div>
-          </article>
-
-          <article class="card console-card panel-card">
-            <div class="console-card-header panel-card-header">
-              <h3 class="panel-title">Chain</h3>
-            </div>
-            <div class="meta-box">
-              <div class="meta-row">
-                <span class="meta-label">链上标识</span>
-                <span class="meta-value detail-copy" id="chain-identifier">未查询</span>
-              </div>
-            </div>
-          </article>
-        </section>
-
-        <section class="detail-grid">
-          <article class="card console-card panel-card">
-            <div class="console-card-header panel-card-header">
-              <h3 class="panel-title">Recent Chain Action</h3>
-            </div>
-            <div class="meta-box">
-              <div class="meta-row">
-                <span class="meta-label">Summary</span>
-                <span class="meta-value detail-copy" id="chain-activity-detail">等待健康检查…</span>
-              </div>
-            </div>
-          </article>
-
-          <article class="card console-card panel-card">
-            <div class="console-card-header panel-card-header">
-              <h3 class="panel-title">Execution Snapshot</h3>
-            </div>
-            <div class="guard-result" id="execution-snapshot">等待健康检查…</div>
-          </article>
-
-          <article class="card console-card panel-card">
-            <div class="console-card-header panel-card-header">
-              <h3 class="panel-title">Warnings</h3>
-            </div>
-            <div class="meta-box" id="warnings-panel">
-              <div class="meta-row">
-                <span class="meta-label">Status</span>
-                <span class="meta-value detail-copy" id="warnings-text">等待健康检查…</span>
-              </div>
-            </div>
-          </article>
-
-          <article class="card console-card panel-card">
-            <div class="console-card-header panel-card-header">
-              <h3 class="panel-title">Action Result</h3>
-            </div>
-            <div class="guard-result" id="action-result">等待操作…</div>
-          </article>
-        </section>
-
-        <section class="card agent-wallet-panel" id="agent-wallet-panel" aria-label="Agent Wallet MVP">
-          <div class="agent-wallet-header">
-            <div>
-              <h2 class="panel-title">Agent Wallet MVP</h2>
-              <div class="hint" id="wallet-auth-state">Checking session…</div>
-            </div>
-            <div class="wallet-auth-actions">
-              <button class="secondary" id="wallet-sign-in-button" data-wallet-button>GitHub 登录</button>
-              <button class="ghost" id="wallet-sign-out-button" data-wallet-button>退出登录</button>
-            </div>
-          </div>
-
-          <div class="wallet-summary" id="wallet-state-summary">Loading wallet state…</div>
-
-          <div class="wallet-grid">
-            <form class="wallet-form meta-box" id="wallet-claim-form">
-              <h3 class="panel-title">Claim Wallet</h3>
-              <label class="wallet-field">
-                <span>Claim Code</span>
-                <input id="wallet-claim-code" name="claimCode" autocomplete="off" required />
-              </label>
-              <button class="secondary" type="submit" data-wallet-button>Claim</button>
-            </form>
-          </div>
-        </section>
-
-        <section class="card chat-panel">
+      <section class="layout">
+        <article class="card chat-panel">
           <header class="chat-header">
-            <div>
-              <h2>管家</h2>
-            </div>
+            <h2>Agent Chat</h2>
           </header>
+          <div id="messages" class="messages"></div>
+          <form id="composer" class="composer">
+            <textarea id="input" placeholder="Ask the agent..." required></textarea>
+            <button id="send" type="submit">Send</button>
+          </form>
+        </article>
 
-          <section class="messages" id="messages">
-            <article class="message agent intro-message">
-              <span class="message-label">Agent</span>
-              页面已准备好。先创建一个 session，然后就可以开始聊天了。
-            </article>
-          </section>
-
-          <section class="composer">
-            <textarea
-              id="composer"
-              placeholder="输入你的问题，比如：先查看理财子状态，再告诉我当前适合继续交易还是先补充资金。"
-            ></textarea>
-            <div class="composer-actions">
-              <span class="hint">支持多轮会话。上方控制台用于观测与控制，底部区域用于和管家持续交互。</span>
-              <button class="primary" id="send-button">发送消息</button>
+        <aside class="side">
+          <section class="card">
+            <header class="side-header">
+              <h2>Runtime</h2>
+            </header>
+            <div class="side-body">
+              <div class="meta-box">
+                <div class="meta-label">Status</div>
+                <div id="status" class="meta-value">Loading...</div>
+              </div>
+              <div class="meta-box">
+                <div class="meta-label">Skills</div>
+                <div id="skills" class="meta-value">-</div>
+              </div>
+              <div class="meta-box">
+                <div class="meta-label">MCP Health</div>
+                <div id="mcp-health" class="meta-value">-</div>
+              </div>
+              <button id="reload" type="button">Reload Runtime</button>
             </div>
           </section>
-        </section>
-      </div>
+        </aside>
+      </section>
+    </main>
 
     <script>
-      const state = {
-        sessionId: null,
-        messageCount: 0,
-        busy: false,
-        streamingAgentMessageEl: null,
-        wallet: {
-          owner: null,
-          agents: [],
-          services: [],
-          payments: [],
-        },
-      };
-
-      const sessionIdEl = document.getElementById("session-id");
-      const messageCountEl = document.getElementById("message-count");
-      const runtimeStatusEl = document.getElementById("runtime-status");
-      const chainIdentifierEl = document.getElementById("chain-identifier");
-      const chainActivityDetailEl = document.getElementById("chain-activity-detail");
-      const freqtradeStateEl = document.getElementById("freqtrade-state");
       const messagesEl = document.getElementById("messages");
       const composerEl = document.getElementById("composer");
-      const sendButtonEl = document.getElementById("send-button");
-      const newSessionButtonEl = document.getElementById("new-session-button");
-      const connectionStatusEl = document.getElementById("connection-status");
-      const executionSnapshotEl = document.getElementById("execution-snapshot");
-      const actionResultEl = document.getElementById("action-result");
-      const warningsTextEl = document.getElementById("warnings-text");
-      const startButtonEl = document.getElementById("start-button");
-      const tickButtonEl = document.getElementById("tick-button");
-      const stopButtonEl = document.getElementById("stop-button");
-      const walletAuthStateEl = document.getElementById("wallet-auth-state");
-      const walletStateSummaryEl = document.getElementById("wallet-state-summary");
-      const walletSignInButtonEl = document.getElementById("wallet-sign-in-button");
-      const walletSignOutButtonEl = document.getElementById("wallet-sign-out-button");
-      const walletClaimFormEl = document.getElementById("wallet-claim-form");
-      const walletClaimCodeEl = document.getElementById("wallet-claim-code");
+      const inputEl = document.getElementById("input");
+      const sendEl = document.getElementById("send");
+      const statusEl = document.getElementById("status");
+      const skillsEl = document.getElementById("skills");
+      const mcpHealthEl = document.getElementById("mcp-health");
+      const reloadEl = document.getElementById("reload");
 
-      const GUARD_ACTION_LABELS = {
-        "/autonomy/start": "启动理财子",
-        "/autonomy/tick": "执行理财子 Tick",
-        "/autonomy/stop": "停止理财子",
-      };
-      const DASHBOARD_REFRESH_INTERVAL_MS = 5000;
-      let dashboardRefreshPromise = null;
-      let dashboardRefreshQueued = false;
+      let sessionId = null;
 
-      function setBusy(busy, label = "Working") {
-        state.busy = busy;
-        sendButtonEl.disabled = busy;
-        newSessionButtonEl.disabled = busy;
-        document.querySelectorAll("[data-control-button]").forEach((button) => {
-          button.disabled = busy;
-        });
-        document.querySelectorAll("[data-wallet-button]").forEach((button) => {
-          button.disabled = busy;
-        });
-        if (!busy) {
-          walletSignInButtonEl.disabled = Boolean(state.wallet.owner);
-          walletSignOutButtonEl.disabled = !state.wallet.owner;
-        }
-        connectionStatusEl.textContent = busy ? label : "Ready";
-      }
-
-      function setSession(sessionId, messageCount = 0) {
-        state.sessionId = sessionId;
-        state.messageCount = messageCount;
-        sessionIdEl.textContent = sessionId ?? "未创建";
-        messageCountEl.textContent = String(messageCount);
-      }
-
-      function addMessage(kind, label, content) {
-        const article = document.createElement("article");
-        article.className = `message ${kind}`;
-
-        const heading = document.createElement("span");
-        heading.className = "message-label";
-        heading.textContent = label;
-        article.appendChild(heading);
-
-        const body = document.createElement("span");
-        body.textContent = content;
-        article.appendChild(body);
-        article._messageLabelEl = heading;
-        article._messageBodyEl = body;
-        messagesEl.appendChild(article);
+      function appendMessage(role, text) {
+        const node = document.createElement("div");
+        node.className = `message ${role}`;
+        node.textContent = text;
+        messagesEl.appendChild(node);
         messagesEl.scrollTop = messagesEl.scrollHeight;
-        return article;
+        return node;
       }
 
-      function appendOrUpdateStreamingAgentMessage(content, isError = false) {
-        if (!state.streamingAgentMessageEl) {
-          state.streamingAgentMessageEl = addMessage("agent", "Agent", content);
-          const article = state.streamingAgentMessageEl;
-          article.dataset.streamingState = "loading";
-          return;
-        }
-
-        const article = state.streamingAgentMessageEl;
-        article.className = `message ${isError ? "system" : "agent"}`;
-        const heading = article._messageLabelEl;
-        if (heading) {
-          heading.textContent = isError ? "System" : "Agent";
-        }
-        if (article._messageBodyEl) {
-          article._messageBodyEl.textContent = content;
-        }
-        article.dataset.streamingState = isError ? "error" : "idle";
-        messagesEl.scrollTop = messagesEl.scrollHeight;
-      }
-
-      function clearStreamingAgentMessage(content, isError = false) {
-        if (!state.streamingAgentMessageEl) {
-          return false;
-        }
-
-        const article = state.streamingAgentMessageEl;
-        const currentContent = article._messageBodyEl?.textContent ?? "";
-        if (isError && currentContent) {
-          article.className = "message agent";
-          if (article._messageLabelEl) {
-            article._messageLabelEl.textContent = "Agent";
-          }
-          article.dataset.streamingState = "error";
-          article.dataset.streamingStatus = content;
-        } else {
-          appendOrUpdateStreamingAgentMessage(content, isError);
-          article.dataset.streamingStatus = isError ? content : "";
-        }
-        state.streamingAgentMessageEl = null;
-        return true;
-      }
-
-      async function streamAgentMessage(sessionId, input) {
-        const response = await fetch(`/agent/sessions/${sessionId}/messages/stream`, {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-          },
-          body: JSON.stringify({ input }),
-        });
-
-        if (!response.ok) {
-          let detail = `HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ""}`;
-          try {
-            const payload = await response.json();
-            detail = payload?.detail ?? JSON.stringify(payload);
-          } catch (_error) {
-            // Fall back to the HTTP status when the error body is not JSON.
-          }
-          throw new Error(detail);
-        }
-
-        if (!response.body) {
-          throw new Error("Streaming response body unavailable");
-        }
-
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
-        let startEventReceived = false;
-
-        async function handleEventBlock(block) {
-          const lines = block.split("\n");
-          let eventName = "message";
-          const dataLines = [];
-
-          for (const line of lines) {
-            if (line.startsWith("event:")) {
-              eventName = line.slice(6).trim();
-            } else if (line.startsWith("data:")) {
-              dataLines.push(line.slice(5).trim());
-            }
-          }
-
-          if (dataLines.length === 0) {
-            return;
-          }
-
-          const payload = JSON.parse(dataLines.join("\n"));
-          if (eventName === "start") {
-            startEventReceived = true;
-            appendOrUpdateStreamingAgentMessage("");
-            return;
-          }
-          if (eventName === "delta") {
-            const currentContent = state.streamingAgentMessageEl?._messageBodyEl?.textContent ?? "";
-            appendOrUpdateStreamingAgentMessage(currentContent + (payload.delta ?? ""));
-            return;
-          }
-          if (eventName === "final") {
-            setSession(payload.sessionId, payload.messageCount);
-            clearStreamingAgentMessage(payload.output ?? "");
-            return;
-          }
-          if (eventName === "error") {
-            clearStreamingAgentMessage(`流式回复失败：${payload.error ?? "未知错误"}`, true);
-            return;
-          }
-        }
-
-        try {
-          while (true) {
-            const { value, done } = await reader.read();
-            buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
-
-            const eventBlocks = buffer.split("\n\n");
-            buffer = eventBlocks.pop() ?? "";
-            for (const block of eventBlocks) {
-              if (block.trim()) {
-                await handleEventBlock(block);
-              }
-            }
-
-            if (done) {
-              break;
-            }
-          }
-
-          if (buffer.trim()) {
-            await handleEventBlock(buffer);
-          }
-
-          const didClearStreamingMessage = clearStreamingAgentMessage("流式回复异常结束", true);
-          if (!didClearStreamingMessage && !startEventReceived) {
-            addMessage("system", "System", "流式回复异常结束");
-          }
-        } catch (error) {
-          const didClearStreamingMessage = clearStreamingAgentMessage(`流式回复失败：${error.message}`, true);
-          if (didClearStreamingMessage) {
-            return;
-          }
-          throw error;
-        }
-      }
-
-      function renderRuntimeStatus(viewModel) {
-        runtimeStatusEl.textContent = [
-          `运行状态: ${viewModel.running}`,
-          `健康状态: ${viewModel.health}`,
-          `熔断状态: ${viewModel.circuitState}`,
-          `最近建议: ${viewModel.decision}`,
-        ].join("\n");
-      }
-
-      function updateGuardResult(title, payload, isError = false) {
-        actionResultEl.textContent =
-          `${title}\n\n${typeof payload === "string" ? payload : JSON.stringify(payload, null, 2)}`;
-        actionResultEl.style.color = isError ? "var(--danger)" : "var(--ink)";
-      }
-
-      function summarizeRecentChainAction(action) {
-        if (!action || !action.summary) {
-          return "暂无";
-        }
-
-        const summary = action.summary;
-        const parts = [summary.kind || action.tool || "未知动作"];
-        if (summary.to) parts.push(`to=${summary.to}`);
-        if (summary.target) parts.push(`target=${summary.target}`);
-        if (summary.url) parts.push(`url=${summary.url}`);
-        if (summary.amountEth) parts.push(`amount=${summary.amountEth} ETH`);
-        if (summary.valueEth && summary.valueEth !== "0") parts.push(`value=${summary.valueEth} ETH`);
-        if (summary.txHash) parts.push(`tx=${summary.txHash}`);
-        if (summary.userOpHash) parts.push(`userOp=${summary.userOpHash}`);
-        return parts.join(" | ");
-      }
-
-      function buildRuntimeViewModel(payload) {
-        const source = payload?.autonomy ?? (payload?.ledger ? payload : payload?.result ? payload.result : payload) ?? {};
-        const ledger = source.ledger ?? {};
-
-        return {
-          running: source.running ? "运行中" : source.enabled ? "已启用，待运行" : "已停止",
-          health: ledger.healthStatus ?? "未知",
-          circuitState: source.summary?.circuitState ?? "未知",
-          decision: ledger.lastDecision?.action ?? "暂无",
-        };
-      }
-
-      function buildFreqtradeViewModel(payload) {
-        const status = payload?.freqtradeStatus ?? {};
-        const parts = [];
-
-        if (status.runningState) {
-          parts.push(String(status.runningState));
-        } else if (status.state) {
-          parts.push(String(status.state));
-        }
-
-        if (status.runmode) {
-          parts.push(String(status.runmode));
-        }
-
-        if (status.exchange) {
-          parts.push(String(status.exchange));
-        }
-
-        if (status.strategy) {
-          parts.push(String(status.strategy));
-        }
-
-        let running = "未知";
-        if (parts.length > 0) {
-          running = parts.join(" | ");
-        } else if (status.error) {
-          running = `不可用: ${status.error}`;
-        }
-
-        let openTrades = "未查询";
-        if (typeof status.openTradeCount === "number") {
-          openTrades = String(status.openTradeCount);
-        } else if (status.error) {
-          openTrades = "读取失败";
-        }
-
-        return {
-          running,
-          openTrades,
-        };
-      }
-
-      function buildChainViewModel(payload) {
-        const wallet = payload?.chainWallet?.wallet ?? payload?.chainWallet?.result?.wallet ?? {};
-        const recentAction = summarizeRecentChainAction(payload?.recentChainAction);
-        const signerAddress = payload?.chainWalletError
-          ? "读取失败"
-          : wallet.address ?? "未配置";
-
-        return {
-          signerAddress,
-          recentAction,
-        };
-      }
-
-      function buildExecutionSnapshotViewModel(payload) {
-        const source = payload?.autonomy ?? (payload?.ledger ? payload : payload?.result ? payload.result : payload) ?? {};
-        const ledger = source.ledger ?? {};
-        const activeExecutions = Array.isArray(ledger.activeExecutions) ? ledger.activeExecutions : [];
-        const executionHistory = Array.isArray(ledger.executionHistory) ? ledger.executionHistory : [];
-
-        return {
-          activeExecutions: String(source.summary?.activeExecutionCount ?? activeExecutions.length),
-          executionHistory: String(executionHistory.length),
-          circuitState: source.summary?.circuitState ?? ledger.circuitBreaker?.state ?? "未知",
-          lastTickAt: ledger.lastTickAt ?? source.lastTickAt ?? "未记录",
-        };
-      }
-
-      function buildWarningsViewModel(payload) {
-        const runtime = buildRuntimeViewModel(payload);
-        const chain = buildChainViewModel(payload);
-        const source = payload?.autonomy ?? {};
-        const ledger = source.ledger ?? {};
-        const warnings = [];
-
-        function pushWarning(message) {
-          if (message && !warnings.includes(message)) {
-            warnings.push(message);
-          }
-        }
-
-        if (!["ok", "healthy"].includes(runtime.health)) {
-          pushWarning(`Runtime health: ${runtime.health}`);
-        }
-        if (runtime.circuitState !== "closed" && runtime.circuitState !== "未知") {
-          pushWarning(`Circuit breaker: ${runtime.circuitState}`);
-        }
-        if (payload?.chainWalletError) {
-          pushWarning(`Chain wallet error: ${payload.chainWalletError}`);
-        } else if (chain.signerAddress === "未配置") {
-          pushWarning("Chain signer: 未配置");
-        }
-        if (payload?.chainError) {
-          pushWarning(`Chain error: ${payload.chainError}`);
-        }
-        if (payload?.freqtradeError) {
-          pushWarning(`Freqtrade error: ${payload.freqtradeError}`);
-        }
-        if (payload?.freqtradeStatus?.error) {
-          pushWarning(`Freqtrade error: ${payload.freqtradeStatus.error}`);
-        }
-        if (source.error) {
-          pushWarning(`Autonomy error: ${source.error}`);
-        }
-        if (ledger.lastError) {
-          if (ledger.lastErrorAt) {
-            pushWarning(`Autonomy error at ${ledger.lastErrorAt}: ${ledger.lastError}`);
-          } else {
-            pushWarning(`Autonomy error: ${ledger.lastError}`);
-          }
-        }
-
-        return warnings;
-      }
-
-      function renderFreqtradeState(viewModel) {
-        freqtradeStateEl.textContent = [
-          `运行状态: ${viewModel.running}`,
-          `Open Trades: ${viewModel.openTrades}`,
-        ].join("\n");
-      }
-
-      function renderChainIdentifier(viewModel) {
-        chainIdentifierEl.textContent = [
-          `Signer: ${viewModel.signerAddress}`,
-          `Recent Action: ${viewModel.recentAction}`,
-        ].join("\n");
-        chainActivityDetailEl.textContent = viewModel.recentAction;
-      }
-
-      function renderExecutionSnapshot(viewModel) {
-        executionSnapshotEl.textContent = [
-          `Active Executions: ${viewModel.activeExecutions}`,
-          `Execution History: ${viewModel.executionHistory}`,
-          `Circuit State: ${viewModel.circuitState}`,
-          `Last Tick: ${viewModel.lastTickAt}`,
-        ].join("\n");
-      }
-
-      function renderWarningsPanel(payload) {
-        const warnings = buildWarningsViewModel(payload);
-        warningsTextEl.textContent = warnings.length > 0 ? warnings.join("\n") : "No active warnings.";
-      }
-
-      function renderAgentWalletState(payload) {
-        const owner = payload?.owner ?? null;
-        const agents = Array.isArray(payload?.agents) ? payload.agents : [];
-        const services = Array.isArray(payload?.services) ? payload.services : [];
-        const payments = Array.isArray(payload?.payments) ? payload.payments : [];
-
-        state.wallet = { owner, agents, services, payments };
-        walletAuthStateEl.textContent = owner ? `Signed in as ${owner.login}` : "Not signed in";
-        walletSignInButtonEl.disabled = state.busy || Boolean(owner);
-        walletSignOutButtonEl.disabled = state.busy || !owner;
-
-        const latestPayment = payments[payments.length - 1];
-        walletStateSummaryEl.textContent = [
-          `Owner: ${owner ? owner.login : "anonymous"}`,
-          `Wallets: ${agents.length}`,
-          `Services: ${services.length}`,
-          `Payments: ${payments.length}`,
-          `Latest Payment: ${latestPayment ? `${latestPayment.status} ${latestPayment.txHash ?? ""}`.trim() : "none"}`,
-        ].join("\n");
-      }
-
-      async function walletApi(path, options = {}) {
-        return requestJson(path, options);
-      }
-
-      async function refreshAgentWalletState() {
-        try {
-          const authPayload = await walletApi("/auth/session", { method: "GET" });
-          const walletPayload = await walletApi("/agent-wallet/state", { method: "GET" });
-          renderAgentWalletState({ ...walletPayload, owner: authPayload.owner ?? walletPayload.owner });
-        } catch (error) {
-          walletAuthStateEl.textContent = "Wallet state unavailable";
-          walletStateSummaryEl.textContent = error.message;
-        }
-      }
-
-      function updateGuardSummary(payload) {
-        renderRuntimeStatus(buildRuntimeViewModel(payload));
-      }
-
-      function updateChainStatus(payload) {
-        renderChainIdentifier(buildChainViewModel(payload));
-      }
-
-      function updateFreqtradeStatus(payload) {
-        renderFreqtradeState(buildFreqtradeViewModel(payload));
-      }
-
-      function updateExecutionSnapshot(payload) {
-        renderExecutionSnapshot(buildExecutionSnapshotViewModel(payload));
-      }
-
-      async function refreshDashboard() {
-        if (dashboardRefreshPromise) {
-          dashboardRefreshQueued = true;
-          return dashboardRefreshPromise;
-        }
-
-        dashboardRefreshQueued = false;
-        dashboardRefreshPromise = (async () => {
-          try {
-            const payload = await requestJson("/health", { method: "GET" });
-            updateGuardSummary(payload);
-            updateChainStatus(payload);
-            updateFreqtradeStatus(payload);
-            updateExecutionSnapshot(payload);
-            renderWarningsPanel(payload);
-          } catch (_error) {
-            runtimeStatusEl.textContent = "读取失败";
-            chainIdentifierEl.textContent = "读取失败";
-            chainActivityDetailEl.textContent = "读取失败";
-            freqtradeStateEl.textContent = "读取失败";
-            executionSnapshotEl.textContent = "读取失败";
-            warningsTextEl.textContent = "读取失败";
-          } finally {
-            dashboardRefreshPromise = null;
-          }
-        })();
-
-        await dashboardRefreshPromise;
-
-        if (dashboardRefreshQueued) {
-          return refreshDashboard();
-        }
-      }
-
-      async function requestJson(url, options = {}) {
-        const response = await fetch(url, {
-          headers: {
-            "content-type": "application/json",
-            ...(options.headers || {}),
-          },
+      async function api(path, options = {}) {
+        const response = await fetch(path, {
+          headers: { "Content-Type": "application/json", ...(options.headers || {}) },
           ...options,
         });
-
-        let payload = null;
-        try {
-          payload = await response.json();
-        } catch (_error) {
-          payload = null;
-        }
-
+        const payload = await response.json().catch(() => ({}));
         if (!response.ok) {
-          const statusDetail = `HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ""}`;
-          const detail = payload?.detail ?? (payload === null ? null : JSON.stringify(payload)) ?? statusDetail;
-          throw new Error(detail);
+          throw new Error(payload.detail || response.statusText);
         }
-
         return payload;
       }
 
-      async function createSession() {
-        setBusy(true, "Creating session");
-        try {
-          const payload = await requestJson("/agent/sessions", { method: "POST" });
-          setSession(payload.sessionId, 0);
-          addMessage("system", "System", `已创建新会话：${payload.sessionId}`);
-          updateGuardResult("会话已创建", payload);
-        } catch (error) {
-          addMessage("system", "System", `创建会话失败：${error.message}`);
-          updateGuardResult("创建会话失败", error.message, true);
-        } finally {
-          setBusy(false);
-          refreshDashboard();
-        }
-      }
-
       async function ensureSession() {
-        if (!state.sessionId) {
-          await createSession();
-        }
-        return state.sessionId;
+        if (sessionId) return sessionId;
+        const payload = await api("/agent/sessions", { method: "POST" });
+        sessionId = payload.sessionId;
+        return sessionId;
       }
 
-      async function sendMessage() {
-        if (state.busy) {
-          return;
-        }
-
-        const input = composerEl.value.trim();
-        if (!input) {
-          return;
-        }
-
-        const sessionId = await ensureSession();
-        if (!sessionId) {
-          return;
-        }
-
-        addMessage("user", "You", input);
-        composerEl.value = "";
-        setBusy(true, "Agent thinking");
-
+      async function refreshHealth() {
         try {
-          await streamAgentMessage(sessionId, input);
+          const health = await api("/health");
+          statusEl.textContent = `${health.status} / ${health.modelName || "unknown model"} / ${health.toolCount || 0} tools`;
+          skillsEl.textContent = (health.skills || []).join("\n") || "No enabled skills";
+          mcpHealthEl.textContent = JSON.stringify(health.mcpHealth || {}, null, 2);
         } catch (error) {
-          addMessage("system", "System", `发送失败：${error.message}`);
-        } finally {
-          setBusy(false);
-          composerEl.focus();
-          refreshDashboard();
+          statusEl.textContent = error.message;
+          statusEl.classList.add("error");
         }
       }
 
-      async function runGuardAction(path, label) {
-        setBusy(true, label);
-        try {
-          const payload = await requestJson(path, {
-            method: path === "/autonomy/status" ? "GET" : "POST",
-          });
-          updateGuardResult(`${label} 完成`, payload);
-        } catch (error) {
-          updateGuardResult(`${label} 失败`, error.message, true);
-        } finally {
-          setBusy(false);
-          refreshDashboard();
-        }
-      }
-
-      async function claimAgentWallet(event) {
+      composerEl.addEventListener("submit", async (event) => {
         event.preventDefault();
-        setBusy(true, "Claiming wallet");
+        const input = inputEl.value.trim();
+        if (!input) return;
+
+        appendMessage("user", input);
+        inputEl.value = "";
+        sendEl.disabled = true;
+        const agentNode = appendMessage("agent", "");
+
         try {
-          const payload = await walletApi("/agent-wallet/claim", {
+          const id = await ensureSession();
+          const response = await fetch(`/agent/sessions/${id}/messages/stream`, {
             method: "POST",
-            body: JSON.stringify({
-              claimCode: walletClaimCodeEl.value.trim(),
-            }),
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ input }),
           });
-          updateGuardResult("Agent Wallet claimed", payload);
-          walletClaimCodeEl.value = "";
-          await refreshAgentWalletState();
-        } catch (error) {
-          updateGuardResult("Agent Wallet claim failed", error.message, true);
-        } finally {
-          setBusy(false);
-        }
-      }
+          if (!response.ok || !response.body) {
+            throw new Error(`Request failed: ${response.status}`);
+          }
 
-      async function signOutWalletOwner() {
-        setBusy(true, "Signing out");
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const events = buffer.split("\n\n");
+            buffer = events.pop() || "";
+            for (const eventText of events) {
+              const dataLine = eventText.split("\n").find((line) => line.startsWith("data: "));
+              if (!dataLine) continue;
+              const data = JSON.parse(dataLine.slice(6));
+              if (data.delta) agentNode.textContent += data.delta;
+              if (data.output) agentNode.textContent = data.output;
+              if (data.error) throw new Error(data.error);
+            }
+          }
+        } catch (error) {
+          agentNode.textContent = `Error: ${error.message}`;
+          agentNode.classList.add("error");
+        } finally {
+          sendEl.disabled = false;
+          refreshHealth();
+        }
+      });
+
+      reloadEl.addEventListener("click", async () => {
+        reloadEl.disabled = true;
         try {
-          await walletApi("/auth/logout", { method: "POST" });
-          await refreshAgentWalletState();
-        } catch (error) {
-          updateGuardResult("Sign out failed", error.message, true);
+          await api("/agent/reload-runtime", { method: "POST" });
+          await refreshHealth();
         } finally {
-          setBusy(false);
-        }
-      }
-
-      sendButtonEl.addEventListener("click", sendMessage);
-      newSessionButtonEl.addEventListener("click", createSession);
-      startButtonEl.addEventListener("click", () => {
-        runGuardAction("/autonomy/start", GUARD_ACTION_LABELS["/autonomy/start"]);
-      });
-      tickButtonEl.addEventListener("click", () => {
-        runGuardAction("/autonomy/tick", GUARD_ACTION_LABELS["/autonomy/tick"]);
-      });
-      stopButtonEl.addEventListener("click", () => {
-        runGuardAction("/autonomy/stop", GUARD_ACTION_LABELS["/autonomy/stop"]);
-      });
-      walletSignInButtonEl.addEventListener("click", () => {
-        window.location.href = "/auth/github/login";
-      });
-      walletSignOutButtonEl.addEventListener("click", signOutWalletOwner);
-      walletClaimFormEl.addEventListener("submit", claimAgentWallet);
-      composerEl.addEventListener("keydown", (event) => {
-        if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-          event.preventDefault();
-          sendMessage();
+          reloadEl.disabled = false;
         }
       });
 
-      refreshDashboard();
-      refreshAgentWalletState();
-      setInterval(refreshDashboard, DASHBOARD_REFRESH_INTERVAL_MS);
+      refreshHealth();
     </script>
   </body>
 </html>

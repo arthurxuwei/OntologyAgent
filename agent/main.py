@@ -5,241 +5,45 @@ import json
 import logging
 import os
 import threading
-from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, AsyncIterator, Literal, Optional
+from typing import Any, AsyncIterator, Optional
 from urllib.parse import urlparse
 from uuid import uuid4
 
-from fastapi import Cookie, FastAPI, HTTPException, Response
-from fastapi.responses import (
-    FileResponse,
-    HTMLResponse,
-    RedirectResponse,
-    StreamingResponse,
-)
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import StructuredTool
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from autonomy import AutonomyController, load_autonomy_config
-from agent_wallet_auth import (
-    build_github_login_url,
-    build_github_oauth_state,
-    verify_session,
-)
-from agent_wallet_state import AgentWalletStore
-from chain_mcp_client import ChainMcpClient
-from freqtrade_mcp_client import FreqtradeMcpClient, FreqtradeMcpClientError
-from ledger_client import LedgerClient, LedgerClientError
-from payment_router import PaymentIntent, route_payment_intent
+from mcp_runtime import McpRuntime
+from prompt_builder import build_agent_prompt
+from skill_loader import SkillCatalog, load_skill_catalog
+
 
 app = FastAPI(title="OntologyAgent agent")
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = (
-    "你是一个金融助理。链上相关动作只能通过 chain MCP 工具完成；"
-    "中心化交易和量化相关动作只能通过 Freqtrade MCP 工具完成。"
-    "Agent Wallet 内部余额和撮合型 Escrow 只能通过 ledger 工具完成。"
-    "凡是涉及付款、付费 API、转账、锁款、放款或退款，必须先调用 route_payment_intent；"
-    "只能使用该工具返回的 allowedTools，若返回 needs_clarification 必须先向用户澄清。"
-    "在决定是否调用 x402、是否给 Freqtrade 增加 dry-run 资金前，应先查看理财子状态。"
-    "你可以启动、停止或手动驱动理财子 Agent，但只有在确有需要时才这么做。"
-    "执行任何会改变链上状态、Freqtrade 运行状态或交易状态的动作前，先清晰总结当前状态、"
-    "即将执行的动作和影响对象，然后再调用工具。"
-)
-CHAIN_MCP_URL = os.getenv(
-    "CHAIN_MCP_URL",
-    os.getenv("EXECUTOR_MCP_URL", "http://chain-mcp:8091/mcp/"),
-)
-REQUEST_TIMEOUT_SECONDS = float(
-    os.getenv("CHAIN_TIMEOUT_SECONDS", os.getenv("EXECUTOR_TIMEOUT_SECONDS", "20"))
-)
-FREQTRADE_MCP_URL = os.getenv("FREQTRADE_MCP_URL", "http://freqtrade:8090/mcp/")
-LEDGER_URL = os.getenv("LEDGER_URL", "http://ledger:8092")
-LEDGER_TIMEOUT_SECONDS = float(os.getenv("LEDGER_TIMEOUT_SECONDS", "20"))
 CHAT_PAGE_PATH = Path(__file__).resolve().parent / "web" / "chat.html"
+SKILLS_DIR = Path(__file__).resolve().parent / "skills"
 NO_CACHE_HEADERS = {
     "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
     "Pragma": "no-cache",
     "Expires": "0",
 }
-EMPTY_FINAL_OUTPUT_FALLBACK = "模型返回了空回复，请重试或更换模型配置。"
-AGENT_WALLET_STATE_PATH = os.getenv(
-    "AGENT_WALLET_STATE_PATH", "agent/data/agent_wallet_state.json"
-)
-SESSION_COOKIE = "agent_wallet_session"
-OAUTH_STATE_COOKIE = "agent_wallet_oauth_state"
-_discovered_chain_tools: Optional[list[StructuredTool]] = None
-_discovered_freqtrade_tools: Optional[list[StructuredTool]] = None
+EMPTY_FINAL_OUTPUT_FALLBACK = "Model returned an empty response. Please retry or change model configuration."
 
-
-def get_openai_base_url() -> Optional[str]:
-    value = os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_ENDPOINT")
-    if value is None:
-        return None
-    normalized = value.strip()
-    return normalized or None
-
-
-def _provider_supports_streamed_tool_execution() -> bool:
-    base_url = get_openai_base_url()
-    if not base_url:
-        return True
-    parsed = urlparse(base_url)
-    hostname = (parsed.hostname or "").lower()
-    if hostname == "packyapi.com" or hostname.endswith(".packyapi.com"):
-        return False
-    return True
-
-
-class SignTransferIntent(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-
-    to: str = Field(description="接收地址，例如 0xabc...")
-    amountEth: str = Field(
-        description="转账金额（ETH 字符串），例如 0.01",
-        pattern=r"^\d+(\.\d+)?$",
-    )
-
-
-class ExecutionIntent(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-
-    to: str = Field(description="交易目标地址")
-    valueEth: str = Field(
-        default="0",
-        description="附带 ETH 数量（字符串）",
-        pattern=r"^\d+(\.\d+)?$",
-    )
-    data: Optional[str] = Field(default=None, description="可选 calldata（0x...）")
-
-
-class UserOperationIntent(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    target: str = Field(description="UserOperation 目标地址")
-    maxCostEth: str = Field(
-        description="允许最大成本（ETH 字符串）",
-        pattern=r"^\d+(\.\d+)?$",
-    )
-    raw: dict[str, Any] = Field(description="完整 UserOperation 原始字段")
-
-
-class TransactionReceiptIntent(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-
-    txHash: str = Field(description="交易哈希，例如 0xabc...")
-
-
-class UserOperationStatusIntent(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-
-    userOpHash: str = Field(description="UserOperation 哈希，例如 0xabc...")
-
-
-class X402FetchIntent(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    url: HttpUrl = Field(description="x402 上游 API URL")
-    method: Literal["GET", "POST", "PUT", "PATCH", "DELETE"] = Field(
-        default="GET",
-        description="请求方法",
-    )
-    headers: Optional[dict[str, str]] = Field(default=None, description="可选请求头")
-    body: Optional[Any] = Field(default=None, description="可选请求体")
-
-
-class AgentWalletInitRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-
-    agentName: str = Field(min_length=1)
-    agentDescription: Optional[str] = None
-
-
-class AgentWalletClaimRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-
-    claimCode: str = Field(min_length=1)
-
-
-class AgentWalletRegisterServiceRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-
-    agentId: str = Field(min_length=1)
-    name: str = Field(min_length=1)
-    path: str = Field(min_length=1)
-    priceAtomic: str = Field(min_length=1)
-
-
-class AgentWalletCallServiceRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-
-    serviceId: str = Field(min_length=1)
-
-
-class LedgerCreditIntent(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-
-    agentId: str = Field(min_length=1, description="要入账的 Agent ID")
-    amountAtomic: str = Field(
-        min_length=1,
-        pattern=r"^[1-9]\d*$",
-        description="USDC atomic amount，例如 5000000 表示 5 USDC",
-    )
-    reason: Optional[str] = Field(default=None, description="入账原因")
-
-
-class LedgerCreateEscrowIntent(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-
-    buyerAgentId: str = Field(min_length=1, description="付款方 Agent ID")
-    sellerAgentId: str = Field(min_length=1, description="收款方 Agent ID")
-    amountAtomic: str = Field(
-        min_length=1,
-        pattern=r"^[1-9]\d*$",
-        description="锁定的 USDC atomic amount",
-    )
-    taskId: Optional[str] = Field(default=None, description="可选任务 ID")
-    description: Optional[str] = Field(default=None, description="可选任务说明")
-
-
-class LedgerEscrowActionIntent(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-
-    escrowId: str = Field(min_length=1, description="Escrow ID")
-
-
-class PaymentRouteIntent(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-
-    purpose: str = Field(min_length=1, description="付款目的或业务场景")
-    deliveryMode: Literal["async_task", "immediate_api", "withdrawal", "unknown"] = Field(
-        default="unknown",
-        description="交付模式：异步任务、即时 API、提现转账或未知",
-    )
-    requiresAcceptance: bool = Field(
-        default=False,
-        description="是否需要交付验收后再放款",
-    )
-    externalService: bool = Field(
-        default=False,
-        description="是否是平台外部服务或外部钱包",
-    )
-    serviceUrl: Optional[HttpUrl] = Field(
-        default=None,
-        description="外部 paid API 或 x402 endpoint URL",
-    )
+_discovered_tools: Optional[list[StructuredTool]] = None
 
 
 class AgentRunRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    input: str = Field(min_length=1, description="用户自然语言指令")
+    input: str = Field(min_length=1, description="User natural language instruction")
 
 
 class AgentSessionCreateResponse(BaseModel):
@@ -252,7 +56,7 @@ class AgentSessionCreateResponse(BaseModel):
 class AgentChatRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    input: str = Field(min_length=1, description="当前轮用户输入")
+    input: str = Field(min_length=1, description="Current user message")
 
 
 class AgentChatResponse(BaseModel):
@@ -277,149 +81,6 @@ class AgentSessionStateResponse(BaseModel):
 class AgentSession:
     session_id: str
     messages: list[Any] = field(default_factory=list)
-
-
-@dataclass
-class RecentChainAction:
-    tool: str
-    at: str
-    summary: dict[str, Any]
-
-
-class ChainActivityStore:
-    def __init__(self) -> None:
-        self._last_action: Optional[RecentChainAction] = None
-        self._lock = threading.RLock()
-
-    def set(self, tool: str, summary: dict[str, Any]) -> None:
-        with self._lock:
-            self._last_action = RecentChainAction(
-                tool=tool,
-                at=datetime.now(timezone.utc).isoformat(),
-                summary=summary,
-            )
-
-    def get(self) -> Optional[dict[str, Any]]:
-        with self._lock:
-            if self._last_action is None:
-                return None
-            return {
-                "tool": self._last_action.tool,
-                "at": self._last_action.at,
-                "summary": self._last_action.summary,
-            }
-
-
-class EmptyIntent(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-
-class UpdateWealthConfigIntent(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    intervalSeconds: Optional[float] = Field(
-        default=None,
-        gt=0,
-        description="自治循环间隔秒数，必须大于 0。",
-    )
-    ethPriceUsd: Optional[float] = Field(
-        default=None,
-        gt=0,
-        description="用于把 ETH 余额折算成 USD 的参考价格，必须大于 0。",
-    )
-    minWalletBalanceUsd: Optional[float] = Field(
-        default=None,
-        ge=0,
-        description="低于该钱包余额时建议补充资金。",
-    )
-    stopTradingBalanceUsd: Optional[float] = Field(
-        default=None,
-        ge=0,
-        description="低于该钱包余额时允许停止交易。",
-    )
-    forceExitBalanceUsd: Optional[float] = Field(
-        default=None,
-        ge=0,
-        description="低于该钱包余额时允许强制退出所有交易。",
-    )
-    maxDrawdownRatio: Optional[float] = Field(
-        default=None,
-        ge=0,
-        le=1,
-        description="最大回撤比例，取值范围 0 到 1。",
-    )
-
-    @model_validator(mode="after")
-    def require_at_least_one_field(self) -> "UpdateWealthConfigIntent":
-        if not self.model_dump(exclude_none=True):
-            raise ValueError("至少需要提供一个要修改的配置字段")
-        return self
-
-
-class TradeListIntent(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    limit: int = Field(default=20, ge=1, le=200, description="返回记录数")
-    offset: int = Field(default=0, ge=0, description="偏移量")
-
-
-class EvaluateTradeSignalIntent(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-
-    pair: str
-    strategy: Optional[str] = None
-    timeframe: Optional[str] = None
-
-
-class SyncDryRunWalletIntent(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    dryRunWallet: float = Field(ge=0, description="新的 Freqtrade dry-run wallet 资金")
-
-
-class ForceEnterTradeIntent(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-
-    pair: str = Field(description="交易对，例如 BTC/USDT")
-    side: Literal["long", "short"] = Field(default="long", description="方向")
-    stakeAmount: float = Field(description="下单金额")
-    price: Optional[float] = Field(default=None, description="limit 单价格")
-    orderType: Literal["market", "limit"] = Field(
-        default="market", description="订单类型"
-    )
-    entryTag: str = Field(default="agent_force_enter", description="可选标签")
-
-
-class ExecuteFreqtradeTradeIntentIntent(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-
-    pair: str
-    side: Literal["long", "short"] = "long"
-    stakeAmount: float = Field(gt=0)
-    maxSlippageBps: int = Field(default=100, ge=0, le=10000)
-    orderType: Literal["market", "limit"] = "market"
-    price: Optional[float] = None
-    reason: str = "agent_requested_trade"
-
-    @model_validator(mode="after")
-    def validate_v1_compatibility(self) -> "ExecuteFreqtradeTradeIntentIntent":
-        if self.side != "long":
-            raise ValueError("short side is unsupported in V1")
-        if self.orderType != "market":
-            raise ValueError("limit orders are unsupported in V1")
-        if self.price is not None:
-            raise ValueError("price is unsupported for market orders in V1")
-        return self
-
-
-class ForceExitTradeIntent(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-
-    tradeId: str = Field(description="交易 ID，或 all")
-    orderType: Literal["market", "limit"] = Field(
-        default="market", description="订单类型"
-    )
-    amount: Optional[float] = Field(default=None, description="部分平仓数量")
 
 
 class AgentSessionStore:
@@ -447,864 +108,24 @@ def get_session_store() -> AgentSessionStore:
 
 
 @lru_cache(maxsize=1)
-def get_chain_activity_store() -> ChainActivityStore:
-    return ChainActivityStore()
+def get_skill_catalog() -> SkillCatalog:
+    return load_skill_catalog(SKILLS_DIR)
 
 
 @lru_cache(maxsize=1)
-def get_agent_wallet_store() -> AgentWalletStore:
-    return AgentWalletStore(AGENT_WALLET_STATE_PATH)
-
-
-def _should_secure_oauth_state_cookie() -> bool:
-    public_base_url = os.getenv("PUBLIC_BASE_URL", "http://localhost:8000")
-    parsed = urlparse(public_base_url)
-    hostname = (parsed.hostname or "").lower()
-    return parsed.scheme == "https" and hostname not in {
-        "localhost",
-        "127.0.0.1",
-        "::1",
-    }
-
-
-def resolve_current_owner(session_cookie: Optional[str]) -> Optional[dict[str, object]]:
-    try:
-        session = verify_session(session_cookie)
-    except RuntimeError as error:
-        raise HTTPException(status_code=500, detail=str(error)) from error
-    if session is None:
-        return None
-
-    owner_id = session.get("ownerId")
-    if owner_id is None:
-        return None
-
-    state = get_agent_wallet_store().load()
-    for owner in state.owners:
-        if owner.ownerId == owner_id:
-            return owner.model_dump()
-    return None
-
-
-def _tool_result_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    result = payload.get("result")
-    if isinstance(result, dict):
-        return result
-    return payload
-
-
-def _visible_agent_ids_for_owner(
-    state: Any,
-    owner_id: Optional[str],
-) -> set[str]:
-    if owner_id is None:
-        return {
-            agent.agentId
-            for agent in state.agents
-            if agent.claimStatus == "unclaimed" and agent.ownerId is None
-        }
-    return {
-        agent.agentId
-        for agent in state.agents
-        if agent.ownerId == owner_id
-        or (agent.claimStatus == "unclaimed" and agent.ownerId is None)
-    }
-
-
-def _require_owner_id(
-    session_cookie: Optional[str],
-    *,
-    action: str,
-) -> str:
-    owner = resolve_current_owner(session_cookie)
-    if owner is None:
-        raise HTTPException(
-            status_code=401,
-            detail=f"Authentication is required to {action}",
-        )
-    return str(owner["ownerId"])
-
-
-def _owner_agent_or_404(state: Any, agent_id: str, owner_id: str) -> Any:
-    agent = next((item for item in state.agents if item.agentId == agent_id), None)
-    if agent is None:
-        raise HTTPException(status_code=404, detail="agent not found")
-    if agent.ownerId != owner_id or agent.claimStatus != "claimed":
-        raise HTTPException(status_code=403, detail="agent wallet is not claimed by owner")
-    return agent
-
-
-@lru_cache(maxsize=1)
-def get_chain_mcp_client() -> ChainMcpClient:
-    return ChainMcpClient(CHAIN_MCP_URL)
-
-
-@lru_cache(maxsize=1)
-def get_freqtrade_mcp_client() -> FreqtradeMcpClient:
-    return FreqtradeMcpClient(FREQTRADE_MCP_URL)
-
-
-@lru_cache(maxsize=1)
-def get_ledger_client() -> LedgerClient:
-    return LedgerClient(LEDGER_URL, timeout_seconds=LEDGER_TIMEOUT_SECONDS)
-
-
-def _unwrap_mcp_result(tool_name: str, result: dict[str, Any]) -> dict[str, Any]:
-    if result.get("isError"):
-        raise RuntimeError(f"{tool_name} failed: {result.get('error', result)}")
-    return result
-
-
-def _with_autonomy_runtime_summary(status: dict[str, Any]) -> dict[str, Any]:
-    ledger = status.get("ledger")
-    if not isinstance(ledger, dict):
-        ledger = {}
-
-    enriched_status = dict(status)
-    enriched_status["ledger"] = ledger
-    enriched_status["summary"] = {
-        "activeExecutionCount": len(ledger.get("activeExecutions", [])),
-        "circuitState": ledger.get("circuitBreaker", {}).get("state", "closed"),
-    }
-    return enriched_status
-
-
-def _summarize_chain_result(tool_name: str, result: dict[str, Any]) -> dict[str, Any]:
-    structured = result.get("result", result)
-    settlement = structured.get("settlement", {})
-    settlement_identifier = (
-        settlement.get("identifier") if isinstance(settlement, dict) else None
-    )
-    settlement_status = (
-        settlement.get("status") if isinstance(settlement, dict) else None
-    )
-
-    if tool_name == "chain_sign_transfer":
-        transfer = structured.get("transfer", {})
-        tx = structured.get("transaction", {})
-        policy = structured.get("policy", {})
-        return {
-            "kind": "sign_transfer",
-            "to": transfer.get("to") or tx.get("to"),
-            "amountEth": transfer.get("amountEth") or tx.get("amountEth"),
-            "txHash": transfer.get("txHash")
-            or tx.get("txHash")
-            or settlement_identifier,
-            "mode": structured.get("mode"),
-            "decision": policy.get("decision"),
-        }
-
-    if tool_name == "chain_submit_execution":
-        execution = structured.get("execution", {})
-        return {
-            "kind": "submit_execution",
-            "to": execution.get("to"),
-            "valueEth": execution.get("valueEth"),
-            "txHash": settlement_identifier,
-            "status": settlement_status,
-            "mode": structured.get("mode"),
-        }
-
-    if tool_name == "chain_submit_user_operation":
-        user_operation = structured.get("userOperation", {})
-        return {
-            "kind": "submit_user_operation",
-            "target": (
-                user_operation.get("target")
-                if isinstance(user_operation, dict)
-                else structured.get("target")
-            ),
-            "userOpHash": settlement_identifier,
-            "status": settlement_status,
-            "mode": structured.get("mode"),
-        }
-
-    if tool_name == "chain_get_transaction_receipt":
-        return {
-            "kind": "transaction_receipt",
-            "txHash": structured.get("txHash") or structured.get("transactionHash"),
-            "status": structured.get("status"),
-            "finalized": structured.get("finalized"),
-        }
-
-    if tool_name == "chain_get_user_operation_status":
-        return {
-            "kind": "user_operation_status",
-            "userOpHash": structured.get("userOpHash"),
-            "status": structured.get("status"),
-            "finalized": structured.get("finalized"),
-        }
-
-    if tool_name == "chain_x402_fetch":
-        payment = structured.get("payment", {})
-        return {
-            "kind": "x402_fetch",
-            "url": structured.get("request", {}).get("url"),
-            "statusCode": structured.get("upstream", {}).get("status"),
-            "payer": payment.get("payer"),
-            "txHash": payment.get("txHash"),
-            "success": structured.get("paymentResponse", {}).get("success"),
-        }
-
-    return {
-        "kind": tool_name,
-        "result": structured,
-    }
-
-
-async def call_chain_tool(
-    tool_name: str, arguments: Optional[dict[str, Any]] = None
-) -> dict[str, Any]:
-    try:
-        result = await get_chain_mcp_client().call_tool(tool_name, arguments or {})
-    except Exception as error:
-        raise RuntimeError(f"Chain MCP tool failed: {tool_name}: {error}") from error
-
-    payload = {
-        "tool": tool_name,
-        "result": _unwrap_mcp_result(tool_name, result),
-    }
-    if tool_name != "chain_get_wallet_state":
-        get_chain_activity_store().set(
-            tool_name, _summarize_chain_result(tool_name, payload)
-        )
-    return payload
-
-
-async def get_chain_wallet_state() -> dict[str, Any]:
-    result = await get_chain_mcp_client().call_tool("chain_get_wallet_state", {})
-    return _unwrap_mcp_result("chain_get_wallet_state", result)
-
-
-async def chain_sign_transfer_tool(to: str, amountEth: str) -> dict[str, Any]:
-    intent = SignTransferIntent(to=to, amountEth=amountEth)
-    return await call_chain_tool(
-        "chain_sign_transfer",
-        {
-            "to": intent.to,
-            "amountEth": intent.amountEth,
-        },
-    )
-
-
-async def chain_submit_execution_tool(
-    to: str,
-    valueEth: str = "0",
-    data: Optional[str] = None,
-) -> dict[str, Any]:
-    intent = ExecutionIntent(to=to, valueEth=valueEth, data=data)
-    payload: dict[str, Any] = {
-        "to": intent.to,
-        "valueEth": intent.valueEth,
-    }
-    if intent.data is not None:
-        payload["data"] = intent.data
-    return await call_chain_tool("chain_submit_execution", payload)
-
-
-async def chain_submit_user_operation_tool(
-    target: str,
-    maxCostEth: str,
-    raw: dict[str, Any],
-) -> dict[str, Any]:
-    intent = UserOperationIntent(target=target, maxCostEth=maxCostEth, raw=raw)
-    return await call_chain_tool(
-        "chain_submit_user_operation",
-        {
-            "target": intent.target,
-            "maxCostEth": intent.maxCostEth,
-            "raw": intent.raw,
-        },
-    )
-
-
-async def chain_get_transaction_receipt_tool(txHash: str) -> dict[str, Any]:
-    intent = TransactionReceiptIntent(txHash=txHash)
-    return await call_chain_tool(
-        "chain_get_transaction_receipt",
-        {"txHash": intent.txHash},
-    )
-
-
-async def chain_get_user_operation_status_tool(userOpHash: str) -> dict[str, Any]:
-    intent = UserOperationStatusIntent(userOpHash=userOpHash)
-    return await call_chain_tool(
-        "chain_get_user_operation_status",
-        {"userOpHash": intent.userOpHash},
-    )
-
-
-async def chain_x402_fetch_tool(
-    url: str,
-    method: str = "GET",
-    headers: Optional[dict[str, str]] = None,
-    body: Optional[Any] = None,
-) -> dict[str, Any]:
-    intent = X402FetchIntent(
-        url=HttpUrl(url),
-        method=method,  # type: ignore[arg-type]
-        headers=headers,
-        body=body,
-    )
-    payload: dict[str, Any] = {
-        "url": str(intent.url),
-        "method": intent.method,
-    }
-    if intent.headers is not None:
-        payload["headers"] = intent.headers
-    if intent.body is not None:
-        payload["body"] = intent.body
-    return await call_chain_tool("chain_x402_fetch", payload)
-
-
-async def call_freqtrade_tool(
-    tool_name: str, arguments: Optional[dict[str, Any]] = None
-) -> dict[str, Any]:
-    try:
-        result = await get_freqtrade_mcp_client().call_tool(tool_name, arguments or {})
-    except Exception as error:
-        raise RuntimeError(
-            f"Freqtrade MCP tool failed: {tool_name}: {error}"
-        ) from error
-
-    return {
-        "tool": tool_name,
-        "result": _unwrap_mcp_result(tool_name, result),
-    }
-
-
-async def get_trading_status_tool() -> dict[str, Any]:
-    return await call_freqtrade_tool("get_trading_status")
-
-
-async def list_strategies_tool() -> dict[str, Any]:
-    return await call_freqtrade_tool("list_strategies")
-
-
-async def get_open_trades_tool(limit: int = 20, offset: int = 0) -> dict[str, Any]:
-    return await call_freqtrade_tool(
-        "get_open_trades", {"limit": limit, "offset": offset}
-    )
-
-
-async def get_closed_trades_tool(limit: int = 20, offset: int = 0) -> dict[str, Any]:
-    return await call_freqtrade_tool(
-        "get_closed_trades", {"limit": limit, "offset": offset}
-    )
-
-
-async def get_performance_summary_tool() -> dict[str, Any]:
-    return await call_freqtrade_tool("get_performance_summary")
-
-
-async def get_budget_snapshot_tool() -> dict[str, Any]:
-    return await call_freqtrade_tool("get_budget_snapshot")
-
-
-async def evaluate_trade_signal_tool(
-    pair: str,
-    strategy: Optional[str] = None,
-    timeframe: Optional[str] = None,
-) -> dict[str, Any]:
-    payload: dict[str, Any] = {"pair": pair}
-    if strategy is not None:
-        payload["strategy"] = strategy
-    if timeframe is not None:
-        payload["timeframe"] = timeframe
-    return await call_freqtrade_tool("evaluate_trade_signal", payload)
-
-
-async def get_freqtrade_status_snapshot() -> dict[str, Any]:
-    result = await get_freqtrade_mcp_client().call_tool("get_trading_status", {})
-    return _unwrap_mcp_result("get_trading_status", result)
-
-
-async def sync_dry_run_wallet_tool(dryRunWallet: float) -> dict[str, Any]:
-    intent = SyncDryRunWalletIntent(dryRunWallet=dryRunWallet)
-    return await call_freqtrade_tool(
-        "sync_dry_run_wallet",
-        {"dry_run_wallet": intent.dryRunWallet},
-    )
-
-
-async def start_bot_tool() -> dict[str, Any]:
-    return await call_freqtrade_tool("start_bot")
-
-
-async def stop_bot_tool() -> dict[str, Any]:
-    return await call_freqtrade_tool("stop_bot")
-
-
-async def pause_trading_tool() -> dict[str, Any]:
-    return await call_freqtrade_tool("pause_trading")
-
-
-async def resume_trading_tool() -> dict[str, Any]:
-    return await call_freqtrade_tool("resume_trading")
-
-
-async def force_enter_trade_tool(
-    pair: str,
-    side: str = "long",
-    stakeAmount: float = 0,
-    price: Optional[float] = None,
-    orderType: str = "market",
-    entryTag: str = "agent_force_enter",
-) -> dict[str, Any]:
-    return await call_freqtrade_tool(
-        "force_enter_trade",
-        {
-            "pair": pair,
-            "side": side,
-            "stake_amount": stakeAmount,
-            "price": price,
-            "order_type": orderType,
-            "entry_tag": entryTag,
-        },
-    )
-
-
-async def force_exit_trade_tool(
-    tradeId: str,
-    orderType: str = "market",
-    amount: Optional[float] = None,
-) -> dict[str, Any]:
-    payload: dict[str, Any] = {
-        "trade_id": tradeId,
-        "order_type": orderType,
-    }
-    if amount is not None:
-        payload["amount"] = amount
-    return await call_freqtrade_tool("force_exit_trade", payload)
-
-
-async def execute_freqtrade_trade_intent_tool(
-    pair: str,
-    side: str = "long",
-    stakeAmount: float = 0,
-    maxSlippageBps: int = 100,
-    orderType: str = "market",
-    price: Optional[float] = None,
-    reason: str = "agent_requested_trade",
-) -> dict[str, Any]:
-    intent = ExecuteFreqtradeTradeIntentIntent(
-        pair=pair,
-        side=side,
-        stakeAmount=stakeAmount,
-        maxSlippageBps=maxSlippageBps,
-        orderType=orderType,
-        price=price,
-        reason=reason,
-    )
-    emit_result = await call_freqtrade_tool(
-        "emit_trade_intent",
-        {
-            "pair": intent.pair,
-            "side": intent.side,
-            "stake_amount": intent.stakeAmount,
-            "order_type": intent.orderType,
-            "max_slippage_bps": intent.maxSlippageBps,
-            "reason": intent.reason,
-        },
-    )
-    trade_intent = emit_result["result"]["intent"]
-    chain_trade_intent: dict[str, Any] = {
-        "intentId": trade_intent["intentId"],
-        "pair": trade_intent["pair"],
-        "side": trade_intent["side"],
-        "amount": str(trade_intent["amount"]),
-        "amountType": trade_intent["amountType"],
-        "orderType": trade_intent["orderType"],
-        "maxSlippageBps": trade_intent["maxSlippageBps"],
-        "reason": trade_intent["reason"],
-    }
-    limit_price = trade_intent.get("limitPrice")
-    if limit_price is not None:
-        chain_trade_intent["limitPrice"] = str(limit_price)
-    strategy = trade_intent.get("strategy")
-    if strategy is not None:
-        chain_trade_intent["strategy"] = strategy
-
-    result = await call_chain_tool("chain_execute_trade_intent", chain_trade_intent)
-    return {
-        "tool": "execute_freqtrade_trade_intent",
-        "tradeIntent": trade_intent,
-        "result": result["result"],
-    }
-
-
-async def call_ledger(operation: str, handler) -> dict[str, Any]:
-    try:
-        return await handler()
-    except LedgerClientError as error:
-        raise RuntimeError(f"Ledger operation failed: {operation}: {error}") from error
-
-
-async def route_payment_intent_tool(
-    purpose: str,
-    deliveryMode: Literal["async_task", "immediate_api", "withdrawal", "unknown"] = "unknown",
-    requiresAcceptance: bool = False,
-    externalService: bool = False,
-    serviceUrl: Optional[HttpUrl] = None,
-) -> dict[str, Any]:
-    intent = PaymentIntent(
-        purpose=purpose,
-        deliveryMode=deliveryMode,
-        requiresAcceptance=requiresAcceptance,
-        externalService=externalService,
-        serviceUrl=serviceUrl,
-    )
-    return route_payment_intent(intent)
-
-
-async def agent_wallet_get_ledger_state_tool() -> dict[str, Any]:
-    return await call_ledger(
-        "get_state",
-        lambda: get_ledger_client().get_state(),
-    )
-
-
-async def agent_wallet_credit_balance_tool(
-    agentId: str,
-    amountAtomic: str,
-    reason: Optional[str] = None,
-) -> dict[str, Any]:
-    intent = LedgerCreditIntent(
-        agentId=agentId,
-        amountAtomic=amountAtomic,
-        reason=reason,
-    )
-    return await call_ledger(
-        "credit_balance",
-        lambda: get_ledger_client().credit_balance(
-            intent.agentId,
-            amount_atomic=intent.amountAtomic,
-            reason=intent.reason,
-        ),
-    )
-
-
-async def agent_wallet_create_escrow_tool(
-    buyerAgentId: str,
-    sellerAgentId: str,
-    amountAtomic: str,
-    taskId: Optional[str] = None,
-    description: Optional[str] = None,
-) -> dict[str, Any]:
-    intent = LedgerCreateEscrowIntent(
-        buyerAgentId=buyerAgentId,
-        sellerAgentId=sellerAgentId,
-        amountAtomic=amountAtomic,
-        taskId=taskId,
-        description=description,
-    )
-    return await call_ledger(
-        "create_escrow",
-        lambda: get_ledger_client().create_escrow(
-            buyer_agent_id=intent.buyerAgentId,
-            seller_agent_id=intent.sellerAgentId,
-            amount_atomic=intent.amountAtomic,
-            task_id=intent.taskId,
-            description=intent.description,
-        ),
-    )
-
-
-async def agent_wallet_release_escrow_tool(escrowId: str) -> dict[str, Any]:
-    intent = LedgerEscrowActionIntent(escrowId=escrowId)
-    return await call_ledger(
-        "release_escrow",
-        lambda: get_ledger_client().release_escrow(intent.escrowId),
-    )
-
-
-async def agent_wallet_refund_escrow_tool(escrowId: str) -> dict[str, Any]:
-    intent = LedgerEscrowActionIntent(escrowId=escrowId)
-    return await call_ledger(
-        "refund_escrow",
-        lambda: get_ledger_client().refund_escrow(intent.escrowId),
-    )
-
-
-async def get_wealth_status_tool() -> dict[str, Any]:
-    return await get_autonomy_controller().status()
-
-
-async def start_wealth_agent_tool() -> dict[str, Any]:
-    controller = get_autonomy_controller()
-    await controller.start(force=True)
-    return await controller.status()
-
-
-async def stop_wealth_agent_tool() -> dict[str, Any]:
-    controller = get_autonomy_controller()
-    await controller.stop(disable=True)
-    return await controller.status()
-
-
-async def run_wealth_tick_tool() -> dict[str, Any]:
-    return await get_autonomy_controller().tick()
-
-
-async def update_wealth_config_tool(
-    intervalSeconds: Optional[float] = None,
-    ethPriceUsd: Optional[float] = None,
-    minWalletBalanceUsd: Optional[float] = None,
-    stopTradingBalanceUsd: Optional[float] = None,
-    forceExitBalanceUsd: Optional[float] = None,
-    maxDrawdownRatio: Optional[float] = None,
-) -> dict[str, Any]:
-    intent = UpdateWealthConfigIntent(
-        intervalSeconds=intervalSeconds,
-        ethPriceUsd=ethPriceUsd,
-        minWalletBalanceUsd=minWalletBalanceUsd,
-        stopTradingBalanceUsd=stopTradingBalanceUsd,
-        forceExitBalanceUsd=forceExitBalanceUsd,
-        maxDrawdownRatio=maxDrawdownRatio,
-    )
-    return await get_autonomy_controller().update_config(
-        intent.model_dump(exclude_none=True)
-    )
-
-
-CHAIN_TOOL_REGISTRY: dict[str, dict[str, Any]] = {
-    "chain_get_wallet_state": {
-        "description": "查看当前链钱包地址、ETH 余额、USDC 余额和链策略摘要。",
-        "args_schema": EmptyIntent,
-        "coroutine": get_chain_wallet_state,
-    },
-    "chain_sign_transfer": {
-        "description": "签名 ETH 转账，但不广播。",
-        "args_schema": SignTransferIntent,
-        "coroutine": chain_sign_transfer_tool,
-    },
-    "chain_submit_execution": {
-        "description": "提交一笔普通链上交易。",
-        "args_schema": ExecutionIntent,
-        "coroutine": chain_submit_execution_tool,
-    },
-    "chain_submit_user_operation": {
-        "description": "提交一笔 ERC-4337 UserOperation。",
-        "args_schema": UserOperationIntent,
-        "coroutine": chain_submit_user_operation_tool,
-    },
-    "chain_get_transaction_receipt": {
-        "description": "查询一笔链上交易的最新 receipt 和确认状态。",
-        "args_schema": TransactionReceiptIntent,
-        "coroutine": chain_get_transaction_receipt_tool,
-    },
-    "chain_get_user_operation_status": {
-        "description": "查询一笔 UserOperation 的最新状态和确认结果。",
-        "args_schema": UserOperationStatusIntent,
-        "coroutine": chain_get_user_operation_status_tool,
-    },
-    "chain_x402_fetch": {
-        "description": "执行一次 x402 收费资源访问流程。",
-        "args_schema": X402FetchIntent,
-        "coroutine": chain_x402_fetch_tool,
-    },
-}
-
-
-FREQTRADE_TOOL_REGISTRY: dict[str, dict[str, Any]] = {
-    "get_trading_status": {
-        "description": "获取 Freqtrade bot 当前交易状态、运行状态和策略摘要。",
-        "args_schema": EmptyIntent,
-        "coroutine": get_trading_status_tool,
-    },
-    "list_strategies": {
-        "description": "列出当前仓库内可用的 Freqtrade 策略文件与活动策略。",
-        "args_schema": EmptyIntent,
-        "coroutine": list_strategies_tool,
-    },
-    "evaluate_trade_signal": {
-        "description": "评估当前 Freqtrade 策略对指定交易对的信号，返回 buy/sell/hold。",
-        "args_schema": EvaluateTradeSignalIntent,
-        "coroutine": evaluate_trade_signal_tool,
-    },
-    "get_open_trades": {
-        "description": "查看当前 open trades。",
-        "args_schema": TradeListIntent,
-        "coroutine": get_open_trades_tool,
-    },
-    "get_closed_trades": {
-        "description": "查看最近已关闭 trades。",
-        "args_schema": TradeListIntent,
-        "coroutine": get_closed_trades_tool,
-    },
-    "get_performance_summary": {
-        "description": "查看收益、表现和绩效摘要。",
-        "args_schema": EmptyIntent,
-        "coroutine": get_performance_summary_tool,
-    },
-    "get_budget_snapshot": {
-        "description": "查看 dry-run 资金、盈亏和预算快照。",
-        "args_schema": EmptyIntent,
-        "coroutine": get_budget_snapshot_tool,
-    },
-    "sync_dry_run_wallet": {
-        "description": "更新 Freqtrade dry-run wallet 资金；由管家决定是否调用。",
-        "args_schema": SyncDryRunWalletIntent,
-        "coroutine": sync_dry_run_wallet_tool,
-    },
-    "start_bot": {
-        "description": "启动 Freqtrade bot。",
-        "args_schema": EmptyIntent,
-        "coroutine": start_bot_tool,
-    },
-    "stop_bot": {
-        "description": "停止 Freqtrade bot。",
-        "args_schema": EmptyIntent,
-        "coroutine": stop_bot_tool,
-    },
-    "pause_trading": {
-        "description": "暂停交易。第一阶段语义上等同于 stop bot。",
-        "args_schema": EmptyIntent,
-        "coroutine": pause_trading_tool,
-    },
-    "resume_trading": {
-        "description": "恢复交易。第一阶段语义上等同于 start bot。",
-        "args_schema": EmptyIntent,
-        "coroutine": resume_trading_tool,
-    },
-    "force_enter_trade": {
-        "description": "强制开仓一笔 trade。",
-        "args_schema": ForceEnterTradeIntent,
-        "coroutine": force_enter_trade_tool,
-    },
-    "force_exit_trade": {
-        "description": "强制平掉一笔 trade。",
-        "args_schema": ForceExitTradeIntent,
-        "coroutine": force_exit_trade_tool,
-    },
-    "execute_freqtrade_trade_intent": {
-        "description": "先让 Freqtrade 生成 trade intent，再交给链上执行器执行；仅支持 V1 的 long market 下单。",
-        "args_schema": ExecuteFreqtradeTradeIntentIntent,
-        "coroutine": execute_freqtrade_trade_intent_tool,
-    },
-}
-
-
-PAYMENT_ROUTER_TOOL_REGISTRY: dict[str, dict[str, Any]] = {
-    "route_payment_intent": {
-        "description": (
-            "在任何付款、x402、链上转账、Escrow 锁款、放款或退款前选择支付方式；"
-            "返回 ledger_escrow、x402、chain_transfer 或 needs_clarification。"
-        ),
-        "args_schema": PaymentRouteIntent,
-        "coroutine": route_payment_intent_tool,
-    },
-}
-
-
-LEDGER_TOOL_REGISTRY: dict[str, dict[str, Any]] = {
-    "agent_wallet_get_ledger_state": {
-        "description": "查看 Agent Wallet 链下账本的账户余额、Escrow 和流水。",
-        "args_schema": EmptyIntent,
-        "coroutine": agent_wallet_get_ledger_state_tool,
-    },
-    "agent_wallet_credit_balance": {
-        "description": "给指定 Agent 的链下账本可用余额入账；仅用于 demo 资金或已确认充值后的记账。",
-        "args_schema": LedgerCreditIntent,
-        "coroutine": agent_wallet_credit_balance_tool,
-    },
-    "agent_wallet_create_escrow": {
-        "description": "为撮合型 A2A 任务创建 Escrow，把 buyer 可用余额锁定给 seller。",
-        "args_schema": LedgerCreateEscrowIntent,
-        "coroutine": agent_wallet_create_escrow_tool,
-    },
-    "agent_wallet_release_escrow": {
-        "description": "验收通过后释放 Escrow，把 buyer 锁定资金转给 seller 可用余额。",
-        "args_schema": LedgerEscrowActionIntent,
-        "coroutine": agent_wallet_release_escrow_tool,
-    },
-    "agent_wallet_refund_escrow": {
-        "description": "任务失败或超时后退款 Escrow，把 buyer 锁定资金退回 buyer 可用余额。",
-        "args_schema": LedgerEscrowActionIntent,
-        "coroutine": agent_wallet_refund_escrow_tool,
-    },
-}
-
-
-def discover_chain_tools() -> list[StructuredTool]:
-    try:
-        available_tools = asyncio.run(get_chain_mcp_client().list_tools())
-    except Exception as error:
-        raise RuntimeError(
-            f"CHAIN_MCP_URL is configured but tools could not be discovered: {error}"
-        ) from error
-    return _build_discovered_chain_tools(available_tools)
-
-
-def discover_freqtrade_tools() -> list[StructuredTool]:
-    try:
-        available_tools = asyncio.run(get_freqtrade_mcp_client().list_tools())
-    except Exception as error:
-        raise RuntimeError(
-            f"FREQTRADE_MCP_URL is configured but tools could not be discovered: {error}"
-        ) from error
-
-    chain_available_tools: list[str] = []
-    try:
-        chain_available_tools = asyncio.run(get_chain_mcp_client().list_tools())
-    except Exception as error:
-        logger.debug(
-            "Failed to discover chain tools for freqtrade bridge gating: %s",
-            error,
-        )
-
-    return _build_discovered_freqtrade_tools(available_tools, chain_available_tools)
-
-
-def _make_structured_tool(name: str, spec: dict[str, Any]) -> StructuredTool:
-    return StructuredTool.from_function(
-        name=name,
-        description=spec["description"],
-        args_schema=spec["args_schema"],
-        coroutine=spec["coroutine"],
-    )
-
-
-def _build_discovered_chain_tools(available_tools: list[str]) -> list[StructuredTool]:
-    tools: list[StructuredTool] = []
-    for tool_name, spec in CHAIN_TOOL_REGISTRY.items():
-        if tool_name not in available_tools:
-            continue
-        tools.append(_make_structured_tool(tool_name, spec))
-    return tools
-
-
-def _build_discovered_freqtrade_tools(
-    available_tools: list[str], chain_available_tools: Optional[list[str]] = None
-) -> list[StructuredTool]:
-    tools: list[StructuredTool] = []
-    chain_available = set(chain_available_tools or [])
-    for tool_name, spec in FREQTRADE_TOOL_REGISTRY.items():
-        if tool_name == "execute_freqtrade_trade_intent":
-            if "emit_trade_intent" not in available_tools:
-                continue
-            if "chain_execute_trade_intent" not in chain_available:
-                continue
-        elif tool_name not in available_tools:
-            continue
-        tools.append(_make_structured_tool(tool_name, spec))
-    return tools
-
-
-def set_discovered_tool_cache(
-    *,
-    chain_tools: list[StructuredTool],
-    freqtrade_tools: list[StructuredTool],
-) -> None:
-    global _discovered_chain_tools, _discovered_freqtrade_tools
-    _discovered_chain_tools = list(chain_tools)
-    _discovered_freqtrade_tools = list(freqtrade_tools)
+def get_mcp_runtime() -> McpRuntime:
+    return McpRuntime(get_skill_catalog())
 
 
 def clear_discovered_tool_cache() -> None:
-    global _discovered_chain_tools, _discovered_freqtrade_tools
-    _discovered_chain_tools = None
-    _discovered_freqtrade_tools = None
+    global _discovered_tools
+    _discovered_tools = None
+    get_mcp_runtime.cache_clear()
+
+
+async def refresh_discovered_tool_cache() -> None:
+    global _discovered_tools
+    _discovered_tools = await get_mcp_runtime().discover_tools(os.environ)
 
 
 def _in_running_loop() -> bool:
@@ -1315,113 +136,39 @@ def _in_running_loop() -> bool:
     return True
 
 
-def _load_discovered_chain_tools() -> list[StructuredTool]:
-    if _discovered_chain_tools is not None:
-        return list(_discovered_chain_tools)
-    if _in_running_loop():
-        return []
-    try:
-        return discover_chain_tools()
-    except Exception as error:
-        logger.debug("Failed to load discovered chain tools: %s", error)
-        return []
-
-
-def _load_discovered_freqtrade_tools() -> list[StructuredTool]:
-    if _discovered_freqtrade_tools is not None:
-        return list(_discovered_freqtrade_tools)
-    if _in_running_loop():
-        return []
-    try:
-        return discover_freqtrade_tools()
-    except Exception as error:
-        logger.debug("Failed to load discovered freqtrade tools: %s", error)
-        return []
-
-
-async def refresh_discovered_tool_cache() -> None:
-    chain_available_tools: list[str] = []
-    chain_tools: list[StructuredTool]
-    freqtrade_tools: list[StructuredTool]
-
-    try:
-        chain_available_tools = await get_chain_mcp_client().list_tools()
-        chain_tools = _build_discovered_chain_tools(chain_available_tools)
-    except Exception as error:
-        logger.debug("Failed to refresh chain tool discovery: %s", error)
-        chain_tools = []
-
-    try:
-        freqtrade_available_tools = await get_freqtrade_mcp_client().list_tools()
-        freqtrade_tools = _build_discovered_freqtrade_tools(
-            freqtrade_available_tools,
-            chain_available_tools,
-        )
-    except Exception as error:
-        logger.debug("Failed to refresh freqtrade tool discovery: %s", error)
-        freqtrade_tools = []
-
-    set_discovered_tool_cache(
-        chain_tools=chain_tools,
-        freqtrade_tools=freqtrade_tools,
-    )
-
-
 def build_tools() -> list[StructuredTool]:
-    return [
-        StructuredTool.from_function(
-            name="get_wealth_status",
-            description="查看理财子 Agent 当前状态、阈值、账本和最近建议。",
-            args_schema=EmptyIntent,
-            coroutine=get_wealth_status_tool,
-        ),
-        StructuredTool.from_function(
-            name="start_wealth_agent",
-            description="启动后台理财子 Agent，让它开始周期性检查钱包和 dry-run 风险。",
-            args_schema=EmptyIntent,
-            coroutine=start_wealth_agent_tool,
-        ),
-        StructuredTool.from_function(
-            name="stop_wealth_agent",
-            description="停止后台理财子 Agent。",
-            args_schema=EmptyIntent,
-            coroutine=stop_wealth_agent_tool,
-        ),
-        StructuredTool.from_function(
-            name="run_wealth_tick",
-            description="立即让理财子 Agent 执行一次检查和保护性决策。",
-            args_schema=EmptyIntent,
-            coroutine=run_wealth_tick_tool,
-        ),
-        StructuredTool.from_function(
-            name="update_wealth_config",
-            description=(
-                "修改理财子 Agent 的运行时风控配置，例如钱包余额阈值、最大回撤、"
-                "ETH/USD 参考价或检查间隔。修改会立即生效并写入自治状态。"
-            ),
-            args_schema=UpdateWealthConfigIntent,
-            coroutine=update_wealth_config_tool,
-        ),
-        *[
-            _make_structured_tool(tool_name, spec)
-            for tool_name, spec in PAYMENT_ROUTER_TOOL_REGISTRY.items()
-        ],
-        *[
-            _make_structured_tool(tool_name, spec)
-            for tool_name, spec in LEDGER_TOOL_REGISTRY.items()
-        ],
-        *_load_discovered_chain_tools(),
-        *_load_discovered_freqtrade_tools(),
-    ]
+    if _discovered_tools is not None:
+        return list(_discovered_tools)
+    if _in_running_loop():
+        return []
+    try:
+        return asyncio.run(get_mcp_runtime().discover_tools(os.environ))
+    except Exception as error:
+        logger.debug("Failed to discover MCP runtime tools: %s", error)
+        return []
 
 
-@lru_cache(maxsize=1)
-def get_autonomy_controller() -> AutonomyController:
-    return AutonomyController(
-        load_autonomy_config(),
-        call_chain_tool,
-        call_freqtrade_tool,
-    )
+def get_agent_prompt() -> str:
+    return build_agent_prompt(get_skill_catalog())
+
+
+def get_openai_base_url() -> Optional[str]:
+    value = os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_ENDPOINT")
+    if value is None:
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
+def _provider_supports_streamed_tool_execution() -> bool:
+    base_url = get_openai_base_url()
+    if not base_url:
+        return True
+    parsed = urlparse(base_url)
+    hostname = (parsed.hostname or "").lower()
+    if hostname == "packyapi.com" or hostname.endswith(".packyapi.com"):
+        return False
+    return True
 
 
 @lru_cache(maxsize=1)
@@ -1438,18 +185,15 @@ def get_agent_graph() -> Any:
     base_url = get_openai_base_url()
     if base_url is not None:
         llm_kwargs["base_url"] = base_url
-    llm = ChatOpenAI(**llm_kwargs)
-    tools = build_tools()
-    return create_react_agent(model=llm, tools=tools, prompt=SYSTEM_PROMPT)
+    llm = ChatOpenAI(api_key=api_key, **llm_kwargs)
+    return create_react_agent(model=llm, tools=build_tools(), prompt=get_agent_prompt())
 
 
 def _normalize_message_content(content: Any) -> str:
     if content is None:
         return ""
-
     if isinstance(content, str):
         return content
-
     if isinstance(content, list):
         parts: list[str] = []
         for item in content:
@@ -1460,7 +204,6 @@ def _normalize_message_content(content: Any) -> str:
                 if isinstance(text, str):
                     parts.append(text)
         return "".join(parts)
-
     return str(content)
 
 
@@ -1470,45 +213,20 @@ def _is_empty_message_content(content: Any) -> bool:
 
 def _extract_final_output(messages: list[Any]) -> str:
     final_message = messages[-1] if messages else None
-    final_message_type = getattr(final_message, "type", None)
-    final_message_python_type = type(final_message).__name__ if final_message else None
-    response_metadata = getattr(final_message, "response_metadata", None)
-    additional_kwargs = getattr(final_message, "additional_kwargs", None)
-
     final_content = getattr(final_message, "content", None)
-    normalized_output = _normalize_message_content(final_content)
-    if final_message_type == "ai" and not _is_empty_message_content(final_content):
-        return normalized_output
-
+    if getattr(final_message, "type", None) == "ai" and not _is_empty_message_content(
+        final_content
+    ):
+        return _normalize_message_content(final_content)
     if not _is_empty_message_content(final_content):
         return EMPTY_FINAL_OUTPUT_FALLBACK
-
-    logger.warning(
-        "Agent returned empty final output: model=%s base_url=%s final_message_type=%s final_message_python_type=%s final_content=%r response_metadata=%r response_metadata_id=%s response_metadata_finish_reason=%s additional_kwargs=%r additional_kwargs_keys=%s message_count=%d tail_message_types=%s",
-        os.getenv("BRAIN_AGENT_MODEL", "gpt-4o-mini"),
-        get_openai_base_url(),
-        final_message_type,
-        final_message_python_type,
-        final_content,
-        response_metadata,
-        response_metadata.get("id") if isinstance(response_metadata, dict) else None,
-        response_metadata.get("finish_reason")
-        if isinstance(response_metadata, dict)
-        else None,
-        additional_kwargs,
-        sorted(additional_kwargs.keys())
-        if isinstance(additional_kwargs, dict)
-        else None,
-        len(messages),
-        [getattr(message, "type", type(message).__name__) for message in messages[-5:]],
-    )
+    logger.warning("Agent returned empty final output; message_count=%d", len(messages))
     return EMPTY_FINAL_OUTPUT_FALLBACK
 
 
 def _align_final_message_output(messages: list[Any], output: str) -> list[Any]:
     if output != EMPTY_FINAL_OUTPUT_FALLBACK:
         return messages
-
     aligned_messages = list(messages)
     if aligned_messages and getattr(aligned_messages[-1], "type", None) == "ai":
         message = aligned_messages[-1]
@@ -1517,7 +235,6 @@ def _align_final_message_output(messages: list[Any], output: str) -> list[Any]:
         else:
             aligned_messages[-1] = AIMessage(content=output)
         return aligned_messages
-
     aligned_messages.append(AIMessage(content=output))
     return aligned_messages
 
@@ -1530,13 +247,8 @@ def _is_valid_tool_message(message: Any) -> bool:
 
 
 def _sanitize_session_messages(messages: list[Any]) -> list[Any]:
-    sanitized: list[Any] = []
-    dropped = 0
-    for message in messages:
-        if _is_valid_tool_message(message):
-            sanitized.append(message)
-        else:
-            dropped += 1
+    sanitized = [message for message in messages if _is_valid_tool_message(message)]
+    dropped = len(messages) - len(sanitized)
     if dropped:
         logger.warning("Dropped %d invalid tool messages from session history", dropped)
     return sanitized
@@ -1553,15 +265,6 @@ def _sse_event(event: str, data: dict[str, Any]) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-def _stream_agent_output(messages: list[Any]) -> AsyncIterator[tuple[str, Any]]:
-    return _open_agent_stream(messages)
-
-
-def _open_agent_stream(messages: list[Any]) -> AsyncIterator[tuple[str, Any]]:
-    graph = get_agent_graph()
-    return graph.astream({"messages": messages}, stream_mode=["messages", "values"])
-
-
 def _consume_stream_item(
     item: tuple[str, Any], latest_messages: Optional[list[Any]]
 ) -> tuple[Optional[str], Optional[list[Any]]]:
@@ -1570,12 +273,10 @@ def _consume_stream_item(
         chunk, _metadata = payload
         text = _normalize_message_content(getattr(chunk, "content", None))
         return (text or None), latest_messages
-
     if mode == "values" and isinstance(payload, dict):
         messages = payload.get("messages")
         if isinstance(messages, list):
             return (None, list(messages))
-
     return (None, latest_messages)
 
 
@@ -1584,7 +285,6 @@ async def _invoke_agent(messages: list[Any]) -> dict[str, Any]:
         graph = get_agent_graph()
     except RuntimeError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
-
     try:
         return await graph.ainvoke({"messages": messages})
     except Exception as error:
@@ -1594,12 +294,6 @@ async def _invoke_agent(messages: list[Any]) -> dict[str, Any]:
 @app.on_event("startup")
 async def startup_event() -> None:
     await refresh_discovered_tool_cache()
-    await get_autonomy_controller().start()
-
-
-@app.on_event("shutdown")
-async def shutdown_event() -> None:
-    await get_autonomy_controller().stop(disable=False)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -1614,306 +308,34 @@ def chat_page() -> FileResponse:
 
 @app.get("/health")
 def health() -> dict[str, Any]:
-    chain_tools: list[str] = []
-    chain_error: Optional[str] = None
-    try:
-        chain_tools = asyncio.run(get_chain_mcp_client().list_tools())
-    except Exception as error:
-        chain_error = str(error)
-
-    freqtrade_tools: list[str] = []
-    freqtrade_error: Optional[str] = None
-    try:
-        freqtrade_tools = asyncio.run(get_freqtrade_mcp_client().list_tools())
-    except Exception as error:
-        freqtrade_error = str(error)
-
-    autonomy_status: dict[str, Any]
-    try:
-        autonomy_status = _with_autonomy_runtime_summary(
-            asyncio.run(get_autonomy_controller().status())
-        )
-    except Exception as error:
-        autonomy_status = _with_autonomy_runtime_summary(
-            {
-                "enabled": False,
-                "running": False,
-                "error": str(error),
-            }
-        )
-
-    chain_wallet: Optional[dict[str, Any]] = None
-    chain_wallet_error: Optional[str] = None
-    try:
-        chain_wallet = asyncio.run(get_chain_wallet_state())
-    except Exception as error:
-        chain_wallet_error = str(error)
-        chain_wallet = None
-
-    freqtrade_status: Optional[dict[str, Any]] = None
-    freqtrade_status_error: Optional[str] = None
-    try:
-        freqtrade_status = asyncio.run(get_freqtrade_status_snapshot())
-    except Exception as error:
-        freqtrade_status_error = str(error)
-        freqtrade_status = {
-            "runningState": "unavailable",
-            "error": freqtrade_status_error,
-        }
-
-    if freqtrade_error and not freqtrade_status_error:
-        freqtrade_status = {
-            "runningState": "unavailable",
-            "error": freqtrade_error,
-        }
-
+    runtime = get_mcp_runtime()
+    tools = build_tools()
     return {
         "service": "OntologyAgent-agent",
         "status": "ok",
-        "chainMcpUrl": CHAIN_MCP_URL,
-        "chainTools": chain_tools,
-        "chainError": chain_error,
-        "chainWallet": chain_wallet,
-        "chainWalletError": chain_wallet_error,
-        "recentChainAction": get_chain_activity_store().get(),
-        "freqtradeMcpUrl": FREQTRADE_MCP_URL,
-        "freqtradeTools": freqtrade_tools,
-        "freqtradeError": freqtrade_error,
-        "freqtradeStatus": freqtrade_status,
-        "autonomy": autonomy_status,
+        "modelName": os.getenv("BRAIN_AGENT_MODEL", "gpt-4o-mini"),
+        "openaiBaseUrl": get_openai_base_url(),
+        "skills": [skill.name for skill in get_skill_catalog().skills],
+        "mcpServers": sorted(get_skill_catalog().server_names()),
+        "mcpHealth": runtime.health(),
+        "toolCount": len(tools),
+        "tools": [tool.name for tool in tools],
     }
 
 
-@app.get("/auth/session")
-def auth_session(
-    session_cookie: Optional[str] = Cookie(default=None, alias=SESSION_COOKIE)
-) -> dict[str, Any]:
-    owner = resolve_current_owner(session_cookie)
-    return {"authenticated": owner is not None, "owner": owner}
-
-
-@app.get("/auth/github/login")
-def github_login() -> RedirectResponse:
-    oauth_state = build_github_oauth_state()
-    try:
-        login_url = build_github_login_url(oauth_state)
-    except RuntimeError as error:
-        raise HTTPException(status_code=500, detail=str(error)) from error
-
-    response = RedirectResponse(login_url)
-    response.set_cookie(
-        OAUTH_STATE_COOKIE,
-        f"{oauth_state.state}:{oauth_state.code_verifier}",
-        httponly=True,
-        samesite="lax",
-        secure=_should_secure_oauth_state_cookie(),
-    )
-    return response
-
-
-@app.post("/auth/logout")
-def auth_logout(response: Response) -> dict[str, bool]:
-    response.delete_cookie(SESSION_COOKIE)
-    return {"ok": True}
-
-
-@app.get("/agent-wallet/state")
-def agent_wallet_state(
-    session_cookie: Optional[str] = Cookie(default=None, alias=SESSION_COOKIE)
-) -> dict[str, Any]:
-    owner = resolve_current_owner(session_cookie)
-    state = get_agent_wallet_store().load()
-    owner_id = owner["ownerId"] if owner else None
-    visible_agent_ids = _visible_agent_ids_for_owner(state, owner_id)
-    agents = [
-        agent.model_dump()
-        for agent in state.agents
-        if agent.agentId in visible_agent_ids
-    ]
-    services = [
-        service.model_dump()
-        for service in state.services
-        if service.agentId in visible_agent_ids
-    ]
-    visible_service_ids = {service["serviceId"] for service in services}
-    payments = [
-        payment.model_dump()
-        for payment in state.payments
-        if payment.sellerAgentId in visible_agent_ids
-        and payment.serviceId in visible_service_ids
-    ]
+@app.post("/agent/reload-runtime")
+async def reload_agent_runtime() -> dict[str, Any]:
+    get_skill_catalog.cache_clear()
+    get_mcp_runtime.cache_clear()
+    clear_discovered_tool_cache()
+    await refresh_discovered_tool_cache()
+    get_agent_graph.cache_clear()
+    skill_catalog = get_skill_catalog()
     return {
-        "owner": owner,
-        "agents": agents,
-        "services": services,
-        "payments": payments,
+        "ok": True,
+        "skills": [skill.name for skill in skill_catalog.skills],
+        "mcpServers": sorted(skill_catalog.server_names()),
     }
-
-
-@app.post("/agent-wallet/init")
-async def agent_wallet_init(request: AgentWalletInitRequest) -> dict[str, Any]:
-    chain_args: dict[str, Any] = {
-        "agentName": request.agentName,
-    }
-    if request.agentDescription is not None:
-        chain_args["agentDescription"] = request.agentDescription
-
-    wallet_payload = _tool_result_payload(
-        await call_chain_tool(
-            "agent_wallet_init", chain_args
-        )
-    )
-    agent, claim_code = get_agent_wallet_store().create_agent_wallet(
-        agent_name=request.agentName,
-        agent_description=request.agentDescription,
-        wallet_payload=wallet_payload,
-    )
-    return {"agent": agent.model_dump(), "claimCode": claim_code}
-
-
-@app.post("/agent-wallet/claim")
-def agent_wallet_claim(
-    request: AgentWalletClaimRequest,
-    session_cookie: Optional[str] = Cookie(default=None, alias=SESSION_COOKIE),
-) -> dict[str, Any]:
-    owner = resolve_current_owner(session_cookie)
-    if owner is None:
-        raise HTTPException(
-            status_code=401,
-            detail="Authentication is required to claim a wallet",
-        )
-    try:
-        agent = get_agent_wallet_store().claim_wallet(
-            request.claimCode,
-            str(owner["ownerId"]),
-        )
-    except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
-    return {"agent": agent.model_dump()}
-
-
-@app.post("/agent-wallet/register-service")
-async def agent_wallet_register_service(
-    request: AgentWalletRegisterServiceRequest,
-    session_cookie: Optional[str] = Cookie(default=None, alias=SESSION_COOKIE),
-) -> dict[str, Any]:
-    owner_id = _require_owner_id(session_cookie, action="register an Agent Wallet service")
-    store = get_agent_wallet_store()
-    state = store.load()
-    agent = _owner_agent_or_404(state, request.agentId, owner_id)
-
-    service_payload = _tool_result_payload(
-        await call_chain_tool(
-            "agent_wallet_register_x402_service",
-            {
-                "name": request.name,
-                "path": request.path,
-                "priceAtomic": request.priceAtomic,
-                "payTo": agent.walletAddress,
-            },
-        )
-    )
-    try:
-        service = store.add_service(
-            agent_id=request.agentId,
-            service_payload=service_payload,
-        )
-    except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
-    return {"service": service.model_dump()}
-
-
-@app.post("/agent-wallet/call-service")
-async def agent_wallet_call_service(
-    request: AgentWalletCallServiceRequest,
-    session_cookie: Optional[str] = Cookie(default=None, alias=SESSION_COOKIE),
-) -> dict[str, Any]:
-    owner_id = _require_owner_id(session_cookie, action="call an Agent Wallet service")
-    store = get_agent_wallet_store()
-    state = store.load()
-    service = next(
-        (item for item in state.services if item.serviceId == request.serviceId),
-        None,
-    )
-    if service is None:
-        raise HTTPException(status_code=404, detail="service not found")
-    _owner_agent_or_404(state, service.agentId, owner_id)
-
-    base_url = os.getenv("X402_SELLER_BASE_URL", "http://x402-seller:8000").rstrip("/")
-    request_url = f"{base_url}{service.path}"
-    call_error: Optional[Exception] = None
-    try:
-        result = _tool_result_payload(
-            await call_chain_tool(
-                "agent_wallet_call_x402_service",
-                {"url": request_url, "method": "GET"},
-            )
-        )
-    except Exception as error:
-        call_error = error
-        result = {
-            "error": {
-                "message": str(error),
-            },
-            "payment": {"response": {"success": False}},
-        }
-
-    try:
-        payment = store.add_payment(
-            service_id=request.serviceId,
-            result=result,
-            request_url=request_url,
-        )
-    except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
-    if call_error is not None:
-        raise HTTPException(
-            status_code=502,
-            detail={
-                "message": "x402 service call failed",
-                "error": str(call_error),
-                "payment": payment.model_dump(),
-            },
-        ) from call_error
-    return {"payment": payment.model_dump(), "result": result}
-
-
-@app.post("/agent-wallet/reset")
-def agent_wallet_reset() -> dict[str, bool]:
-    if os.path.exists(AGENT_WALLET_STATE_PATH):
-        os.remove(AGENT_WALLET_STATE_PATH)
-    return {"ok": True}
-
-
-@app.get("/autonomy/status")
-async def autonomy_status() -> dict[str, Any]:
-    return _with_autonomy_runtime_summary(await get_autonomy_controller().status())
-
-
-@app.post("/autonomy/start")
-async def autonomy_start() -> dict[str, Any]:
-    controller = get_autonomy_controller()
-    await controller.start(force=True)
-    return _with_autonomy_runtime_summary(await controller.status())
-
-
-@app.post("/autonomy/stop")
-async def autonomy_stop() -> dict[str, Any]:
-    controller = get_autonomy_controller()
-    await controller.stop(disable=True)
-    return _with_autonomy_runtime_summary(await controller.status())
-
-
-@app.post("/autonomy/tick")
-async def autonomy_tick() -> dict[str, Any]:
-    return await get_autonomy_controller().tick()
-
-
-@app.post("/autonomy/config")
-async def autonomy_config_update(intent: UpdateWealthConfigIntent) -> dict[str, Any]:
-    controller = get_autonomy_controller()
-    status = await controller.update_config(intent.model_dump(exclude_none=True))
-    return _with_autonomy_runtime_summary(status)
 
 
 @app.post("/agent/sessions")
@@ -1930,9 +352,35 @@ def get_agent_session(session_id: str) -> AgentSessionStateResponse:
         raise HTTPException(
             status_code=404, detail=f"Unknown agent session: {session_id}"
         ) from error
-
     return AgentSessionStateResponse(
-        sessionId=session.session_id, messageCount=len(session.messages)
+        sessionId=session.session_id,
+        messageCount=len(session.messages),
+    )
+
+
+@app.post("/agent/sessions/{session_id}/messages")
+async def create_agent_session_message(
+    session_id: str, request: AgentChatRequest
+) -> AgentChatResponse:
+    try:
+        session = get_session_store().get(session_id)
+    except KeyError as error:
+        raise HTTPException(
+            status_code=404, detail=f"Unknown agent session: {session_id}"
+        ) from error
+    input_message = HumanMessage(content=request.input)
+    pending_messages = [*_sanitize_session_messages(list(session.messages)), input_message]
+    result = await _invoke_agent(pending_messages)
+    messages = result.get("messages", [])
+    output = _extract_final_output(messages)
+    session.messages = _sanitize_session_messages(
+        _align_final_message_output(list(messages), output)
+    )
+    return AgentChatResponse(
+        sessionId=session.session_id,
+        input=request.input,
+        output=output,
+        messageCount=len(session.messages),
     )
 
 
@@ -1949,49 +397,30 @@ async def stream_agent_session_message(
 
     input_message = HumanMessage(content=request.input)
     existing_messages = _sanitize_session_messages(list(session.messages))
-    if len(existing_messages) != len(session.messages):
-        session.messages = existing_messages
     pending_messages = [*existing_messages, input_message]
 
-    async def event_stream():
-        yield _sse_event(
-            "start", {"sessionId": session.session_id, "input": request.input}
-        )
-
+    async def event_stream() -> AsyncIterator[str]:
+        yield _sse_event("start", {"sessionId": session.session_id, "input": request.input})
         deltas: list[str] = []
         latest_messages: Optional[list[Any]] = None
-        used_tool_validation_fallback = False
         try:
             graph = get_agent_graph()
         except Exception as error:
-            yield _sse_event(
-                "error", {"sessionId": session.session_id, "error": str(error)}
-            )
+            yield _sse_event("error", {"sessionId": session.session_id, "error": str(error)})
             return
 
         if not _provider_supports_streamed_tool_execution():
             try:
-                invoke_result = await graph.ainvoke({"messages": pending_messages})
-                invoke_messages = invoke_result.get("messages")
-                if not isinstance(invoke_messages, list):
-                    yield _sse_event(
-                        "error",
-                        {
-                            "sessionId": session.session_id,
-                            "error": "Agent fallback returned invalid message payload",
-                        },
-                    )
-                    return
-                latest_messages = invoke_messages
+                result = await graph.ainvoke({"messages": pending_messages})
+                latest_messages = result.get("messages")
             except Exception as error:
-                yield _sse_event(
-                    "error", {"sessionId": session.session_id, "error": str(error)}
-                )
+                yield _sse_event("error", {"sessionId": session.session_id, "error": str(error)})
                 return
         else:
             try:
                 stream = graph.astream(
-                    {"messages": pending_messages}, stream_mode=["messages", "values"]
+                    {"messages": pending_messages},
+                    stream_mode=["messages", "values"],
                 )
                 async for item in stream:
                     delta, latest_messages = _consume_stream_item(item, latest_messages)
@@ -1999,42 +428,19 @@ async def stream_agent_session_message(
                         deltas.append(delta)
                         yield _sse_event("delta", {"delta": delta})
             except Exception as error:
-                if _is_tool_message_validation_error(error):
-                    used_tool_validation_fallback = True
-                    logger.warning(
-                        "Streaming agent response hit invalid ToolMessage state; retrying with ainvoke: %s",
-                        error,
-                    )
-                    try:
-                        invoke_result = await graph.ainvoke({"messages": pending_messages})
-                    except Exception as invoke_error:
-                        yield _sse_event(
-                            "error",
-                            {
-                                "sessionId": session.session_id,
-                                "error": str(invoke_error),
-                            },
-                        )
-                        return
-                    invoke_messages = invoke_result.get("messages")
-                    if isinstance(invoke_messages, list):
-                        latest_messages = invoke_messages
-                    else:
-                        yield _sse_event(
-                            "error",
-                            {
-                                "sessionId": session.session_id,
-                                "error": "Agent fallback returned invalid message payload",
-                            },
-                        )
-                        return
-                else:
+                if not _is_tool_message_validation_error(error):
                     yield _sse_event(
                         "error",
-                        {
-                            "sessionId": session.session_id,
-                            "error": str(error),
-                        },
+                        {"sessionId": session.session_id, "error": str(error)},
+                    )
+                    return
+                try:
+                    result = await graph.ainvoke({"messages": pending_messages})
+                    latest_messages = result.get("messages")
+                except Exception as invoke_error:
+                    yield _sse_event(
+                        "error",
+                        {"sessionId": session.session_id, "error": str(invoke_error)},
                     )
                     return
 
@@ -2043,13 +449,6 @@ async def stream_agent_session_message(
             AIMessage(content="".join(deltas)),
         ]
         output = _extract_final_output(final_messages)
-        streamed_output = "".join(deltas).strip()
-        if (
-            used_tool_validation_fallback
-            and output == EMPTY_FINAL_OUTPUT_FALLBACK
-            and streamed_output
-        ):
-            output = streamed_output
         session.messages = _sanitize_session_messages(
             _align_final_message_output(list(final_messages), output)
         )
@@ -2069,10 +468,8 @@ async def stream_agent_session_message(
 async def run_agent(request: AgentRunRequest) -> dict[str, Any]:
     result = await _invoke_agent([HumanMessage(content=request.input)])
     messages = result.get("messages", [])
-    output = _extract_final_output(messages)
-
     return {
         "ok": True,
         "input": request.input,
-        "output": output,
+        "output": _extract_final_output(messages),
     }

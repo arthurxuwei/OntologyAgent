@@ -1,0 +1,15 @@
+{
+  "name": "payment-routing",
+  "enabled": true,
+  "description": "Select the required payment method before paid actions.",
+  "instructions": "instructions.md",
+  "mcpServers": {
+    "ledger": {
+      "url": "http://ledger:8092/mcp/",
+      "tools": ["route_payment_intent"]
+    }
+  },
+  "hiddenTools": {
+    "ledger": []
+  }
+}

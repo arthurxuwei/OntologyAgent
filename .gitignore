@@ -7,11 +7,14 @@
 deep-research-report.md
 freqtrade/data/
 agent/data/
+ledger/data/
 .vscode/
 .worktrees/
+.codex-tmp/
 .playwright-mcp/
 .DS_Store
 .ruff_cache
 __pycache__/
 *.py[cod]
+tmp*/
 chain/recovery_file_*.dat

@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from typing import Any, Awaitable, Callable, Optional
 
+from mcp_tool_metadata import McpToolMetadata, metadata_from_mcp_tool, metadata_from_names
+
 
 class ChainMcpClientError(Exception):
     pass
@@ -25,8 +27,11 @@ class ChainMcpClient:
         self._tool_lister = tool_lister
 
     async def list_tools(self) -> list[str]:
+        return [tool.name for tool in await self.describe_tools()]
+
+    async def describe_tools(self) -> list[McpToolMetadata]:
         if self._tool_lister is not None:
-            return await self._tool_lister()
+            return metadata_from_names(await self._tool_lister())
 
         from mcp import ClientSession
         from mcp.client.streamable_http import streamable_http_client
@@ -39,7 +44,7 @@ class ChainMcpClient:
             async with ClientSession(read_stream, write_stream) as session:
                 await session.initialize()
                 response = await session.list_tools()
-                return [tool.name for tool in response.tools]
+                return [metadata_from_mcp_tool(tool) for tool in response.tools]
 
     async def call_tool(
         self,

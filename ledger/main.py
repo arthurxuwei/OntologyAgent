@@ -5,6 +5,7 @@ import os
 import tempfile
 import threading
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
@@ -12,6 +13,15 @@ from typing import Any, Literal, Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
+from mcp_tools import (
+    agent_wallet_create_escrow_tool,
+    agent_wallet_credit_balance_tool,
+    agent_wallet_get_ledger_state_tool,
+    agent_wallet_refund_escrow_tool,
+    agent_wallet_release_escrow_tool,
+    build_mcp_app,
+    route_payment_intent_tool,
+)
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -460,3 +470,16 @@ def refund_escrow(escrow_id: str) -> dict[str, Any]:
     except (LookupError, ValueError) as error:
         raise http_error(error) from error
     return {"escrow": escrow.model_dump()}
+
+
+_ledger_mcp_app = build_mcp_app(get_store)
+
+
+@asynccontextmanager
+async def ledger_app_lifespan(_app: FastAPI):
+    async with _ledger_mcp_app.router.lifespan_context(_ledger_mcp_app):
+        yield
+
+
+app.router.lifespan_context = ledger_app_lifespan
+app.mount("/", _ledger_mcp_app)
