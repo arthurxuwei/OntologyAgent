@@ -178,6 +178,9 @@ export type AgentWalletStatusCommand = {
   circleWalletId?: string;
 };
 
+export type AgentWalletGetOrCreateCommand = AgentWalletInitCommand &
+  AgentWalletStatusCommand;
+
 export type AgentWalletStatusResult = {
   circleWalletId: string | null;
   circleWalletSetId: string | null;
@@ -187,6 +190,14 @@ export type AgentWalletStatusResult = {
   balances: Record<string, string>;
   mode: "mock" | "circle";
 };
+
+export type AgentWalletGetOrCreateResult =
+  | (AgentWalletInitResult & {
+      reused: false;
+    })
+  | (AgentWalletStatusResult & {
+      reused: true;
+    });
 
 export type AgentWalletRegisterX402ServiceCommand = {
   name: string;

@@ -3,6 +3,8 @@ import { AppError } from "../domain/errors.js";
 import type {
   AgentWalletCallX402ServiceCommand,
   AgentWalletCallX402ServiceResult,
+  AgentWalletGetOrCreateCommand,
+  AgentWalletGetOrCreateResult,
   AgentWalletInitCommand,
   AgentWalletInitResult,
   AgentWalletRegisterX402ServiceCommand,
@@ -11,6 +13,7 @@ import type {
   AgentWalletStatusResult,
 } from "../domain/types.js";
 import { normalizeAddress } from "../security.js";
+import { AgentWalletStateStore } from "./agent-wallet-state-store.js";
 import { CircleWalletService } from "./circle-wallet-service.js";
 import type { X402FetchService } from "./x402-fetch-service.js";
 
@@ -22,6 +25,7 @@ export class AgentWalletService {
     private readonly config: AppConfig,
     private readonly x402FetchService: X402FetchService,
     private readonly circleWalletService = new CircleWalletService(config),
+    private readonly stateStore = new AgentWalletStateStore(config.agentWallet.statePath),
   ) {}
 
   async init(command: AgentWalletInitCommand): Promise<AgentWalletInitResult> {
@@ -31,6 +35,44 @@ export class AgentWalletService {
     }
 
     return this.circleWalletService.createWallet(agentName);
+  }
+
+  async getOrCreate(
+    command: AgentWalletGetOrCreateCommand,
+  ): Promise<AgentWalletGetOrCreateResult> {
+    if (hasNonEmptyValue(command.walletAddress) || hasNonEmptyValue(command.circleWalletId)) {
+      return {
+        ...(await this.status({
+          walletAddress: command.walletAddress,
+          circleWalletId: command.circleWalletId,
+        })),
+        reused: true,
+      };
+    }
+
+    const localWallet = await this.stateStore.findByAgentName(command.agentName);
+    if (localWallet) {
+      return {
+        ...localWallet,
+        reused: true,
+      };
+    }
+
+    return {
+      ...(await this.init({
+        agentName: command.agentName,
+        agentDescription: command.agentDescription,
+      })),
+      reused: false,
+    };
+  }
+
+  async listCircleWallets() {
+    return this.circleWalletService.listWallets();
+  }
+
+  async saveLocalWallets(wallets: Awaited<ReturnType<CircleWalletService["listWallets"]>>) {
+    return this.stateStore.saveWallets(wallets);
   }
 
   async status(command: AgentWalletStatusCommand): Promise<AgentWalletStatusResult> {

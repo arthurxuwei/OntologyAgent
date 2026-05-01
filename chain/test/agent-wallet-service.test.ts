@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { loadConfig } from "../src/config.js";
 import { AppError } from "../src/domain/errors.js";
@@ -43,6 +46,20 @@ function liveCircleConfig(overrides: NodeJS.ProcessEnv = {}) {
   });
 }
 
+async function withTempStateFile(
+  payload: unknown,
+  callback: (statePath: string) => Promise<void>,
+) {
+  const dir = await mkdtemp(join(tmpdir(), "agent-wallet-state-"));
+  const statePath = join(dir, "agent_wallet_state.json");
+  await writeFile(statePath, JSON.stringify(payload), "utf-8");
+  try {
+    await callback(statePath);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
 async function assertRejectsWithAppError(
   action: () => Promise<unknown>,
   expected: {
@@ -76,6 +93,114 @@ test("AgentWalletService creates deterministic mock Circle wallet in CHAIN_MOCK 
   assert.equal(first.blockchain, "BASE-SEPOLIA");
   assert.match(first.circleWalletId, /^mock-circle-wallet-/);
   assert.match(first.walletAddress, /^0x[0-9a-fA-F]{40}$/);
+});
+
+test("AgentWalletService reuses an existing Agent Wallet before creating one", async () => {
+  const config = loadConfig({ CHAIN_MOCK: "true" });
+  let createCalls = 0;
+  const circleWalletService = {
+    createWallet: async () => {
+      createCalls += 1;
+      return {
+        circleWalletId: "new-wallet",
+        circleWalletSetId: "new-wallet-set",
+        blockchain: "BASE-SEPOLIA" as const,
+        walletAddress: "0x2222222222222222222222222222222222222222",
+        mode: "mock" as const,
+      };
+    },
+  } as unknown as CircleWalletService;
+  const service = new AgentWalletService(
+    config,
+    fakeX402FetchService(baseX402Result()),
+    circleWalletService,
+  );
+
+  const result = await service.getOrCreate({
+    agentName: "Research Summary",
+    walletAddress: "0x3333333333333333333333333333333333333333",
+    circleWalletId: "existing-circle-wallet",
+  });
+
+  assert.equal(createCalls, 0);
+  assert.equal(result.reused, true);
+  assert.equal(result.circleWalletId, "existing-circle-wallet");
+  assert.equal(result.walletAddress, "0x3333333333333333333333333333333333333333");
+  assert.equal(result.status, "available");
+});
+
+test("AgentWalletService creates an Agent Wallet when no existing wallet is supplied", async () => {
+  const config = loadConfig({ CHAIN_MOCK: "true" });
+  let createCalls = 0;
+  const circleWalletService = {
+    createWallet: async (agentName: string) => {
+      createCalls += 1;
+      assert.equal(agentName, "Research Summary");
+      return {
+        circleWalletId: "new-wallet",
+        circleWalletSetId: "new-wallet-set",
+        blockchain: "BASE-SEPOLIA" as const,
+        walletAddress: "0x2222222222222222222222222222222222222222",
+        mode: "mock" as const,
+      };
+    },
+  } as unknown as CircleWalletService;
+  const service = new AgentWalletService(
+    config,
+    fakeX402FetchService(baseX402Result()),
+    circleWalletService,
+  );
+
+  const result = await service.getOrCreate({ agentName: " Research Summary " });
+
+  assert.equal(createCalls, 1);
+  assert.equal(result.reused, false);
+  assert.equal(result.circleWalletId, "new-wallet");
+  assert.equal(result.walletAddress, "0x2222222222222222222222222222222222222222");
+});
+
+test("AgentWalletService reuses a matching wallet from local Agent Wallet state", async () => {
+  await withTempStateFile(
+    {
+      wallets: [
+        {
+          agentName: "Research Summary",
+          circleWalletId: "circle-wallet-1",
+          circleWalletSetId: "circle-wallet-set",
+          blockchain: "BASE-SEPOLIA",
+          walletAddress: "0x3333333333333333333333333333333333333333",
+          mode: "circle",
+        },
+      ],
+    },
+    async (statePath) => {
+      const config = loadConfig({
+        CHAIN_MOCK: "true",
+        AGENT_WALLET_STATE_PATH: statePath,
+      });
+      let createCalls = 0;
+      const circleWalletService = {
+        createWallet: async () => {
+          createCalls += 1;
+          throw new Error("createWallet should not be called");
+        },
+      } as unknown as CircleWalletService;
+      const service = new AgentWalletService(
+        config,
+        fakeX402FetchService(baseX402Result()),
+        circleWalletService,
+      );
+
+      const result = await service.getOrCreate({ agentName: " Research Summary " });
+
+      assert.equal(createCalls, 0);
+      assert.equal(result.reused, true);
+      assert.equal(result.circleWalletId, "circle-wallet-1");
+      assert.equal(result.circleWalletSetId, "circle-wallet-set");
+      assert.equal(result.walletAddress, "0x3333333333333333333333333333333333333333");
+      assert.equal(result.mode, "circle");
+    },
+  );
 });
 
 test("AgentWalletService normalizes x402 service registration", async () => {
@@ -313,4 +438,54 @@ test("CircleWalletService returns normalized successful Circle wallet shape", as
     walletAddress: "0x3333333333333333333333333333333333333333",
     mode: "circle",
   });
+});
+
+test("CircleWalletService lists existing Circle wallets for a wallet set", async () => {
+  const service = new CircleWalletService(liveCircleConfig(), {
+    fetchImpl: async (input, init) => {
+      assert.equal(
+        input,
+        "https://circle.test/v1/w3s/wallets?walletSetId=circle-wallet-set&blockchain=BASE-SEPOLIA",
+      );
+      assert.equal(init?.method, "GET");
+      assert.equal(
+        (init?.headers as Record<string, string>).Authorization,
+        "Bearer circle-api-key",
+      );
+
+      return new Response(
+        JSON.stringify({
+          data: {
+            wallets: [
+              {
+                id: "circle-wallet-1",
+                walletSetId: "circle-wallet-set",
+                blockchain: "BASE-SEPOLIA",
+                address: "0x3333333333333333333333333333333333333333",
+                name: "Research Summary",
+                refId: "research-summary",
+              },
+            ],
+          },
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    },
+  });
+
+  const result = await service.listWallets();
+
+  assert.deepEqual(result, [
+    {
+      agentName: "Research Summary",
+      circleWalletId: "circle-wallet-1",
+      circleWalletSetId: "circle-wallet-set",
+      blockchain: "BASE-SEPOLIA",
+      walletAddress: "0x3333333333333333333333333333333333333333",
+      mode: "circle",
+    },
+  ]);
 });

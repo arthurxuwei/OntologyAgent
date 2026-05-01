@@ -8,6 +8,7 @@
       "url": "http://chain-mcp:8091/mcp/",
       "tools": [
         "chain_get_wallet_state",
+        "agent_wallet_get_or_create",
         "chain_sign_transfer",
         "chain_submit_execution",
         "chain_submit_user_operation",

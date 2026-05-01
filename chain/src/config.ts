@@ -45,6 +45,9 @@ export type AppConfig = {
     baseUrl: string;
     blockchain: "BASE-SEPOLIA";
   };
+  agentWallet: {
+    statePath?: string;
+  };
 };
 
 const DEFAULT_TESTNET_RPC_URL = "https://base-sepolia-rpc.publicnode.com";
@@ -207,6 +210,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       walletSetId: pickOptionalEnv(env.CIRCLE_WALLET_SET_ID),
       baseUrl: env.CIRCLE_BASE_URL ?? DEFAULT_CIRCLE_BASE_URL,
       blockchain: "BASE-SEPOLIA",
+    },
+    agentWallet: {
+      statePath: pickOptionalEnv(env.AGENT_WALLET_STATE_PATH),
     },
   };
 }

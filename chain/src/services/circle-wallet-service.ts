@@ -12,11 +12,18 @@ export type CircleWalletCreateResult = {
   mode: "mock" | "circle";
 };
 
+export type CircleWalletRecord = Omit<CircleWalletCreateResult, "circleWalletSetId"> & {
+  agentName: string;
+  circleWalletSetId: string | null;
+};
+
 type CircleWalletResponseWallet = {
   id?: unknown;
   address?: unknown;
   blockchain?: unknown;
   walletSetId?: unknown;
+  name?: unknown;
+  refId?: unknown;
 };
 
 export type CircleEntitySecretCiphertextFactory = (
@@ -140,6 +147,42 @@ export class CircleWalletService {
       mode: "circle",
     };
   }
+
+  async listWallets(): Promise<CircleWalletRecord[]> {
+    const apiKey = this.config.circle.apiKey;
+    const walletSetId = this.config.circle.walletSetId;
+    if (!apiKey || !walletSetId) {
+      throw new AppError(
+        "CONFIG_ERROR",
+        "CIRCLE_API_KEY and CIRCLE_WALLET_SET_ID are required",
+        500,
+      );
+    }
+
+    const query = new URLSearchParams({
+      walletSetId,
+      blockchain: this.config.circle.blockchain,
+    });
+    const response = await this.fetchImpl(`${this.config.circle.baseUrl}/wallets?${query}`, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+    });
+    const payload = await parseJsonPayload(response);
+
+    if (!response.ok) {
+      throw new AppError(
+        "UPSTREAM_REQUEST_FAILED",
+        `Circle wallet listing failed with HTTP ${response.status}`,
+        response.status,
+        payload,
+      );
+    }
+
+    return extractWallets(payload).map((wallet) => normalizeCircleWalletRecord(wallet, payload));
+  }
 }
 
 export function slug(value: string): string {
@@ -166,17 +209,21 @@ async function parseJsonPayload(response: Response): Promise<unknown> {
 }
 
 function extractFirstWallet(payload: unknown): CircleWalletResponseWallet | undefined {
+  const [wallet] = extractWallets(payload);
+  return wallet;
+}
+
+function extractWallets(payload: unknown): CircleWalletResponseWallet[] {
   if (!isRecord(payload)) {
-    return undefined;
+    return [];
   }
 
   const data = payload.data;
   if (!isRecord(data) || !Array.isArray(data.wallets)) {
-    return undefined;
+    return [];
   }
 
-  const [wallet] = data.wallets;
-  return isRecord(wallet) ? wallet : undefined;
+  return data.wallets.filter(isRecord);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -197,4 +244,48 @@ function normalizeCircleAddress(address: string, payload: unknown): string {
       },
     );
   }
+}
+
+function normalizeCircleWalletRecord(
+  wallet: CircleWalletResponseWallet,
+  payload: unknown,
+): CircleWalletRecord {
+  if (typeof wallet.id !== "string" || typeof wallet.address !== "string") {
+    throw new AppError(
+      "UPSTREAM_REQUEST_FAILED",
+      "Circle wallet response did not include id and address",
+      502,
+      payload,
+    );
+  }
+
+  if (wallet.blockchain !== undefined && wallet.blockchain !== "BASE-SEPOLIA") {
+    throw new AppError(
+      "NETWORK_MISMATCH",
+      `Circle returned unsupported blockchain ${String(wallet.blockchain)}`,
+      502,
+      payload,
+    );
+  }
+
+  return {
+    agentName:
+      typeof wallet.name === "string" && wallet.name.trim()
+        ? wallet.name.trim()
+        : typeof wallet.refId === "string" && wallet.refId.trim()
+          ? wallet.refId.trim()
+          : wallet.id,
+    circleWalletId: wallet.id,
+    circleWalletSetId:
+      typeof wallet.walletSetId === "string"
+        ? wallet.walletSetId
+        : (isRecord(payload) &&
+            isRecord(payload.data) &&
+            typeof payload.data.walletSetId === "string"
+          ? payload.data.walletSetId
+          : null) ?? null,
+    blockchain: "BASE-SEPOLIA",
+    walletAddress: normalizeCircleAddress(wallet.address, payload),
+    mode: "circle",
+  };
 }

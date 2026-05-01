@@ -63,6 +63,8 @@ test("chain MCP exposes the expected tool names", async () => {
     const toolNames = response.tools.map((tool) => tool.name).sort();
     assert.deepEqual(toolNames, [
       "agent_wallet_call_x402_service",
+      "agent_wallet_get_or_create",
+      "agent_wallet_import_circle_wallets",
       "agent_wallet_init",
       "agent_wallet_register_x402_service",
       "agent_wallet_status",

@@ -1,0 +1,21 @@
+{
+  "wallets": [
+    {
+      "agentName": "Research Agent Live 4",
+      "circleWalletId": "dfbb9cd7-8eff-557c-b22b-09905f1ddaeb",
+      "circleWalletSetId": "9526ed7f-8558-5722-8d29-f584b08577ff",
+      "blockchain": "BASE-SEPOLIA",
+      "walletAddress": "0x5c515a3c02c52c13731ca6044577d3f798976974",
+      "mode": "circle"
+    },
+    {
+      "agentName": "Research Agent Live",
+      "circleWalletId": "69233e0b-b41d-55a3-ab30-a1f07d869ce8",
+      "circleWalletSetId": "9526ed7f-8558-5722-8d29-f584b08577ff",
+      "blockchain": "BASE-SEPOLIA",
+      "walletAddress": "0xdcb5f2a59ac442b1b14d4bd2d902ef065df015b1",
+      "mode": "circle"
+    }
+  ],
+  "updatedAt": "2026-05-01T17:04:49.599Z"
+}

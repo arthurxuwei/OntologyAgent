@@ -33,6 +33,12 @@ test("loadConfig exposes mock balance for chain wallet state", () => {
   assert.equal(config.network.mockUsdcBalanceAtomic.toString(), "123456789");
 });
 
+test("loadConfig reads Agent Wallet state path", () => {
+  const config = loadConfig({ AGENT_WALLET_STATE_PATH: "/tmp/agent-wallet.json" });
+
+  assert.equal(config.agentWallet.statePath, "/tmp/agent-wallet.json");
+});
+
 test("loadConfig rejects non-integer values for integer config fields", () => {
   assert.throws(
     () =>

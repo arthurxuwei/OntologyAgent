@@ -141,6 +141,43 @@ export function createChainMcpServer(runtime: ChainRuntime): McpServer {
   });
 
   server.registerTool(
+    "agent_wallet_import_circle_wallets",
+    {
+      description:
+        "Import existing Circle wallets for the configured wallet set into local Agent Wallet state.",
+      inputSchema: {},
+    },
+    async () =>
+      runTool(async () => {
+        const wallets = await runtime.agentWalletService.listCircleWallets();
+        return runtime.agentWalletService.saveLocalWallets(wallets);
+      }),
+  );
+
+  server.registerTool(
+    "agent_wallet_get_or_create",
+    {
+      description:
+        "Get an existing Agent Wallet when an address or Circle wallet id is supplied; otherwise create one for a named agent.",
+      inputSchema: {
+        agentName: z.string().describe("Agent name used when a new wallet must be created"),
+        agentDescription: z.string().optional().describe("Optional agent description"),
+        walletAddress: z.string().optional().describe("Existing Agent wallet address to reuse"),
+        circleWalletId: z.string().optional().describe("Existing Circle wallet id to reuse"),
+      },
+    },
+    async ({ agentName, agentDescription, walletAddress, circleWalletId }) =>
+      runTool(() =>
+        runtime.agentWalletService.getOrCreate({
+          agentName,
+          agentDescription,
+          walletAddress,
+          circleWalletId,
+        }),
+      ),
+  );
+
+  server.registerTool(
     "agent_wallet_init",
     {
       description: "Initialize an Agent Wallet for a named agent.",

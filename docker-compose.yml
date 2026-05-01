@@ -62,6 +62,9 @@ services:
       CIRCLE_ENTITY_SECRET_CIPHERTEXT: ${CIRCLE_ENTITY_SECRET_CIPHERTEXT:-}
       CIRCLE_WALLET_SET_ID: ${CIRCLE_WALLET_SET_ID:-}
       CIRCLE_BASE_URL: ${CIRCLE_BASE_URL:-https://api.circle.com/v1/w3s}
+      AGENT_WALLET_STATE_PATH: ${AGENT_WALLET_STATE_PATH:-/app/data/agent_wallet_state.json}
+    volumes:
+      - ./chain/data:/app/data
     networks:
       default:
         aliases:
