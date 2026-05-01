@@ -305,6 +305,28 @@
         }
       }
 
+      function isSendShortcut(event) {
+        return (
+          event.key === "Enter" &&
+          (event.metaKey || event.ctrlKey || event.getModifierState("OS"))
+        );
+      }
+
+      function submitComposer() {
+        if (sendEl.disabled) return;
+        if (composerEl.requestSubmit) {
+          composerEl.requestSubmit();
+        } else {
+          composerEl.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+        }
+      }
+
+      inputEl.addEventListener("keydown", (event) => {
+        if (!isSendShortcut(event)) return;
+        event.preventDefault();
+        submitComposer();
+      });
+
       composerEl.addEventListener("submit", async (event) => {
         event.preventDefault();
         const input = inputEl.value.trim();
