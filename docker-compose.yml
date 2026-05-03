@@ -75,12 +75,15 @@ services:
     build:
       context: ./x402-seller
     container_name: x402-seller
+    ports:
+      - "8001:8000"
     environment:
       X402_PAY_TO: ${X402_PAY_TO:-}
       X402_PRICE: ${X402_PRICE:-0.01}
       X402_NETWORK: ${X402_NETWORK:-eip155:84532}
       X402_FACILITATOR_URL: ${X402_FACILITATOR_URL:-https://x402.org/facilitator}
       X402_TIMEOUT_SECONDS: ${X402_TIMEOUT_SECONDS:-20}
+      X402_GATEWAY_VERIFYING_CONTRACT: ${X402_GATEWAY_VERIFYING_CONTRACT:-0x0077777d7EBA4688BDeF3E311b846F25870A19B9}
     restart: unless-stopped
 
   freqtrade:

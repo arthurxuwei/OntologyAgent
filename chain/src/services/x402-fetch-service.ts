@@ -3,10 +3,15 @@ import { baseSepolia } from "viem/chains";
 import { privateKeyToAccount } from "viem/accounts";
 import { x402Client, x402HTTPClient } from "@x402/core/client";
 import { ExactEvmScheme, toClientEvmSigner } from "@x402/evm";
+import { registerBatchScheme } from "@circle-fin/x402-batching/client";
 
 import type { AppConfig } from "../config.js";
 import { AppError } from "../domain/errors.js";
-import type { X402FetchCommand, X402FetchResult } from "../domain/types.js";
+import type {
+  X402FetchCommand,
+  X402FetchResult,
+  X402PaymentPreference,
+} from "../domain/types.js";
 import type { PolicyGuard } from "../policies/policy-guard.js";
 
 export class X402FetchService {
@@ -16,6 +21,7 @@ export class X402FetchService {
     private readonly config: Pick<AppConfig, "x402" | "network">,
     private readonly policyGuard: PolicyGuard,
     fetchImpl: typeof fetch = fetch,
+    private readonly defaultPaymentPreference: X402PaymentPreference = "standard",
   ) {
     this.fetchImpl = fetchImpl;
   }
@@ -34,7 +40,9 @@ export class X402FetchService {
       };
     }
 
-    const httpClient = this.buildHttpClient();
+    const httpClient = this.buildHttpClient(
+      command.paymentPreference ?? this.defaultPaymentPreference,
+    );
     const paymentRequired = httpClient.getPaymentRequiredResponse(
       (name) => initialResponse.headers.get(name),
       initialPayload.payload,
@@ -57,6 +65,15 @@ export class X402FetchService {
       },
     });
     const paidPayload = await parseResponsePayload(paidResponse);
+    if (paidResponse.status >= 400) {
+      throw new AppError(
+        "UPSTREAM_REQUEST_FAILED",
+        `paid x402 retry failed with status ${paidResponse.status}`,
+        502,
+        paidPayload,
+      );
+    }
+
     const paymentResponseHeader = paidResponse.headers.get("PAYMENT-RESPONSE");
     if (!paymentResponseHeader) {
       throw new AppError(
@@ -99,7 +116,7 @@ export class X402FetchService {
     };
   }
 
-  private buildHttpClient(): x402HTTPClient {
+  private buildHttpClient(paymentPreference: X402PaymentPreference): x402HTTPClient {
     if (!this.config.x402.buyerPrivateKey) {
       throw new AppError(
         "SIGNER_UNAVAILABLE",
@@ -114,14 +131,17 @@ export class X402FetchService {
       transport: http(this.config.network.rpcUrl),
     });
     const signer = toClientEvmSigner(account, publicClient);
-    const client = new x402Client().register(
-      "eip155:*",
-      new ExactEvmScheme(signer, {
+    const client = new x402Client((_, accepts) =>
+      selectPaymentRequirement(paymentPreference, accepts),
+    );
+    registerBatchScheme(client, {
+      signer,
+      fallbackScheme: new ExactEvmScheme(signer, {
         84532: {
           rpcUrl: this.config.network.rpcUrl,
         },
       }),
-    );
+    });
 
     return new x402HTTPClient(client);
   }
@@ -144,6 +164,27 @@ export class X402FetchService {
 
     return init;
   }
+}
+
+function selectPaymentRequirement<PaymentRequirement extends { extra?: Record<string, unknown> }>(
+  paymentPreference: X402PaymentPreference,
+  accepts: PaymentRequirement[],
+): PaymentRequirement {
+  if (paymentPreference === "circle-gateway") {
+    const gatewayRequirement = accepts.find(
+      (requirement) => requirement.extra?.name === "GatewayWalletBatched",
+    );
+    if (!gatewayRequirement) {
+      throw new AppError(
+        "X402_PROTOCOL_ERROR",
+        "Seller did not advertise a GatewayWalletBatched x402 payment requirement",
+        502,
+      );
+    }
+    return gatewayRequirement;
+  }
+
+  return accepts[0];
 }
 
 function normalizeHeaders(headers?: HeadersInit): Record<string, string> {

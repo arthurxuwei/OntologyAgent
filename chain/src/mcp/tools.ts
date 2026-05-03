@@ -232,11 +232,21 @@ export function createChainMcpServer(runtime: ChainRuntime): McpServer {
           .describe("HTTP method"),
         headers: z.record(z.string(), z.string()).optional().describe("Optional request headers"),
         body: z.unknown().optional().describe("Optional request body"),
+        paymentPreference: z
+          .enum(["standard", "circle-gateway"])
+          .optional()
+          .describe("Optional x402 payment requirement preference"),
       },
     },
-    async ({ url, method, headers, body }) =>
+    async ({ url, method, headers, body, paymentPreference }) =>
       runTool(() =>
-        runtime.agentWalletService.callX402Service({ url, method, headers, body }),
+        runtime.agentWalletService.callX402Service({
+          url,
+          method,
+          headers,
+          body,
+          paymentPreference,
+        }),
       ),
   );
 
@@ -356,10 +366,22 @@ export function createChainMcpServer(runtime: ChainRuntime): McpServer {
           .describe("HTTP method"),
         headers: z.record(z.string(), z.string()).optional().describe("Optional request headers"),
         body: z.unknown().optional().describe("Optional request body"),
+        paymentPreference: z
+          .enum(["standard", "circle-gateway"])
+          .optional()
+          .describe("Optional x402 payment requirement preference"),
       },
     },
-    async ({ url, method, headers, body }) =>
-      runTool(() => runtime.x402FetchService.execute({ url, method, headers, body })),
+    async ({ url, method, headers, body, paymentPreference }) =>
+      runTool(() =>
+        runtime.x402FetchService.execute({
+          url,
+          method,
+          headers,
+          body,
+          paymentPreference,
+        }),
+      ),
   );
 
   return server;

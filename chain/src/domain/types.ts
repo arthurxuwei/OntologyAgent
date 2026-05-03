@@ -114,7 +114,11 @@ export type PaymentAttempt = {
   settlement: SettlementResult;
 };
 
-export type X402FetchCommand = UpstreamRequest;
+export type X402PaymentPreference = "standard" | "circle-gateway";
+
+export type X402FetchCommand = UpstreamRequest & {
+  paymentPreference?: X402PaymentPreference;
+};
 
 export type X402RequirementSummary = {
   scheme: string;

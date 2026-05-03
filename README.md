@@ -30,7 +30,9 @@ docker compose up -d --build
 - `ledger` 管理页面：`http://localhost:8092/`
 - `ledger` 健康检查：`http://localhost:8092/health`
 - `ledger` 账本状态：`GET http://localhost:8092/ledger/state`
-- `x402-seller` 演示资源：`GET /x402/demo-resource`
+- `x402-seller` 健康检查：`http://localhost:8001/health`
+- `x402-seller` 演示资源：`GET http://localhost:8001/x402/demo-resource`
+- `x402-seller` Circle Nanopayments 演示资源：`GET http://localhost:8001/x402/agent-services/research-summary/nanopayments`
 - `chain` MCP：`http://localhost:8091/mcp/`
 - `freqtrade` REST API：`http://localhost:8080/api/v1`
 - `freqtrade` MCP：`http://localhost:8090/mcp/`
@@ -263,6 +265,70 @@ AGENT_BASE_URL=http://localhost:8000 ./scripts/agent-chat.sh
 CHAIN_MOCK=true ./scripts/demo-chain-mcp.sh
 ```
 
+如需走 Circle Nanopayments 风格的 buyer 选择逻辑：
+
+```bash
+CHAIN_MOCK=true \
+DEMO_X402_RESOURCE_PATH=/x402/agent-services/research-summary/nanopayments \
+DEMO_X402_PAYMENT_PREFERENCE=circle-gateway \
+./scripts/demo-chain-mcp.sh
+```
+
+也可以跑 buyer/seller/facilitator 集成用例。先让 compose 里的 `x402-seller`
+使用 mock facilitator，然后在 `chain` 容器里执行：
+
+```bash
+X402_PAY_TO=0x2222222222222222222222222222222222222222 \
+X402_FACILITATOR_URL=http://x402-mock:8000/x402/facilitator \
+docker compose up -d --build x402-mock x402-seller
+
+docker run --rm --network ontologyagent_default \
+  -v "$PWD/chain:/workspace" \
+  -w /workspace \
+  -e RUN_X402_NANOPAYMENTS_INTEGRATION=true \
+  ontologyagent-chain \
+  node --import tsx --test test/x402-nanopayments.integration.test.ts
+```
+
+如需验证真实 Circle Gateway facilitator / live settlement，先准备：
+
+- `X402_PAY_TO` / `X402_LIVE_PAY_TO`：seller 收款地址，两者应一致，且不能等于 buyer 地址
+- `X402_LIVE_BUYER_PRIVATE_KEY`：buyer 测试私钥，必须有足够 Base Sepolia ETH、Base Sepolia USDC 和 Circle Gateway available balance
+- `RPC_URL`：Base Sepolia RPC，默认 `https://base-sepolia-rpc.publicnode.com`
+- `X402_LIVE_FACILITATOR_URL`：Circle Gateway testnet facilitator，默认 `https://gateway-api-testnet.circle.com`
+
+注意：Circle Gateway nanopayments 使用 Gateway balance，不是普通钱包里的 USDC
+余额。首次 live 测试前，需要先通过 Circle Gateway deposit 少量测试 USDC。
+
+然后运行：
+
+```bash
+X402_PAY_TO=0x... \
+X402_FACILITATOR_URL="${X402_LIVE_FACILITATOR_URL:-https://gateway-api-testnet.circle.com}" \
+docker compose up -d --build x402-seller
+
+docker run --rm --network ontologyagent_default \
+  -v "$PWD/chain:/workspace" \
+  -w /workspace \
+  -e RUN_X402_NANOPAYMENTS_LIVE=true \
+  -e X402_LIVE_BUYER_PRIVATE_KEY=0x... \
+  -e X402_LIVE_PAY_TO=0x... \
+  -e X402_LIVE_FACILITATOR_URL="${X402_LIVE_FACILITATOR_URL:-https://gateway-api-testnet.circle.com}" \
+  -e RPC_URL="${RPC_URL:-https://base-sepolia-rpc.publicnode.com}" \
+  ontologyagent-chain \
+  node --import tsx --test test/x402-nanopayments.integration.test.ts
+```
+
+这个 live 用例会真实执行 paid x402 fetch，强制选择 `GatewayWalletBatched`。
+若失败，通常可以按阶段判断：
+
+- seller 没返回 `402`：检查 `X402_PAY_TO` 是否配置
+- 找不到 `GatewayWalletBatched`：检查 seller nanopayments endpoint / Gateway contract 配置
+- policy 拒绝：检查 `X402_LIVE_PAY_TO`、USDC cap 或 whitelist
+- `self_transfer`：检查 seller `payTo` 是否等于 buyer 地址
+- `authorization_validity_too_short`：检查 seller 是否广告至少 7 天以上的 Gateway `maxTimeoutSeconds`
+- verify / settle 失败：检查 buyer 签名格式、Gateway balance、facilitator 是否支持 Circle Gateway
+
 如需 live 测试，至少准备：
 
 ```bash
@@ -432,6 +498,7 @@ curl -X POST http://localhost:8000/agent-wallet/reset
 - `X402_NETWORK`：seller CAIP-2 网络，默认 `eip155:84532`
 - `X402_FACILITATOR_URL`：seller 使用的 facilitator，默认 `https://x402.org/facilitator`
 - `X402_TIMEOUT_SECONDS`：seller 请求 facilitator 的超时，默认 `20`
+- `X402_GATEWAY_VERIFYING_CONTRACT`：Circle Gateway `GatewayWalletBatched` verifying contract；Base Sepolia 默认 `0x0077777d7EBA4688BDeF3E311b846F25870A19B9`
 
 ### freqtrade
 
@@ -471,5 +538,15 @@ curl -X POST http://localhost:8000/agent-wallet/reset
 - 首次访问会返回 `402 Payment Required`
 - 响应头包含 `PAYMENT-REQUIRED`
 - buyer 成功重试后，返回业务 JSON，并带 `PAYMENT-RESPONSE`
+
+## `x402-seller: GET /x402/agent-services/research-summary/nanopayments`
+
+这是独立 `x402-seller` 服务提供的 Circle Nanopayments 风格演示资源：
+
+- 首次访问会返回 `402 Payment Required`
+- `accepts` 同时包含标准 x402 `exact` 付款项和 Circle Gateway `GatewayWalletBatched` 付款项
+- seller 会按 buyer 在 `PAYMENT-SIGNATURE.accepted` 中选择的付款项执行 verify / settle，而不是固定使用第一项
+- buyer 可在 `chain_x402_fetch` / `agent_wallet_call_x402_service` 中传 `paymentPreference: "circle-gateway"`，优先选择 `GatewayWalletBatched`
+- buyer 成功重试后，返回 `research-summary-nanopayments` 业务 JSON，并带 `PAYMENT-RESPONSE`
 
 在 `CHAIN_MOCK=true` 的本地回归场景下，脚本会把 facilitator 切到独立的 `x402-mock` 服务，而不是 `agent` 本体。

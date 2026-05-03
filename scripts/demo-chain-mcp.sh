@@ -102,6 +102,8 @@ export CHAIN_ID="${CHAIN_ID:-84532}"
 export X402_NETWORK="${X402_NETWORK:-eip155:84532}"
 export X402_PRICE="${X402_PRICE:-\$0.01}"
 export X402_FACILITATOR_URL="${X402_FACILITATOR_URL:-https://x402.org/facilitator}"
+export DEMO_X402_RESOURCE_PATH="${DEMO_X402_RESOURCE_PATH:-/x402/demo-resource}"
+export DEMO_X402_PAYMENT_PREFERENCE="${DEMO_X402_PAYMENT_PREFERENCE:-standard}"
 
 if [[ "${CHAIN_MOCK}" == "true" ]]; then
   echo "===> Starting chain MCP demo in mock-chain mode"
@@ -174,7 +176,7 @@ PY
 
 echo
 echo "===> chain_x402_fetch"
-docker compose exec -T agent python - <<'PY'
+docker compose exec -T agent python - <<PY
 import asyncio
 import json
 from chain_mcp_client import ChainMcpClient
@@ -183,8 +185,9 @@ async def main():
     result = await ChainMcpClient("http://chain-mcp:8091/mcp/").call_tool(
         "chain_x402_fetch",
         {
-            "url": "http://x402-seller:8000/x402/demo-resource",
+            "url": "http://x402-seller:8000${DEMO_X402_RESOURCE_PATH}",
             "method": "GET",
+            "paymentPreference": "${DEMO_X402_PAYMENT_PREFERENCE}",
         },
     )
     print(json.dumps(result, ensure_ascii=False))
