@@ -85,6 +85,7 @@ docker compose --env-file "$(dirname "$(git rev-parse --git-common-dir)")/.env" 
   - `route_payment_intent`（任何付款、x402、转账或 Escrow 动作前先选择支付方式）
   - `agent_wallet_get_ledger_state`
   - `agent_wallet_credit_balance`
+  - `agent_wallet_create_onramp_session`
   - `agent_wallet_create_escrow`
   - `agent_wallet_release_escrow`
   - `agent_wallet_refund_escrow`
@@ -129,11 +130,17 @@ docker compose --env-file "$(dirname "$(git rev-parse --git-common-dir)")/.env" 
 - `POST /ledger/escrows`
 - `POST /ledger/escrows/{escrowId}/release`
 - `POST /ledger/escrows/{escrowId}/refund`
+- `POST /onramp/sessions`
+- `GET /onramp/sessions/{sessionId}`
+- `POST /onramp/sessions/{sessionId}/confirm`
 
 账本规则：
 
 - 金额使用 USDC atomic amount 字符串，不使用浮点数
 - `credit` 增加 Agent 可用余额
+- Coinbase Onramp 创建 session 时只生成 hosted onramp URL，不增加 Agent 可用余额
+- Onramp 确认后才会创建 `coinbase_onramp_confirmed` credit entry
+- 同一个 Onramp session 重复 confirm 不会重复入账
 - 创建 escrow 会把 buyer 的可用余额转为锁定余额
 - `release` 会把 buyer 锁定余额转给 seller 可用余额
 - `refund` 会把 buyer 锁定余额退回 buyer 可用余额
@@ -141,18 +148,78 @@ docker compose --env-file "$(dirname "$(git rev-parse --git-common-dir)")/.env" 
 
 本地状态文件由 `LEDGER_STATE_PATH` 控制，Docker 默认是 `/app/data/offchain_ledger.json`，并挂载到仓库的 `./ledger/data`。
 
-`ledger` 自带独立管理页面：`http://localhost:8092/`。页面可以直接验证 credit、create escrow、release 和 refund。`agent` 的 Web Console 不承载 ledger 管理功能；agent 只通过本地工具在对话/编排时调用 ledger 能力。
+`ledger` 自带独立管理页面：`http://localhost:8092/`。页面可以直接验证 Coinbase Onramp session、onramp confirm credit、manual credit、create escrow、release 和 refund。`agent` 的 Web Console 不承载 ledger 管理功能；agent 只通过本地工具在对话/编排时调用 ledger 能力。
 
 ### Payment Routing
 
 Agent 同时具备 `ledger`、x402 和链上转账能力。为了避免模型自行猜测支付方式，所有付款相关动作必须先调用 `route_payment_intent`：
 
 - `deliveryMode=async_task` 或 `requiresAcceptance=true` 且不是外部服务：返回 `ledger_escrow`
+- `deliveryMode=funding`：返回 `onramp`
 - `deliveryMode=immediate_api` 且是外部服务：返回 `x402`
 - `deliveryMode=withdrawal`：返回 `chain_transfer`
 - 信息不足或外部异步交付：返回 `needs_clarification`
 
 Agent 只能继续使用路由结果里的 `allowedTools`。如果返回 `needs_clarification`，应先向用户澄清交易类型、交付方式和对方是否为外部服务。
+
+### Coinbase Onramp Alpha
+
+`ledger` 现在承载 Alpha 版 Coinbase hosted onramp session 和确认入账流程。当前实现使用 Coinbase Onramp Session Token API 生成 `sessionToken`，再返回 `https://pay.coinbase.com/buy/select-asset?...` hosted URL。用户完成 Coinbase onramp 前，ledger 不会增加可用余额；只有确认接口收到实际到账 atomic amount 后，才会写入 `credit` entry。
+
+本地 mock：
+
+```bash
+COINBASE_ONRAMP_MOCK=true docker compose up -d --build ledger
+```
+
+创建 onramp session：
+
+```bash
+curl -X POST http://localhost:8092/onramp/sessions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "agentId": "agentA",
+    "destinationAddress": "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
+    "paymentAmount": "10.00",
+    "idempotencyKey": "fund-agentA-10"
+  }'
+```
+
+返回的 `onrampUrl` 应交给前端打开。`idempotencyKey` 重复时会复用已有 session。
+
+确认入账：
+
+```bash
+curl -X POST http://localhost:8092/onramp/sessions/{sessionId}/confirm \
+  -H "Content-Type: application/json" \
+  -d '{
+    "providerOrderId": "coinbase_order_123",
+    "amountAtomic": "10000000",
+    "txHash": "0xabc123"
+  }'
+```
+
+`amountAtomic` 必须是实际确认到账的 USDC atomic amount。重复 confirm 同一个 session 会返回已 credited 的 session，不会再次 credit ledger。
+
+真实 Coinbase 配置：
+
+```bash
+COINBASE_ONRAMP_MOCK=false
+COINBASE_API_KEY_ID="<id from the Coinbase API key JSON>"
+COINBASE_API_PRIVATE_KEY="<base64 privateKey from the Coinbase API key JSON>"
+```
+
+如果你已经有可直接用于 Onramp API 的 bearer token，也可以设置：
+
+```bash
+COINBASE_ONRAMP_BEARER_TOKEN=...
+```
+
+默认 Coinbase 参数：
+
+- `COINBASE_ONRAMP_API_BASE_URL=https://api.developer.coinbase.com`
+- `COINBASE_ONRAMP_TOKEN_PATH=/onramp/v1/token`
+- `COINBASE_ONRAMP_HOSTED_URL=https://pay.coinbase.com/buy/select-asset`
 
 ### Default Freqtrade Strategy（V1）
 
@@ -449,6 +516,13 @@ PRIVATE_KEY=0x... \
 ### ledger
 
 - `LEDGER_STATE_PATH`：链下账本 JSON 状态文件路径；Docker 默认 `/app/data/offchain_ledger.json`
+- `COINBASE_ONRAMP_MOCK`：是否使用本地 mock Coinbase onramp token，默认 `false`
+- `COINBASE_ONRAMP_BEARER_TOKEN`：可选；如果配置，会直接作为 Coinbase Onramp API bearer token 使用
+- `COINBASE_API_KEY_ID`：Coinbase CDP Secret API Key JSON 中的 `id`
+- `COINBASE_API_PRIVATE_KEY`：Coinbase CDP Secret API Key JSON 中的 base64 `privateKey`
+- `COINBASE_ONRAMP_API_BASE_URL`：Coinbase API base URL，默认 `https://api.developer.coinbase.com`
+- `COINBASE_ONRAMP_TOKEN_PATH`：Coinbase Onramp session token path，默认 `/onramp/v1/token`
+- `COINBASE_ONRAMP_HOSTED_URL`：Coinbase hosted onramp URL，默认 `https://pay.coinbase.com/buy/select-asset`
 
 ## Agent Wallet MVP x402 Demo
 

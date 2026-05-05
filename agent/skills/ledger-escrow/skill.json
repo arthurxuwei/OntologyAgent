@@ -9,6 +9,7 @@
       "tools": [
         "agent_wallet_get_ledger_state",
         "agent_wallet_credit_balance",
+        "agent_wallet_create_onramp_session",
         "agent_wallet_create_escrow",
         "agent_wallet_release_escrow",
         "agent_wallet_refund_escrow"

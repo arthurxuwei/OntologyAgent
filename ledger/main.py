@@ -2,19 +2,28 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import tempfile
 import threading
+import time
 import uuid
+import base64
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal, Optional
+from urllib.parse import urlencode
 
+import httpx
+import jwt
+from cryptography.hazmat.primitives.asymmetric import ed25519
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from mcp_tools import (
     agent_wallet_create_escrow_tool,
+    agent_wallet_create_onramp_session_tool,
     agent_wallet_credit_balance_tool,
     agent_wallet_get_ledger_state_tool,
     agent_wallet_refund_escrow_tool,
@@ -22,11 +31,14 @@ from mcp_tools import (
     build_mcp_app,
     route_payment_intent_tool,
 )
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
 
 
 DEFAULT_ASSET = "USDC"
 DEFAULT_LEDGER_STATE_PATH = "ledger/data/offchain_ledger.json"
+DEFAULT_COINBASE_API_BASE_URL = "https://api.developer.coinbase.com"
+DEFAULT_COINBASE_TOKEN_PATH = "/onramp/v1/token"
+DEFAULT_COINBASE_HOSTED_URL = "https://pay.coinbase.com/buy/select-asset"
 LEDGER_CONSOLE_PATH = Path(__file__).resolve().parent / "web" / "index.html"
 
 app = FastAPI(title="OntologyAgent offchain ledger")
@@ -79,12 +91,64 @@ class EscrowRecord(BaseModel):
     refundedAt: Optional[str] = None
 
 
+class OnrampSessionRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    sessionId: str
+    provider: Literal["coinbase"] = "coinbase"
+    providerToken: Optional[str] = None
+    providerChannelId: Optional[str] = None
+    providerOrderId: Optional[str] = None
+    agentId: str
+    destinationAddress: str
+    destinationNetwork: str = "base"
+    purchaseCurrency: str = DEFAULT_ASSET
+    paymentCurrency: str = "USD"
+    paymentAmount: str
+    clientIp: str
+    partnerUserRef: Optional[str] = None
+    redirectUrl: Optional[str] = None
+    defaultPaymentMethod: Optional[str] = None
+    idempotencyKey: str
+    onrampUrl: str
+    status: Literal[
+        "created",
+        "opened",
+        "pending",
+        "confirming",
+        "credited",
+        "failed",
+        "expired",
+        "cancelled",
+    ] = "created"
+    creditedAmountAtomic: Optional[str] = None
+    txHash: Optional[str] = None
+    ledgerEntryId: Optional[str] = None
+    createdAt: str
+    updatedAt: str
+    creditedAt: Optional[str] = None
+
+
+class OnrampEventRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    eventId: str
+    sessionId: str
+    provider: Literal["coinbase"] = "coinbase"
+    eventType: str
+    providerEventId: Optional[str] = None
+    rawPayload: dict[str, Any] = Field(default_factory=dict)
+    createdAt: str
+
+
 class LedgerState(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     accounts: list[LedgerAccount] = Field(default_factory=list)
     entries: list[LedgerEntry] = Field(default_factory=list)
     escrows: list[EscrowRecord] = Field(default_factory=list)
+    onrampSessions: list[OnrampSessionRecord] = Field(default_factory=list)
+    onrampEvents: list[OnrampEventRecord] = Field(default_factory=list)
 
 
 class CreditRequest(BaseModel):
@@ -106,6 +170,43 @@ class CreateEscrowRequest(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class CreateOnrampSessionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    agentId: str = Field(min_length=1)
+    destinationAddress: str = Field(min_length=1)
+    paymentAmount: str = Field(min_length=1)
+    idempotencyKey: str = Field(min_length=1)
+    clientIp: str = "192.0.2.1"
+    destinationNetwork: str = "base"
+    purchaseCurrency: str = DEFAULT_ASSET
+    paymentCurrency: str = "USD"
+    partnerUserRef: Optional[str] = None
+    redirectUrl: Optional[HttpUrl] = None
+    defaultPaymentMethod: Optional[str] = None
+
+    @field_validator("paymentAmount")
+    @classmethod
+    def validate_payment_amount(cls, value: str) -> str:
+        try:
+            parsed = Decimal(value)
+        except InvalidOperation as error:
+            raise ValueError("paymentAmount must be a positive decimal string") from error
+        if parsed <= 0:
+            raise ValueError("paymentAmount must be a positive decimal string")
+        return value
+
+
+class ConfirmOnrampSessionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    providerOrderId: str = Field(min_length=1)
+    amountAtomic: str = Field(min_length=1)
+    txHash: Optional[str] = None
+    providerEventId: Optional[str] = None
+    rawPayload: dict[str, Any] = Field(default_factory=dict)
+
+
 def parse_positive_atomic(value: str) -> int:
     if not value.isdigit() or int(value) <= 0:
         raise ValueError("amountAtomic must be a positive integer string")
@@ -117,6 +218,152 @@ def add_atomic(left: str, delta: int) -> str:
     if result < 0:
         raise ValueError("ledger balance cannot become negative")
     return str(result)
+
+
+class CoinbaseAuth:
+    def __init__(
+        self,
+        *,
+        bearer_token: Optional[str],
+        api_key_id: Optional[str],
+        api_private_key: Optional[str],
+    ) -> None:
+        self.bearer_token = bearer_token
+        self.api_key_id = api_key_id
+        self.api_private_key = api_private_key
+
+    def bearer_for(self, *, method: str, host: str, path: str) -> str:
+        if self.bearer_token:
+            return self.bearer_token
+        if self.api_key_id and self.api_private_key:
+            issued_at = int(time.time())
+            payload = {
+                "sub": self.api_key_id,
+                "iss": "cdp",
+                "nbf": issued_at,
+                "exp": issued_at + 120,
+                "uri": f"{method.upper()} {host}{path}",
+            }
+            return jwt.encode(
+                payload,
+                self._ed25519_private_key(),
+                algorithm="EdDSA",
+                headers={"kid": self.api_key_id, "nonce": secrets.token_hex()},
+            )
+        if not self.api_key_id or not self.api_private_key:
+            raise RuntimeError(
+                "Coinbase onramp auth is not configured. Set COINBASE_ONRAMP_BEARER_TOKEN "
+                "or COINBASE_API_KEY_ID and COINBASE_API_PRIVATE_KEY."
+            )
+
+    def _ed25519_private_key(self) -> ed25519.Ed25519PrivateKey:
+        assert self.api_private_key is not None
+        try:
+            raw = base64.b64decode(self.api_private_key)
+        except Exception as error:
+            raise RuntimeError("COINBASE_API_PRIVATE_KEY must be base64 encoded") from error
+        # Coinbase JSON keys commonly contain either the 32-byte Ed25519 seed or
+        # a 64-byte private+public key payload. Cryptography expects the seed.
+        if len(raw) == 64:
+            raw = raw[:32]
+        if len(raw) != 32:
+            raise RuntimeError("COINBASE_API_PRIVATE_KEY must decode to 32 or 64 bytes")
+        return ed25519.Ed25519PrivateKey.from_private_bytes(raw)
+
+
+class CoinbaseOnrampClient:
+    def __init__(
+        self,
+        *,
+        api_base_url: str,
+        token_path: str,
+        hosted_url: str,
+        auth: CoinbaseAuth,
+        mock: bool,
+    ) -> None:
+        self.api_base_url = api_base_url.rstrip("/")
+        self.token_path = token_path
+        self.hosted_url = hosted_url
+        self.auth = auth
+        self.mock = mock
+
+    async def create_session_token(
+        self,
+        *,
+        destination_address: str,
+        destination_network: str,
+        purchase_currency: str,
+        client_ip: str,
+    ) -> dict[str, str]:
+        if self.mock:
+            return {
+                "token": f"mock-session-token-{uuid.uuid4().hex}",
+                "channel_id": f"mock-channel-{uuid.uuid4().hex}",
+            }
+        url = f"{self.api_base_url}{self.token_path}"
+        parsed = httpx.URL(url)
+        bearer = self.auth.bearer_for(
+            method="POST",
+            host=parsed.host,
+            path=parsed.raw_path.decode("ascii"),
+        )
+        body = {
+            "addresses": [
+                {
+                    "address": destination_address,
+                    "blockchains": [destination_network],
+                }
+            ],
+            "assets": [purchase_currency],
+            "clientIp": client_ip,
+        }
+        async with httpx.AsyncClient(timeout=20) as client:
+            response = await client.post(
+                url,
+                headers={
+                    "Authorization": f"Bearer {bearer}",
+                    "Content-Type": "application/json",
+                },
+                json=body,
+            )
+        if response.status_code >= 400:
+            raise RuntimeError(f"Coinbase onramp token request failed: {response.text}")
+        payload = response.json()
+        token = payload.get("token")
+        if not isinstance(token, str) or not token:
+            raise RuntimeError("Coinbase onramp token response did not include token")
+        channel_id = payload.get("channel_id")
+        return {
+            "token": token,
+            "channel_id": channel_id if isinstance(channel_id, str) else "",
+        }
+
+    def hosted_onramp_url(
+        self,
+        *,
+        session_token: str,
+        partner_user_ref: Optional[str],
+        redirect_url: Optional[str],
+        destination_network: str,
+        purchase_currency: str,
+        payment_currency: str,
+        payment_amount: str,
+        default_payment_method: Optional[str],
+    ) -> str:
+        query = {
+            "sessionToken": session_token,
+            "defaultNetwork": destination_network,
+            "defaultAsset": purchase_currency,
+            "fiatCurrency": payment_currency,
+            "presetFiatAmount": payment_amount,
+        }
+        if partner_user_ref:
+            query["partnerUserRef"] = partner_user_ref
+        if redirect_url:
+            query["redirectUrl"] = redirect_url
+        if default_payment_method:
+            query["defaultPaymentMethod"] = default_payment_method
+        return f"{self.hosted_url}?{urlencode(query)}"
 
 
 class OffchainLedgerStore:
@@ -306,6 +553,110 @@ class OffchainLedgerStore:
 
         return self._mutate(mutate)
 
+    def find_onramp_session_by_idempotency_key(
+        self,
+        idempotency_key: str,
+    ) -> Optional[OnrampSessionRecord]:
+        state = self.load()
+        for session in state.onrampSessions:
+            if session.idempotencyKey == idempotency_key:
+                return session
+        return None
+
+    def get_onramp_session(self, session_id: str) -> OnrampSessionRecord:
+        state = self.load()
+        for session in state.onrampSessions:
+            if session.sessionId == session_id:
+                return session
+        raise LookupError("onramp session not found")
+
+    def add_onramp_session(self, session: OnrampSessionRecord) -> OnrampSessionRecord:
+        def mutate(state: LedgerState) -> OnrampSessionRecord:
+            for existing in state.onrampSessions:
+                if existing.idempotencyKey == session.idempotencyKey:
+                    return existing
+            state.onrampSessions.append(session)
+            state.onrampEvents.append(
+                OnrampEventRecord(
+                    eventId=f"evt_{uuid.uuid4().hex}",
+                    sessionId=session.sessionId,
+                    eventType="session_created",
+                    rawPayload={"idempotencyKey": session.idempotencyKey},
+                    createdAt=session.createdAt,
+                )
+            )
+            return session
+
+        return self._mutate(mutate)
+
+    def confirm_onramp_session(
+        self,
+        session_id: str,
+        request: ConfirmOnrampSessionRequest,
+    ) -> OnrampSessionRecord:
+        amount = parse_positive_atomic(request.amountAtomic)
+
+        def mutate(state: LedgerState) -> OnrampSessionRecord:
+            session, session_index = self._onramp_session_for_update(state, session_id)
+            if session.status == "credited":
+                return session
+
+            metadata = {
+                "onrampSessionId": session.sessionId,
+                "provider": "coinbase",
+                "providerOrderId": request.providerOrderId,
+                "destinationAddress": session.destinationAddress,
+                "destinationNetwork": session.destinationNetwork,
+                "asset": session.purchaseCurrency,
+            }
+            if request.txHash:
+                metadata["txHash"] = request.txHash
+
+            account, account_index = self._account_for_update(
+                state, session.agentId, create=True
+            )
+            current = now_iso()
+            updated_account = account.model_copy(
+                update={
+                    "availableAtomic": add_atomic(account.availableAtomic, amount),
+                    "updatedAt": current,
+                }
+            )
+            entry = self._entry(
+                entry_type="credit",
+                agent_id=session.agentId,
+                available_delta=amount,
+                reason="coinbase_onramp_confirmed",
+                metadata=metadata,
+            )
+            updated_session = session.model_copy(
+                update={
+                    "status": "credited",
+                    "providerOrderId": request.providerOrderId,
+                    "creditedAmountAtomic": str(amount),
+                    "txHash": request.txHash,
+                    "ledgerEntryId": entry.entryId,
+                    "creditedAt": current,
+                    "updatedAt": current,
+                }
+            )
+            state.accounts[account_index] = updated_account
+            state.entries.append(entry)
+            state.onrampSessions[session_index] = updated_session
+            state.onrampEvents.append(
+                OnrampEventRecord(
+                    eventId=f"evt_{uuid.uuid4().hex}",
+                    sessionId=session.sessionId,
+                    eventType="ledger_credited",
+                    providerEventId=request.providerEventId,
+                    rawPayload=request.rawPayload,
+                    createdAt=current,
+                )
+            )
+            return updated_session
+
+        return self._mutate(mutate)
+
     def _load_unlocked(self) -> LedgerState:
         if not os.path.exists(self.path):
             return LedgerState()
@@ -367,6 +718,14 @@ class OffchainLedgerStore:
                 return escrow, index
         raise LookupError("escrow not found")
 
+    def _onramp_session_for_update(
+        self, state: LedgerState, session_id: str
+    ) -> tuple[OnrampSessionRecord, int]:
+        for index, session in enumerate(state.onrampSessions):
+            if session.sessionId == session_id:
+                return session, index
+        raise LookupError("onramp session not found")
+
     @staticmethod
     def _require_locked(escrow: EscrowRecord) -> None:
         if escrow.status != "locked":
@@ -403,6 +762,21 @@ def get_store() -> OffchainLedgerStore:
     )
 
 
+@lru_cache(maxsize=1)
+def get_coinbase_onramp_client() -> CoinbaseOnrampClient:
+    return CoinbaseOnrampClient(
+        api_base_url=os.getenv("COINBASE_ONRAMP_API_BASE_URL", DEFAULT_COINBASE_API_BASE_URL),
+        token_path=os.getenv("COINBASE_ONRAMP_TOKEN_PATH", DEFAULT_COINBASE_TOKEN_PATH),
+        hosted_url=os.getenv("COINBASE_ONRAMP_HOSTED_URL", DEFAULT_COINBASE_HOSTED_URL),
+        auth=CoinbaseAuth(
+            bearer_token=os.getenv("COINBASE_ONRAMP_BEARER_TOKEN"),
+            api_key_id=os.getenv("COINBASE_API_KEY_ID"),
+            api_private_key=os.getenv("COINBASE_API_PRIVATE_KEY"),
+        ),
+        mock=os.getenv("COINBASE_ONRAMP_MOCK", "false").lower() == "true",
+    )
+
+
 def http_error(error: Exception) -> HTTPException:
     if isinstance(error, LookupError):
         return HTTPException(status_code=404, detail=str(error))
@@ -422,6 +796,78 @@ def ledger_console() -> FileResponse:
 @app.get("/ledger/state")
 def get_ledger_state() -> dict[str, Any]:
     return get_store().load().model_dump()
+
+
+@app.post("/onramp/sessions")
+async def create_onramp_session(request: CreateOnrampSessionRequest) -> dict[str, Any]:
+    store = get_store()
+    existing = store.find_onramp_session_by_idempotency_key(request.idempotencyKey)
+    if existing is not None:
+        return existing.model_dump()
+
+    try:
+        coinbase = get_coinbase_onramp_client()
+        token_payload = await coinbase.create_session_token(
+            destination_address=request.destinationAddress,
+            destination_network=request.destinationNetwork,
+            purchase_currency=request.purchaseCurrency,
+            client_ip=request.clientIp,
+        )
+    except Exception as error:
+        raise http_error(error) from error
+
+    session_id = f"onramp_{uuid.uuid4().hex}"
+    partner_user_ref = request.partnerUserRef or session_id
+    onramp_url = coinbase.hosted_onramp_url(
+        session_token=token_payload["token"],
+        partner_user_ref=partner_user_ref,
+        redirect_url=str(request.redirectUrl) if request.redirectUrl else None,
+        destination_network=request.destinationNetwork,
+        purchase_currency=request.purchaseCurrency,
+        payment_currency=request.paymentCurrency,
+        payment_amount=request.paymentAmount,
+        default_payment_method=request.defaultPaymentMethod,
+    )
+    current = now_iso()
+    session = OnrampSessionRecord(
+        sessionId=session_id,
+        providerToken=token_payload["token"],
+        providerChannelId=token_payload.get("channel_id") or None,
+        agentId=request.agentId,
+        destinationAddress=request.destinationAddress,
+        destinationNetwork=request.destinationNetwork,
+        purchaseCurrency=request.purchaseCurrency,
+        paymentCurrency=request.paymentCurrency,
+        paymentAmount=request.paymentAmount,
+        clientIp=request.clientIp,
+        partnerUserRef=partner_user_ref,
+        redirectUrl=str(request.redirectUrl) if request.redirectUrl else None,
+        defaultPaymentMethod=request.defaultPaymentMethod,
+        idempotencyKey=request.idempotencyKey,
+        onrampUrl=onramp_url,
+        createdAt=current,
+        updatedAt=current,
+    )
+    return store.add_onramp_session(session).model_dump()
+
+
+@app.get("/onramp/sessions/{session_id}")
+def get_onramp_session(session_id: str) -> dict[str, Any]:
+    try:
+        return get_store().get_onramp_session(session_id).model_dump()
+    except LookupError as error:
+        raise http_error(error) from error
+
+
+@app.post("/onramp/sessions/{session_id}/confirm")
+def confirm_onramp_session(
+    session_id: str,
+    request: ConfirmOnrampSessionRequest,
+) -> dict[str, Any]:
+    try:
+        return get_store().confirm_onramp_session(session_id, request).model_dump()
+    except (LookupError, ValueError) as error:
+        raise http_error(error) from error
 
 
 @app.post("/ledger/accounts/{agent_id}/credit")

@@ -9,9 +9,10 @@ PaymentMethod = Literal[
     "ledger_escrow",
     "x402",
     "chain_transfer",
+    "onramp",
     "needs_clarification",
 ]
-DeliveryMode = Literal["async_task", "immediate_api", "withdrawal", "unknown"]
+DeliveryMode = Literal["funding", "async_task", "immediate_api", "withdrawal", "unknown"]
 
 
 class PaymentIntent(BaseModel):
@@ -31,6 +32,16 @@ class PaymentRouteDecision(TypedDict):
 
 
 def route_payment_intent(intent: PaymentIntent) -> PaymentRouteDecision:
+    if intent.deliveryMode == "funding":
+        return {
+            "method": "onramp",
+            "reason": (
+                "Funding an Agent Wallet should create a hosted onramp session. "
+                "Ledger balance is credited only after confirmed settlement."
+            ),
+            "allowedTools": ["agent_wallet_create_onramp_session"],
+        }
+
     if intent.deliveryMode == "withdrawal":
         return {
             "method": "chain_transfer",

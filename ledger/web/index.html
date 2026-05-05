@@ -171,6 +171,49 @@
           <button class="primary" type="submit">Credit</button>
         </form>
 
+        <form class="card" id="onramp-form">
+          <h2>Coinbase Onramp</h2>
+          <label>
+            Agent ID
+            <input id="onramp-agent-id" value="agentA" autocomplete="off" required />
+          </label>
+          <label>
+            Destination Address
+            <input id="onramp-destination-address" value="0x742d35Cc6634C0532925a3b844Bc454e4438f44e" autocomplete="off" required />
+          </label>
+          <label>
+            Fiat Amount
+            <input id="onramp-payment-amount" value="10.00" autocomplete="off" required />
+          </label>
+          <label>
+            Idempotency Key
+            <input id="onramp-idempotency-key" value="fund-agentA-10" autocomplete="off" required />
+          </label>
+          <button class="primary" type="submit">Create Onramp</button>
+          <div class="summary" id="onramp-output">No onramp session yet.</div>
+        </form>
+
+        <form class="card" id="onramp-confirm-form">
+          <h2>Confirm Onramp</h2>
+          <label>
+            Session
+            <select id="onramp-session-select"></select>
+          </label>
+          <label>
+            Provider Order ID
+            <input id="onramp-provider-order-id" value="coinbase_order_demo" autocomplete="off" required />
+          </label>
+          <label>
+            Amount Atomic
+            <input id="onramp-confirm-amount" value="10000000" autocomplete="off" required />
+          </label>
+          <label>
+            Tx Hash
+            <input id="onramp-confirm-tx-hash" value="" autocomplete="off" />
+          </label>
+          <button class="primary" type="submit">Confirm Credit</button>
+        </form>
+
         <form class="card" id="escrow-form">
           <h2>Create Escrow</h2>
           <label>
@@ -214,11 +257,22 @@
       const ledgerStateEl = document.getElementById("ledger-state");
       const refreshButtonEl = document.getElementById("refresh-button");
       const creditFormEl = document.getElementById("credit-form");
+      const onrampFormEl = document.getElementById("onramp-form");
+      const onrampConfirmFormEl = document.getElementById("onramp-confirm-form");
       const escrowFormEl = document.getElementById("escrow-form");
       const settlementFormEl = document.getElementById("settlement-form");
       const creditAgentIdEl = document.getElementById("credit-agent-id");
       const creditAmountEl = document.getElementById("credit-amount");
       const creditReasonEl = document.getElementById("credit-reason");
+      const onrampAgentIdEl = document.getElementById("onramp-agent-id");
+      const onrampDestinationAddressEl = document.getElementById("onramp-destination-address");
+      const onrampPaymentAmountEl = document.getElementById("onramp-payment-amount");
+      const onrampIdempotencyKeyEl = document.getElementById("onramp-idempotency-key");
+      const onrampSessionSelectEl = document.getElementById("onramp-session-select");
+      const onrampProviderOrderIdEl = document.getElementById("onramp-provider-order-id");
+      const onrampConfirmAmountEl = document.getElementById("onramp-confirm-amount");
+      const onrampConfirmTxHashEl = document.getElementById("onramp-confirm-tx-hash");
+      const onrampOutputEl = document.getElementById("onramp-output");
       const escrowBuyerAgentIdEl = document.getElementById("escrow-buyer-agent-id");
       const escrowSellerAgentIdEl = document.getElementById("escrow-seller-agent-id");
       const escrowAmountEl = document.getElementById("escrow-amount");
@@ -230,6 +284,10 @@
 
       function selectedEscrowId() {
         return escrowSelectEl.value || escrowSelectEl.children?.[0]?.value || "";
+      }
+
+      function selectedOnrampSessionId() {
+        return onrampSessionSelectEl.value || onrampSessionSelectEl.children?.[0]?.value || "";
       }
 
       async function requestJson(url, options = {}) {
@@ -251,14 +309,18 @@
         const accounts = Array.isArray(state?.accounts) ? state.accounts : [];
         const entries = Array.isArray(state?.entries) ? state.entries : [];
         const escrows = Array.isArray(state?.escrows) ? state.escrows : [];
+        const onrampSessions = Array.isArray(state?.onrampSessions) ? state.onrampSessions : [];
         const latestEscrow = escrows[escrows.length - 1];
+        const latestOnramp = onrampSessions[onrampSessions.length - 1];
         ledgerStateEl.textContent = [
           `Accounts: ${accounts.length}`,
           `Entries: ${entries.length}`,
           `Escrows: ${escrows.length}`,
+          `Onramps: ${onrampSessions.length}`,
           `Latest Escrow: ${latestEscrow ? `${latestEscrow.status} ${latestEscrow.escrowId}` : "none"}`,
+          `Latest Onramp: ${latestOnramp ? `${latestOnramp.status} ${latestOnramp.sessionId}` : "none"}`,
           "",
-          JSON.stringify({ accounts, escrows }, null, 2),
+          JSON.stringify({ accounts, escrows, onrampSessions }, null, 2),
         ].join("\n");
 
         const previousValue = escrowSelectEl.value;
@@ -268,17 +330,36 @@
           option.value = "";
           option.textContent = "No escrows";
           escrowSelectEl.appendChild(option);
-          return;
+        } else {
+          escrows.forEach((escrow) => {
+            const option = document.createElement("option");
+            option.value = escrow.escrowId;
+            option.textContent = `${escrow.status} | ${escrow.escrowId} | ${escrow.amountAtomic}`;
+            escrowSelectEl.appendChild(option);
+          });
+          escrowSelectEl.value = escrows.some((escrow) => escrow.escrowId === previousValue)
+            ? previousValue
+            : escrows[0].escrowId;
         }
-        escrows.forEach((escrow) => {
+
+        const previousOnrampValue = onrampSessionSelectEl.value;
+        onrampSessionSelectEl.replaceChildren();
+        if (onrampSessions.length === 0) {
           const option = document.createElement("option");
-          option.value = escrow.escrowId;
-          option.textContent = `${escrow.status} | ${escrow.escrowId} | ${escrow.amountAtomic}`;
-          escrowSelectEl.appendChild(option);
-        });
-        escrowSelectEl.value = escrows.some((escrow) => escrow.escrowId === previousValue)
-          ? previousValue
-          : escrows[0].escrowId;
+          option.value = "";
+          option.textContent = "No onramp sessions";
+          onrampSessionSelectEl.appendChild(option);
+        } else {
+          onrampSessions.forEach((session) => {
+            const option = document.createElement("option");
+            option.value = session.sessionId;
+            option.textContent = `${session.status} | ${session.sessionId} | ${session.paymentAmount} ${session.paymentCurrency || "USD"}`;
+            onrampSessionSelectEl.appendChild(option);
+          });
+          onrampSessionSelectEl.value = onrampSessions.some((session) => session.sessionId === previousOnrampValue)
+            ? previousOnrampValue
+            : onrampSessions[0].sessionId;
+        }
       }
 
       async function refreshLedgerState() {
@@ -296,6 +377,51 @@
             reason: reason || null,
           }),
         });
+        await refreshLedgerState();
+      }
+
+      async function createOnrampSession(event) {
+        event.preventDefault();
+        const payload = await requestJson("/onramp/sessions", {
+          method: "POST",
+          body: JSON.stringify({
+            agentId: onrampAgentIdEl.value.trim(),
+            destinationAddress: onrampDestinationAddressEl.value.trim(),
+            paymentAmount: onrampPaymentAmountEl.value.trim(),
+            idempotencyKey: onrampIdempotencyKeyEl.value.trim(),
+          }),
+        });
+        onrampOutputEl.textContent = [
+          `Session: ${payload.sessionId}`,
+          `Status: ${payload.status}`,
+          `URL: ${payload.onrampUrl}`,
+        ].join("\n");
+        if (payload.onrampUrl) {
+          window.open(payload.onrampUrl, "_blank", "noopener,noreferrer");
+        }
+        await refreshLedgerState();
+      }
+
+      async function confirmOnrampSession(event) {
+        event.preventDefault();
+        const sessionId = selectedOnrampSessionId();
+        if (!sessionId) {
+          return;
+        }
+        const txHash = onrampConfirmTxHashEl.value.trim();
+        const payload = await requestJson(`/onramp/sessions/${sessionId}/confirm`, {
+          method: "POST",
+          body: JSON.stringify({
+            providerOrderId: onrampProviderOrderIdEl.value.trim(),
+            amountAtomic: onrampConfirmAmountEl.value.trim(),
+            txHash: txHash || null,
+          }),
+        });
+        onrampOutputEl.textContent = [
+          `Session: ${payload.sessionId}`,
+          `Status: ${payload.status}`,
+          `Credited Atomic: ${payload.creditedAmountAtomic || "pending"}`,
+        ].join("\n");
         await refreshLedgerState();
       }
 
@@ -331,6 +457,8 @@
 
       refreshButtonEl.addEventListener("click", refreshLedgerState);
       creditFormEl.addEventListener("submit", creditAccount);
+      onrampFormEl.addEventListener("submit", createOnrampSession);
+      onrampConfirmFormEl.addEventListener("submit", confirmOnrampSession);
       escrowFormEl.addEventListener("submit", createEscrow);
       settlementFormEl.addEventListener("submit", preventSettlementSubmit);
       releaseButtonEl.addEventListener("click", () => settleEscrow("release"));
