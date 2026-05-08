@@ -21,7 +21,8 @@ graph TB
         NativeMode["<b>Native Plugin Mode</b><br/>(OpenClaw 原生协议)"]
         DispatchUnify["<b>Unified Dispatch</b><br/>归一两种入口"]
 
-        DeviceCodeFlow["<b>Device-code Login Flow</b><br/>开浏览器 / 显示 user_code /<br/>轮询 token"]
+        InitFlow["<b>Wallet Init Flow</b><br/>(Flow 1) 调 /wallets/init /<br/>终端展示 claim_code"]
+        DeviceCodeFlow["<b>Device-code Login Flow</b><br/>(Flow 3) 开浏览器 /<br/>显示 user_code /<br/>轮询 token"]
         CredStore["<b>Local Credential Store</b><br/>OS keychain (macOS Keychain /<br/>Windows DPAPI / Linux libsecret)"]
         Signer["<b>HMAC Signer</b><br/>生成请求签名"]
         APIClient["<b>Chief API Client</b><br/>带签名调 skill-server"]
@@ -47,8 +48,12 @@ graph TB
     MCPServer --> DispatchUnify
     NativeMode --> DispatchUnify
 
-    DispatchUnify -->|"首次调用 / 凭证缺失"| DeviceCodeFlow
+    DispatchUnify -->|"plugin 启动 / 本地无 wallet 记录"| InitFlow
+    DispatchUnify -->|"首次花钱调用 / 凭证缺失"| DeviceCodeFlow
     DispatchUnify -->|"已有凭证"| Signer
+
+    InitFlow -->|"POST /v1/wallets/init<br/>{ eigenflux_agent_id }"| WalletAPI
+    InitFlow -->|"显示 claim_code 给用户"| UI
 
     DeviceCodeFlow -->|"POST /v1/oauth/device/authorize"| WalletAPI
     DeviceCodeFlow -->|"轮询 POST /v1/oauth/device/token"| WalletAPI
@@ -69,7 +74,7 @@ graph TB
     classDef ui fill:#fff,stroke:#5A5651;
     class OC_CLI,OC_Host oc;
     class Manifest,MCPServer,NativeMode,DispatchUnify,Signer,APIClient,ReturnTaxonomy plugin;
-    class CredStore,DeviceCodeFlow store;
+    class CredStore,InitFlow,DeviceCodeFlow store;
     class SkillSrv,WalletAPI chief;
     class UI,Browser ui;
 ```
@@ -91,13 +96,14 @@ manifest 同时声明 MCP server 入口和 OpenClaw native plugin 入口。OpenC
 
 这是基础线 —— 一台 OpenClaw 用户机器被偷或 home 目录被打包外发，credential 不能裸暴露。
 
-### Device-code 登录流程触发点
+### 启动两阶段：wallet init → device-code
 
-**两个时机**触发 device-code flow：
-1. **首次调用任何花钱 skill 时**（懒触发，UX 好）
-2. **用户主动 `openclaw plugin agent-wallet login`**（显式登录）
+| 阶段 | 时机 | 触发什么 |
+|---|---|---|
+| **Phase 1：wallet init**（Flow 1） | plugin 第一次启动，本地无 wallet 记录时 | 调 `POST /v1/wallets/init` 拿到 claim_code，**显示给用户**让其在 Console 完成 Flow 2 claim |
+| **Phase 2：device-code login**（Flow 3） | claim 完成后第一次调用花钱 skill 时（懒触发）；或用户主动 `openclaw plugin agent-wallet login` | 调 `POST /v1/oauth/device/authorize` 走 Flow 3，最终拿到 (key_id, secret) |
 
-不在 plugin install 阶段强制登录，因为用户可能装好但暂时不用。
+**关键 UX 切换**：plugin 启动时先做 Phase 1，**不强制等用户立即 claim**——可以让 agent 先在 Eigenflux 上谈交易（N1 Quote 不动钱），但任何 `escrow.lock` / `withdraw` 类调用会被 wallet-api 在 `state='unclaimed'` 时拒绝（`failed_terminal` + `reason=wallet_unclaimed`），plugin 此时应提示用户"先去 Console 完成 claim"。
 
 ### 5-tier Return Handler 的硬契约
 

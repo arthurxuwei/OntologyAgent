@@ -14,13 +14,13 @@
 
 **v1 实现 raw 版**：
 
-1. **事件埋点**：每笔 escrow 终态（RELEASED / REFUNDED）写不可变 `events` 行，含 `binding_id` / `event_type` / `amount` / `reject_reason`（结构化）
+1. **事件埋点**：每笔 escrow 终态（RELEASED / REFUNDED）写不可变 `events` 行，含 `wallet_id` / `event_type` / `amount` / `reject_reason`（结构化）
 2. **基础聚合**：per-binding 实时维护 `reject_rate`、`total_volume`、`total_count`
 3. **公开查询**：`GET /v1/credit/{eigenflux_agent_id}` 返回上述三个数 + `freeze_state`
 4. **单规则 anti-abuse**："One rule, no algorithm"
 
 ```
-N_total   = 该 binding 作为 seller 30 天内 RELEASED + REFUNDED 总笔数
+N_total   = 该 wallet 作为 seller 30 天内 RELEASED + REFUNDED 总笔数
 N_reject  = 其中 buyer 主动 reject 触发 REFUNDED 的笔数（不含 24h 超时）
 reject_rate = N_reject / N_total
 

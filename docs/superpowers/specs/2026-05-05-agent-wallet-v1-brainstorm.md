@@ -244,6 +244,18 @@ docs/superpowers/specs/2026-05-05-agent-wallet-v1-design.md
 | N4 Deliver | Eigenflux 消息 + Chief 24h timer | 交付声明走网络，过期由我们处理；reject 写入 M5 |
 | N5 Release | **Chief ledger** | 涉及钱 |
 
+### 8.3a 钱包归属模型 — wallet first, owner later（2026-05-08 拍板）
+
+v1 沿用原型 M2 "wallet first, owner later" 叙事：
+
+- **Flow 1**：OpenClaw plugin 启动时按 Eigenflux Agent ID 创建一个 unclaimed wallet（无 owner），返回一次性 claim_code（24h TTL，argon2id hash 入库）
+- **Flow 2**：用户 GitHub OAuth 登录后在 Console /claim 页粘贴 claim_code，把 wallet 挂到自己 owner 名下（state='claimed'）
+- **Flow 3**：device-code flow 取 (key_id, secret)，前置条件 wallet `state='claimed'`
+
+**取舍**：相比 owner-first，多了一条新风险面 **R10 claim_code 抢跑**（attacker 知道 victim 的 Eigenflux Agent ID 时可能先于 victim init 拿走 claim_code）。v1 缓解：UNIQUE 约束让异常立即可见 + 24h 反 claim 窗口（mainnet 头月强制） + GitHub OAuth + TOTP 双因子撤销。详见 design.md §11 T10。
+
+**简化**：v1 1:1（一个 wallet 对应一个 Eigenflux Agent ID 对应一个 owner），不再单独建 `agent_bindings` 表，把 `eigenflux_agent_id` 直接放到 `wallets`。"binding" 在文档中保留为概念词，但数据模型上等同于 wallet。
+
 ### 8.4 v1 服务结构（最终版）
 
 **淘汰**（不进 v1）：
@@ -341,15 +353,18 @@ docs/superpowers/specs/2026-05-05-agent-wallet-v1-design.md
 | Pivot 调整：–10w（砍 agent/freqtrade）+6w（plugin 包装 + Eigenflux + 身份绑定） | –4 |
 | 路线 B' 搬运成本 | 2–3 |
 | AWS + 监控展开（净增） | 2 |
-| **小计 Raw** | **28–37w** |
+| Wallet-first 切换（init / claim 端点 + claim_code 表 + Console claim 页 + 24h 反 claim + 邮件通知，2026-05-08 加入） | 1.8 |
+| **小计 Raw** | **30–39w** |
 
 3 人容量：
 
-| 排期 | 容量 | 缓冲 |
+| 排期 | 容量 | 缓冲（vs 30–39w raw） |
 |---|---|---|
-| 3.0 月 | 36w | -3% ~ +29%（边缘） |
-| **3.5 月（推荐）** | **42w** | **+14% ~ +50%** |
-| 4.0 月 | 48w | +30% ~ +71%（保守） |
+| 3.0 月 | 36w | -8% ~ +20%（边缘） |
+| **3.5 月（推荐）** | **42w** | **+8% ~ +40%** |
+| 4.0 月 | 48w | +23% ~ +60%（保守） |
+
+> Wallet-first 切换吃掉部分缓冲，3.5 月仍可达但已无原先宽裕度。
 
 ### 8.9 里程碑（粗略）
 
@@ -358,10 +373,11 @@ Phase A 基础设施
 M0  W0       开 repo / IaC 框架 / Postgres / Auth / 监控骨架
 M1  W3-4     ledger 搬运 + 多租户 + 测试通过
 M2  W6       chain lib 拆分 + skill-server 第一刀（buyer skill）
-M3  W8       wallet-api owner 域 + first-payee 审批 + Console v0
+M3  W8       wallet-api owner 域（OAuth + session）+ Console v0
+M3+ W9       **wallet-first 闭环**：/wallets/init + /wallets/claim + claim_code 表 + Console claim 页 + 邮件通知 + 24h 反 claim
 
 Phase B 产品
-M4  W10      Eigenflux 身份绑定 + identity webhook
+M4  W10      Eigenflux 状态查询缓存层 + first-payee 审批
 M5  W12      M5 raw 事件流 + reject path + anti-abuse 规则
 M6  W14      Onramp 集成 + reconciliation job
 M7  W15      Withdraw 流 + 24h timer + stuck-deposit queue
@@ -387,6 +403,7 @@ M11 W20+     生产切流
 | **R1** | Eigenflux ID 可被冒名（无密码学校验） | Chief credentials 强：HMAC 签名 + 短 TTL token + 旋转 + audit log；owner 端 kill-switch 不依赖 Eigenflux |
 | **R2** | 撮合结果不验签（R.Q3） | mainnet 头一个月：≥ $10 等值 lock 请求**人工 review**；anti-abuse 阈值开严；发现伪造模式立即 freeze；M5 raw 数据保留以便回溯 |
 | **R3** | Eigenflux 状态 pull-only（R.Q2） | Chief 缓存命中即放行；缓存失效时**降级**：拒绝高额操作，保留低额操作；Eigenflux 不可用时核心 lock/release 链路不阻塞（owner kill-switch 是最终防线） |
+| **R10** | claim_code 抢跑（wallet-first 模型副作用，2026-05-08 加入）| `wallets.eigenflux_agent_id` UNIQUE → 异常立即可见；claim_code 24h TTL + 一次性；mainnet 头月：claim 后 24h 内 owner 可强制反 claim（GitHub OAuth + TOTP 双因子）。详见 design.md §11 T10 |
 
 ---
 

@@ -195,7 +195,7 @@ sequenceDiagram
         Note over WAPI,PG: 不应到这里（claim_code 一次性），<br/>但兜底：拒绝
         WAPI-->>Console: { code: failed_terminal,<br/>reason: wallet_already_claimed }
     else 全部通过
-        WAPI->>PG: BEGIN<br/>UPDATE wallets SET<br/>  owner_id = $session_owner_id,<br/>  state = 'claimed',<br/>  claimed_at = now()<br/>WHERE id=$wallet_id<br/>UPDATE wallet_claim_codes SET<br/>  used = true, used_at = now()<br/>WHERE id=$wcc_id<br/>INSERT events (wallet.claimed,<br/>  binding_id, owner_id)<br/>COMMIT
+        WAPI->>PG: BEGIN<br/>UPDATE wallets SET<br/>  owner_id = $session_owner_id,<br/>  state = 'claimed',<br/>  claimed_at = now()<br/>WHERE id=$wallet_id<br/>UPDATE wallet_claim_codes SET<br/>  used = true, used_at = now()<br/>WHERE id=$wcc_id<br/>INSERT events (wallet.claimed,<br/>  wallet_id, owner_id)<br/>COMMIT
 
         WAPI->>WAPI: 邮件通知 owner<br/>"你刚 claim 了 wallet <address>"<br/>(异常时反向 dispute 入口)
         WAPI-->>Console: { code: success,<br/>wallet_id, address, eigenflux_agent_id }
@@ -309,7 +309,7 @@ sequenceDiagram
 
     Note over BAgent,SS: N2 Lock — Chief 锁钱
     BAgent->>BPlugin: 触发支付
-    BPlugin->>SS: POST /v1/escrow/lock<br/>(HMAC, amount, seller_binding, quote_id)
+    BPlugin->>SS: POST /v1/escrow/lock<br/>(HMAC, amount, seller_wallet_id, quote_id)
     SS->>LDG: 创建 escrow
     LDG->>PG: BEGIN<br/>insert escrows (LOCKED)<br/>update balances (available--, locked++)<br/>insert events (escrow.locked)<br/>COMMIT
     LDG-->>SS: { id, expires_at: now+24h }
@@ -367,7 +367,7 @@ sequenceDiagram
     participant Console as Owner Console
     actor Owner
 
-    BAgent->>BPlugin: 想给 seller_binding=X 锁 $50
+    BAgent->>BPlugin: 想给 seller_wallet_id=X 锁 $50
     BPlugin->>SS: POST /v1/escrow/lock
     SS->>PG: 查 first_payee_approvals<br/>(buyer, seller=X)
     Note over SS,PG: 该 (buyer, seller) pair<br/>未审批过

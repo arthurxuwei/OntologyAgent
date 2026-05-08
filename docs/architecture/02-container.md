@@ -25,7 +25,7 @@ graph TB
     subgraph chief["🔒 Chief 系统（AWS VPC）"]
         subgraph public["对外服务"]
             SkillSrv["<b>skill-server</b><br/>(ECS Fargate)<br/>buyer/seller skill<br/>HMAC 鉴权"]
-            WalletAPI["<b>wallet-api</b><br/>(ECS Fargate)<br/>owner / OAuth /<br/>device-code / 审批"]
+            WalletAPI["<b>wallet-api</b><br/>(ECS Fargate)<br/>wallet init / claim / owner /<br/>OAuth / device-code / 审批"]
             Console["<b>Owner Console</b><br/>(S3 + CloudFront)<br/>静态 SPA"]
         end
 

@@ -93,7 +93,7 @@ graph TB
 BEGIN;
   UPDATE escrows SET state='LOCKED', locked_at=now() WHERE id=$1;
   UPDATE balances SET available = available - $2, locked = locked + $2 WHERE wallet_id=$3;
-  INSERT INTO events (binding_id, event_type, ...) VALUES (...);
+  INSERT INTO events (wallet_id, event_type, ...) VALUES (...);
 COMMIT;
 ```
 
@@ -114,7 +114,7 @@ COMMIT;
 
 ### Anti-abuse 与 M5 Aggregator 实时性
 
-Anti-abuse 单规则在每次 `escrow.RELEASED` / `REFUNDED` 终态后**同步**重算受影响 binding 的 `reject_rate`。命中阈值 → 直接写 `bindings.frozen_as_seller=true`。这是同步的、事务内的。
+Anti-abuse 单规则在每次 `escrow.RELEASED` / `REFUNDED` 终态后**同步**重算受影响 wallet 的 `reject_rate`。命中阈值 → 直接写 `wallets.frozen_as_seller=true`。这是同步的、事务内的。
 
 不做"批处理后冻结" —— 因为冻结晚一秒就可能再被锁一笔钱。
 
