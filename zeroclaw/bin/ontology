@@ -1,0 +1,169 @@
+#!/usr/bin/env sh
+set -eu
+
+LEDGER_URL="${ONTOLOGY_LEDGER_URL:-http://host.docker.internal:8092}"
+LEDGER_FALLBACK_URL="${ONTOLOGY_LEDGER_FALLBACK_URL:-http://127.0.0.1:8092}"
+CHAIN_MCP_URL="${ONTOLOGY_CHAIN_MCP_URL:-http://host.docker.internal:8091/mcp/}"
+CHAIN_MCP_FALLBACK_URL="${ONTOLOGY_CHAIN_MCP_FALLBACK_URL:-http://127.0.0.1:8091/mcp/}"
+
+usage() {
+  cat <<'EOF'
+OntologyAgent CLI for ZeroClaw
+
+Usage:
+  ontology ledger health
+  ontology ledger state
+  ontology ledger route '<json-intent>'
+  ontology ledger credit AGENT_ID AMOUNT_ATOMIC [reason]
+  ontology ledger escrow create '<json>'
+  ontology ledger escrow release ESCROW_ID
+  ontology ledger escrow refund ESCROW_ID
+
+  ontology chain health
+  ontology chain tools
+  ontology chain wallet-state
+  ontology chain call TOOL_NAME '<json-arguments>'
+
+Environment:
+  ONTOLOGY_LEDGER_URL          default http://host.docker.internal:8092
+  ONTOLOGY_LEDGER_FALLBACK_URL default http://127.0.0.1:8092
+  ONTOLOGY_CHAIN_MCP_URL       default http://host.docker.internal:8091/mcp/
+  ONTOLOGY_CHAIN_MCP_FALLBACK_URL default http://127.0.0.1:8091/mcp/
+EOF
+}
+
+get_url() {
+  primary="$1"
+  fallback="$2"
+  path="$3"
+  curl -fsS "$primary$path" 2>/dev/null || curl -sS "$fallback$path"
+}
+
+post_json() {
+  url="$1"
+  fallback_url="$2"
+  body="$3"
+  curl -fsS -X POST "$url" \
+    -H 'Content-Type: application/json' \
+    -H 'Accept: application/json, text/event-stream' \
+    --data "$body" 2>/dev/null \
+    || curl -sS -X POST "$fallback_url" \
+      -H 'Content-Type: application/json' \
+      -H 'Accept: application/json, text/event-stream' \
+      --data "$body"
+}
+
+mcp_call() {
+  tool="$1"
+  if [ $# -ge 2 ]; then
+    args="$2"
+  else
+    args="{}"
+  fi
+  post_json "$CHAIN_MCP_URL" "$CHAIN_MCP_FALLBACK_URL" "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"$tool\",\"arguments\":$args}}"
+}
+
+route_payment_intent() {
+  intent="$1"
+  if printf '%s' "$intent" | grep -Eq '"deliveryMode"[[:space:]]*:[[:space:]]*"funding"'; then
+    cat <<'EOF'
+{"method":"onramp","needsClarification":false,"allowedTools":["agent_wallet_create_onramp_session"],"reason":"Funding must create a hosted onramp session; ledger balance is credited only after provider-confirmed settlement."}
+EOF
+    return
+  fi
+  if printf '%s' "$intent" | grep -Eq '"deliveryMode"[[:space:]]*:[[:space:]]*"withdrawal"'; then
+    cat <<'EOF'
+{"method":"chain_transfer","needsClarification":false,"allowedTools":["chain_sign_transfer"],"reason":"Withdrawals are chain transfers and must be handled by the chain service after explicit confirmation."}
+EOF
+    return
+  fi
+  if printf '%s' "$intent" | grep -Eq '"deliveryMode"[[:space:]]*:[[:space:]]*"immediate_api"'; then
+    cat <<'EOF'
+{"method":"x402","needsClarification":false,"allowedTools":["chain_x402_fetch"],"reason":"Immediate paid external API calls use x402 through the chain service."}
+EOF
+    return
+  fi
+  if printf '%s' "$intent" | grep -Eq '"deliveryMode"[[:space:]]*:[[:space:]]*"async_task"|"requiresAcceptance"[[:space:]]*:[[:space:]]*true'; then
+    cat <<'EOF'
+{"method":"ledger_escrow","needsClarification":false,"allowedTools":["agent_wallet_create_escrow","agent_wallet_release_escrow","agent_wallet_refund_escrow"],"reason":"Matched asynchronous task payments require ledger escrow so funds can be locked, released, or refunded."}
+EOF
+    return
+  fi
+  cat <<'EOF'
+{"method":"needs_clarification","needsClarification":true,"allowedTools":[],"reason":"The payment intent is ambiguous. Clarify whether this is funding, withdrawal, immediate paid API/x402, or asynchronous task escrow before proceeding."}
+EOF
+}
+
+case "${1:-}" in
+  ledger)
+    case "${2:-}" in
+      health)
+        get_url "$LEDGER_URL" "$LEDGER_FALLBACK_URL" "/health"
+        ;;
+      state)
+        get_url "$LEDGER_URL" "$LEDGER_FALLBACK_URL" "/ledger/state"
+        ;;
+      route)
+        [ $# -ge 3 ] || { echo "usage: ontology ledger route '<json-intent>'" >&2; exit 2; }
+        route_payment_intent "$3"
+        ;;
+      credit)
+        [ $# -ge 4 ] || { echo "usage: ontology ledger credit AGENT_ID AMOUNT_ATOMIC [reason]" >&2; exit 2; }
+        reason="${5:-manual credit}"
+        post_json "$LEDGER_URL/ledger/accounts/$3/credit" "$LEDGER_FALLBACK_URL/ledger/accounts/$3/credit" "{\"amountAtomic\":\"$4\",\"reason\":\"$reason\"}"
+        ;;
+      escrow)
+        case "${3:-}" in
+          create)
+            [ $# -ge 4 ] || { echo "usage: ontology ledger escrow create '<json>'" >&2; exit 2; }
+            post_json "$LEDGER_URL/ledger/escrows" "$LEDGER_FALLBACK_URL/ledger/escrows" "$4"
+            ;;
+          release)
+            [ $# -ge 4 ] || { echo "usage: ontology ledger escrow release ESCROW_ID" >&2; exit 2; }
+            post_json "$LEDGER_URL/ledger/escrows/$4/release" "$LEDGER_FALLBACK_URL/ledger/escrows/$4/release" '{}'
+            ;;
+          refund)
+            [ $# -ge 4 ] || { echo "usage: ontology ledger escrow refund ESCROW_ID" >&2; exit 2; }
+            post_json "$LEDGER_URL/ledger/escrows/$4/refund" "$LEDGER_FALLBACK_URL/ledger/escrows/$4/refund" '{}'
+            ;;
+          *)
+            usage
+            exit 2
+            ;;
+        esac
+        ;;
+      *)
+        usage
+        exit 2
+        ;;
+    esac
+    ;;
+  chain)
+    case "${2:-}" in
+      health)
+        post_json "$CHAIN_MCP_URL" "$CHAIN_MCP_FALLBACK_URL" '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ontology-cli","version":"0.1.0"}}}'
+        ;;
+      tools)
+        post_json "$CHAIN_MCP_URL" "$CHAIN_MCP_FALLBACK_URL" '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
+        ;;
+      wallet-state)
+        mcp_call chain_get_wallet_state '{}'
+        ;;
+      call)
+        [ $# -ge 4 ] || { echo "usage: ontology chain call TOOL_NAME '<json-arguments>'" >&2; exit 2; }
+        mcp_call "$3" "$4"
+        ;;
+      *)
+        usage
+        exit 2
+        ;;
+    esac
+    ;;
+  -h|--help|help|"")
+    usage
+    ;;
+  *)
+    usage
+    exit 2
+    ;;
+esac
