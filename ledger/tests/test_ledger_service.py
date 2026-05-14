@@ -5,6 +5,7 @@ import shutil
 import unittest
 import uuid
 from pathlib import Path
+from unittest.mock import patch
 
 import jwt
 from cryptography.hazmat.primitives.asymmetric import ed25519
@@ -24,13 +25,28 @@ class LedgerServiceTests(unittest.TestCase):
         self.previous_coinbase_mock = os.environ.get("COINBASE_ONRAMP_MOCK")
         self.previous_coinbase_key_id = os.environ.get("COINBASE_API_KEY_ID")
         self.previous_coinbase_private_key = os.environ.get("COINBASE_API_PRIVATE_KEY")
+        self.previous_chain_record_enabled = os.environ.get("LEDGER_CHAIN_RECORD_ENABLED")
+        self.previous_chain_record_require_success = os.environ.get(
+            "LEDGER_CHAIN_RECORD_REQUIRE_SUCCESS"
+        )
+        self.previous_settlement_enabled = os.environ.get("LEDGER_SETTLEMENT_ENABLED")
+        self.previous_settlement_require_success = os.environ.get(
+            "LEDGER_SETTLEMENT_REQUIRE_SUCCESS"
+        )
         os.environ["LEDGER_STATE_PATH"] = self.state_path
+        os.environ["LEDGER_CHAIN_RECORD_ENABLED"] = "false"
+        os.environ["LEDGER_CHAIN_RECORD_REQUIRE_SUCCESS"] = "false"
+        os.environ["LEDGER_SETTLEMENT_ENABLED"] = "false"
+        os.environ["LEDGER_SETTLEMENT_REQUIRE_SUCCESS"] = "false"
         main.get_store.cache_clear()
         main.get_coinbase_onramp_client.cache_clear()
+        main.get_chain_recorder.cache_clear()
+        main.get_ledger_settlement_client.cache_clear()
         self.client = TestClient(main.app)
 
     def tearDown(self) -> None:
         main.get_store.cache_clear()
+        main.get_ledger_settlement_client.cache_clear()
         if self.previous_state_path is None:
             os.environ.pop("LEDGER_STATE_PATH", None)
         else:
@@ -41,7 +57,19 @@ class LedgerServiceTests(unittest.TestCase):
             os.environ["COINBASE_ONRAMP_MOCK"] = self.previous_coinbase_mock
         self._restore_env("COINBASE_API_KEY_ID", self.previous_coinbase_key_id)
         self._restore_env("COINBASE_API_PRIVATE_KEY", self.previous_coinbase_private_key)
+        self._restore_env("LEDGER_CHAIN_RECORD_ENABLED", self.previous_chain_record_enabled)
+        self._restore_env(
+            "LEDGER_CHAIN_RECORD_REQUIRE_SUCCESS",
+            self.previous_chain_record_require_success,
+        )
+        self._restore_env("LEDGER_SETTLEMENT_ENABLED", self.previous_settlement_enabled)
+        self._restore_env(
+            "LEDGER_SETTLEMENT_REQUIRE_SUCCESS",
+            self.previous_settlement_require_success,
+        )
         main.get_coinbase_onramp_client.cache_clear()
+        main.get_chain_recorder.cache_clear()
+        main.get_ledger_settlement_client.cache_clear()
 
     def _restore_env(self, name: str, previous: str | None) -> None:
         if previous is None:
@@ -382,6 +410,58 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertEqual(accounts["agent_buyer"]["availableAtomic"], "2000000")
         self.assertEqual(accounts["agent_buyer"]["lockedAtomic"], "3000000")
 
+    def test_chain_record_is_persisted_for_escrow_lock_when_enabled(self) -> None:
+        class FakeRecorder:
+            enabled = True
+
+            async def submit(self, *, event_type, escrow, entries, payload):
+                current = main.now_iso()
+                return main.LedgerChainRecord(
+                    recordId="chainrec_test",
+                    eventType=event_type,
+                    status="submitted",
+                    chainMcpUrl="http://chain.test/mcp/",
+                    recorderAddress="0x000000000000000000000000000000000000dEaD",
+                    txHash="0xtesttx",
+                    mode="mock",
+                    escrowId=escrow.escrowId if escrow is not None else None,
+                    entryIds=[entry.entryId for entry in entries],
+                    payload=payload,
+                    toolResult={
+                        "execution": {
+                            "txHash": "0xtesttx",
+                            "mode": "mock",
+                        }
+                    },
+                    createdAt=current,
+                    updatedAt=current,
+                )
+
+        with patch.object(main, "get_chain_recorder", return_value=FakeRecorder()):
+            self.client.post(
+                "/ledger/accounts/agent_buyer/credit",
+                json={"amountAtomic": "5000000", "reason": "demo funding"},
+            )
+            response = self.client.post(
+                "/ledger/escrows",
+                json={
+                    "buyerAgentId": "agent_buyer",
+                    "sellerAgentId": "agent_seller",
+                    "amountAtomic": "3000000",
+                    "taskId": "task_123",
+                    "description": "Research task",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["chainRecord"]["txHash"], "0xtesttx")
+        state = self.client.get("/ledger/state").json()
+        self.assertEqual(len(state["chainRecords"]), 2)
+        lock_record = state["chainRecords"][1]
+        self.assertEqual(lock_record["eventType"], "escrow_lock")
+        self.assertEqual(lock_record["status"], "submitted")
+        self.assertEqual(lock_record["payload"]["escrow"]["taskId"], "task_123")
+
     def test_create_escrow_rejects_insufficient_available_balance(self) -> None:
         self.client.post(
             "/ledger/accounts/agent_buyer/credit",
@@ -428,6 +508,99 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertEqual(accounts["agent_buyer"]["availableAtomic"], "2000000")
         self.assertEqual(accounts["agent_buyer"]["lockedAtomic"], "0")
         self.assertEqual(accounts["agent_seller"]["availableAtomic"], "3000000")
+
+    def test_release_escrow_persists_settlement_record_when_enabled(self) -> None:
+        class FakeSettlementClient:
+            enabled = True
+
+            async def submit_release(self, escrow):
+                current = main.now_iso()
+                return main.LedgerSettlementRecord(
+                    recordId="settle_test",
+                    eventType="escrow_release",
+                    status="submitted",
+                    chainMcpUrl="http://chain.test/mcp/",
+                    escrowId=escrow.escrowId,
+                    fromAgentId=escrow.buyerAgentId,
+                    toAgentId=escrow.sellerAgentId,
+                    amountAtomic=escrow.amountAtomic,
+                    transactionId="circle-tx-1",
+                    transactionHash="0xrealtransfer",
+                    transactionState="INITIATED",
+                    mode="circle",
+                    toolResult={"transactionHash": "0xrealtransfer"},
+                    createdAt=current,
+                    updatedAt=current,
+                )
+
+        self.client.post(
+            "/ledger/accounts/agent_buyer/credit",
+            json={"amountAtomic": "5000000", "reason": "demo funding"},
+        )
+        escrow = self.client.post(
+            "/ledger/escrows",
+            json={
+                "buyerAgentId": "agent_buyer",
+                "sellerAgentId": "agent_seller",
+                "amountAtomic": "3000000",
+            },
+        ).json()["escrow"]
+
+        with patch.object(
+            main, "get_ledger_settlement_client", return_value=FakeSettlementClient()
+        ):
+            response = self.client.post(f"/ledger/escrows/{escrow['escrowId']}/release")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["settlementRecord"]["transactionHash"], "0xrealtransfer")
+        state = self.client.get("/ledger/state").json()
+        self.assertEqual(len(state["settlementRecords"]), 1)
+        self.assertEqual(state["settlementRecords"][0]["status"], "submitted")
+
+    def test_required_settlement_failure_blocks_release(self) -> None:
+        class FakeSettlementClient:
+            enabled = True
+            require_success = True
+
+            async def submit_release(self, escrow):
+                current = main.now_iso()
+                record = main.LedgerSettlementRecord(
+                    recordId="settle_failed",
+                    eventType="escrow_release",
+                    status="failed",
+                    chainMcpUrl="http://chain.test/mcp/",
+                    escrowId=escrow.escrowId,
+                    fromAgentId=escrow.buyerAgentId,
+                    toAgentId=escrow.sellerAgentId,
+                    amountAtomic=escrow.amountAtomic,
+                    error="Circle resource not found",
+                    createdAt=current,
+                    updatedAt=current,
+                )
+                raise main.LedgerSettlementError(record)
+
+        self.client.post(
+            "/ledger/accounts/agent_buyer/credit",
+            json={"amountAtomic": "5000000", "reason": "demo funding"},
+        )
+        escrow = self.client.post(
+            "/ledger/escrows",
+            json={
+                "buyerAgentId": "agent_buyer",
+                "sellerAgentId": "agent_seller",
+                "amountAtomic": "3000000",
+            },
+        ).json()["escrow"]
+
+        with patch.object(
+            main, "get_ledger_settlement_client", return_value=FakeSettlementClient()
+        ):
+            response = self.client.post(f"/ledger/escrows/{escrow['escrowId']}/release")
+
+        self.assertEqual(response.status_code, 502)
+        state = self.client.get("/ledger/state").json()
+        escrow_state = state["escrows"][0]
+        self.assertEqual(escrow_state["status"], "locked")
 
     def test_refund_escrow_moves_locked_funds_back_to_buyer_available(self) -> None:
         self.client.post(

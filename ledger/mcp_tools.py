@@ -72,7 +72,19 @@ async def agent_wallet_credit_balance_tool(
         reason=reason,
         metadata={},
     )
-    return {"account": account.model_dump(), "entry": entry.model_dump()}
+    from main import record_ledger_chain_event
+
+    chain_record = await record_ledger_chain_event(
+        event_type="credit",
+        escrow=None,
+        entries=[entry],
+        extra={"agentId": agentId, "amountAtomic": amountAtomic},
+    )
+    return {
+        "account": account.model_dump(),
+        "entry": entry.model_dump(),
+        "chainRecord": chain_record.model_dump() if chain_record is not None else None,
+    }
 
 
 def _coinbase_bearer_for(method: str, host: str, path: str) -> str:
@@ -271,17 +283,65 @@ async def agent_wallet_create_escrow_tool(
         description=description,
         metadata={},
     )
-    return {"escrow": escrow.model_dump(), "entry": entry.model_dump()}
+    from main import record_ledger_chain_event
+
+    chain_record = await record_ledger_chain_event(
+        event_type="escrow_lock",
+        escrow=escrow,
+        entries=[entry],
+    )
+    return {
+        "escrow": escrow.model_dump(),
+        "entry": entry.model_dump(),
+        "chainRecord": chain_record.model_dump() if chain_record is not None else None,
+    }
 
 
 async def agent_wallet_release_escrow_tool(escrowId: str) -> dict[str, Any]:
+    from main import settle_escrow_release
+
+    locked_escrow = ledger_store().get_escrow(escrowId)
+    if locked_escrow.status != "locked":
+        raise ValueError("escrow is not locked")
+    settlement_record = await settle_escrow_release(locked_escrow)
     escrow = ledger_store().release_escrow(escrowId)
-    return {"escrow": escrow.model_dump()}
+    entries = ledger_store().entries_for_escrow_event(
+        escrow_id=escrow.escrowId,
+        entry_type="escrow_release",
+    )
+    from main import record_ledger_chain_event
+
+    chain_record = await record_ledger_chain_event(
+        event_type="escrow_release",
+        escrow=escrow,
+        entries=entries,
+    )
+    return {
+        "escrow": escrow.model_dump(),
+        "settlementRecord": settlement_record.model_dump()
+        if settlement_record is not None
+        else None,
+        "chainRecord": chain_record.model_dump() if chain_record is not None else None,
+    }
 
 
 async def agent_wallet_refund_escrow_tool(escrowId: str) -> dict[str, Any]:
     escrow = ledger_store().refund_escrow(escrowId)
-    return {"escrow": escrow.model_dump()}
+    entries = ledger_store().entries_for_escrow_event(
+        escrow_id=escrow.escrowId,
+        entry_type="escrow_refund",
+    )
+    from main import record_ledger_chain_event
+
+    chain_record = await record_ledger_chain_event(
+        event_type="escrow_refund",
+        escrow=escrow,
+        entries=entries,
+    )
+    return {
+        "escrow": escrow.model_dump(),
+        "chainRecord": chain_record.model_dump() if chain_record is not None else None,
+    }
 
 
 def build_mcp_app(store_factory: Callable[[], Any]) -> Any:

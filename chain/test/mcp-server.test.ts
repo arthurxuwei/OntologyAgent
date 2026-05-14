@@ -67,6 +67,7 @@ test("chain MCP exposes the expected tool names", async () => {
       "agent_wallet_import_circle_wallets",
       "agent_wallet_init",
       "agent_wallet_register_x402_service",
+      "agent_wallet_settle_ledger_transfer",
       "agent_wallet_status",
       "chain_execute_trade_intent",
       "chain_get_transaction_receipt",

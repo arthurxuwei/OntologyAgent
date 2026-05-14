@@ -19,3 +19,4 @@ __pycache__/
 tmp*/
 chain/recovery_file_*.dat
 runtime/*
+runtime-peer/*

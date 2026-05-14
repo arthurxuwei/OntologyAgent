@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -129,6 +129,98 @@ test("AgentWalletService reuses an existing Agent Wallet before creating one", a
   assert.equal(result.status, "available");
 });
 
+test("AgentWalletService stores agent identity binding when reusing an existing wallet", async () => {
+  await withTempStateFile(
+    {
+      wallets: [],
+    },
+    async (statePath) => {
+      const config = loadConfig({
+        CHAIN_MOCK: "true",
+        AGENT_WALLET_STATE_PATH: statePath,
+      });
+      const circleWalletService = {
+        createWallet: async () => {
+          throw new Error("createWallet should not be called");
+        },
+      } as unknown as CircleWalletService;
+      const service = new AgentWalletService(
+        config,
+        fakeX402FetchService(baseX402Result()),
+        circleWalletService,
+      );
+
+      const result = await service.getOrCreate({
+        agentName: "ZeroClaw EigenFlux Peer",
+        agentId: "312877741349273600",
+        email: "XW007120@163.COM",
+        walletAddress: "0x3333333333333333333333333333333333333333",
+      });
+
+      assert.equal(result.reused, true);
+      assert.equal(result.binding?.agentName, "ZeroClaw EigenFlux Peer");
+      assert.equal(result.binding?.agentId, "312877741349273600");
+      assert.equal(result.binding?.email, "xw007120@163.com");
+      assert.equal(result.binding?.walletAddress, "0x3333333333333333333333333333333333333333");
+
+      const state = JSON.parse(await readFile(statePath, "utf-8")) as {
+        agentWalletBindings: unknown[];
+      };
+      assert.equal(state.agentWalletBindings.length, 1);
+      assert.deepEqual(state.agentWalletBindings[0], result.binding);
+    },
+  );
+});
+
+test("AgentWalletService allows multiple agent bindings to share one wallet address", async () => {
+  await withTempStateFile(
+    {
+      wallets: [],
+      agentWalletBindings: [
+        {
+          agentName: "ZeroClaw OntologyAgent",
+          agentId: "312586087945994240",
+          email: "xw007110@163.com",
+          walletAddress: "0x3333333333333333333333333333333333333333",
+          circleWalletId: null,
+          circleWalletSetId: "mock-circle-wallet-set",
+          blockchain: "BASE-SEPOLIA",
+          mode: "mock",
+          updatedAt: "2026-05-13T00:00:00.000Z",
+        },
+      ],
+    },
+    async (statePath) => {
+      const config = loadConfig({
+        CHAIN_MOCK: "true",
+        AGENT_WALLET_STATE_PATH: statePath,
+      });
+      const service = new AgentWalletService(config, fakeX402FetchService(baseX402Result()));
+
+      await service.getOrCreate({
+        agentName: "ZeroClaw EigenFlux Peer",
+        agentId: "312877741349273600",
+        email: "xw007120@163.com",
+        walletAddress: "0x3333333333333333333333333333333333333333",
+      });
+
+      const state = JSON.parse(await readFile(statePath, "utf-8")) as {
+        agentWalletBindings: Array<{ agentName: string; walletAddress: string }>;
+      };
+      assert.equal(state.agentWalletBindings.length, 2);
+      assert.deepEqual(
+        state.agentWalletBindings.map((binding) => binding.agentName).sort(),
+        ["ZeroClaw EigenFlux Peer", "ZeroClaw OntologyAgent"],
+      );
+      assert.ok(
+        state.agentWalletBindings.every(
+          (binding) => binding.walletAddress === "0x3333333333333333333333333333333333333333",
+        ),
+      );
+    },
+  );
+});
+
 test("AgentWalletService creates an Agent Wallet when no existing wallet is supplied", async () => {
   const config = loadConfig({ CHAIN_MOCK: "true" });
   let createCalls = 0;
@@ -157,6 +249,50 @@ test("AgentWalletService creates an Agent Wallet when no existing wallet is supp
   assert.equal(result.reused, false);
   assert.equal(result.circleWalletId, "new-wallet");
   assert.equal(result.walletAddress, "0x2222222222222222222222222222222222222222");
+});
+
+test("AgentWalletService stores agent identity binding when creating a wallet", async () => {
+  await withTempStateFile(
+    {
+      wallets: [],
+    },
+    async (statePath) => {
+      const config = loadConfig({
+        CHAIN_MOCK: "true",
+        AGENT_WALLET_STATE_PATH: statePath,
+      });
+      const circleWalletService = {
+        createWallet: async () => ({
+          circleWalletId: "new-wallet",
+          circleWalletSetId: "new-wallet-set",
+          blockchain: "BASE-SEPOLIA" as const,
+          walletAddress: "0x2222222222222222222222222222222222222222",
+          mode: "mock" as const,
+        }),
+      } as unknown as CircleWalletService;
+      const service = new AgentWalletService(
+        config,
+        fakeX402FetchService(baseX402Result()),
+        circleWalletService,
+      );
+
+      const result = await service.getOrCreate({
+        agentName: "ZeroClaw EigenFlux Peer",
+        agentId: "312877741349273600",
+        email: "xw007120@163.com",
+      });
+
+      assert.equal(result.reused, false);
+      assert.equal(result.binding?.circleWalletId, "new-wallet");
+      assert.equal(result.binding?.circleWalletSetId, "new-wallet-set");
+      assert.equal(result.binding?.walletAddress, "0x2222222222222222222222222222222222222222");
+
+      const state = JSON.parse(await readFile(statePath, "utf-8")) as {
+        agentWalletBindings: unknown[];
+      };
+      assert.deepEqual(state.agentWalletBindings[0], result.binding);
+    },
+  );
 });
 
 test("AgentWalletService reuses a matching wallet from local Agent Wallet state", async () => {
@@ -235,6 +371,277 @@ test("AgentWalletService wraps x402 fetch result with agent wallet tool marker",
 
   assert.equal(result.agentWalletTool, "agent_wallet_call_x402_service");
   assert.equal(result.upstream.status, 200);
+});
+
+test("AgentWalletService creates Circle transfer between bound agents", async () => {
+  await withTempStateFile(
+    {
+      wallets: [],
+      agentWalletBindings: [
+        {
+          agentName: "ZeroClaw OntologyAgent",
+          agentId: "main-agent",
+          email: "main@example.com",
+          walletAddress: "0x1111111111111111111111111111111111111111",
+          circleWalletId: "circle-main",
+          circleWalletSetId: "circle-wallet-set",
+          blockchain: "BASE-SEPOLIA",
+          mode: "circle",
+          updatedAt: "2026-05-13T00:00:00.000Z",
+        },
+        {
+          agentName: "ZeroClaw EigenFlux Peer",
+          agentId: "peer-agent",
+          email: "peer@example.com",
+          walletAddress: "0x2222222222222222222222222222222222222222",
+          circleWalletId: "circle-peer",
+          circleWalletSetId: "circle-wallet-set",
+          blockchain: "BASE-SEPOLIA",
+          mode: "circle",
+          updatedAt: "2026-05-13T00:00:00.000Z",
+        },
+      ],
+    },
+    async (statePath) => {
+      const config = loadConfig({
+        CHAIN_MOCK: "false",
+        AGENT_WALLET_STATE_PATH: statePath,
+        CIRCLE_API_KEY: "circle-api-key",
+        CIRCLE_ENTITY_SECRET: "entity-secret",
+        CIRCLE_WALLET_SET_ID: "circle-wallet-set",
+      });
+      const circleWalletService = new CircleWalletService(config, {
+        client: {
+          createTransaction: async (input: unknown) => {
+            assert.deepEqual(input, {
+              walletId: "circle-peer",
+              destinationAddress: "0x1111111111111111111111111111111111111111",
+              amount: ["0.000001"],
+              tokenAddress: "",
+              blockchain: "BASE-SEPOLIA",
+              refId: "prepay:test",
+              fee: {
+                type: "level",
+                config: {
+                  feeLevel: "MEDIUM",
+                },
+              },
+            });
+            return {
+              data: {
+                transaction: {
+                  id: "circle-tx-1",
+                  txHash: "0xabc",
+                  state: "INITIATED",
+                },
+              },
+            };
+          },
+          getTransaction: async () => ({ data: {} }),
+          requestTestnetTokens: async () => ({}) as never,
+        },
+      });
+      const service = new AgentWalletService(
+        config,
+        fakeX402FetchService(baseX402Result()),
+        circleWalletService,
+      );
+
+      const result = await service.transfer({
+        fromAgentId: "peer-agent",
+        toAgentId: "main-agent",
+        amountEth: "0.000001",
+        refId: "prepay:test",
+      });
+
+      assert.equal(result.fromCircleWalletId, "circle-peer");
+      assert.equal(result.toAddress, "0x1111111111111111111111111111111111111111");
+      assert.equal(result.asset, "ETH");
+      assert.equal(result.amount, "0.000001");
+      assert.equal(result.amountEth, "0.000001");
+      assert.equal(result.amountAtomic, null);
+      assert.equal(result.tokenId, null);
+      assert.equal(result.tokenAddress, "");
+      assert.equal(result.transactionId, "circle-tx-1");
+      assert.equal(result.transactionHash, "0xabc");
+      assert.equal(result.state, "INITIATED");
+      assert.equal(result.mode, "circle");
+    },
+  );
+});
+
+test("AgentWalletService creates Circle USDC transfer from atomic amount", async () => {
+  await withTempStateFile(
+    {
+      wallets: [],
+      agentWalletBindings: [
+        {
+          agentName: "ZeroClaw OntologyAgent",
+          agentId: "main-agent",
+          email: "main@example.com",
+          walletAddress: "0x1111111111111111111111111111111111111111",
+          circleWalletId: "circle-main",
+          circleWalletSetId: "circle-wallet-set",
+          blockchain: "BASE-SEPOLIA",
+          mode: "circle",
+          updatedAt: "2026-05-13T00:00:00.000Z",
+        },
+        {
+          agentName: "ZeroClaw EigenFlux Peer",
+          agentId: "peer-agent",
+          email: "peer@example.com",
+          walletAddress: "0x2222222222222222222222222222222222222222",
+          circleWalletId: "circle-peer",
+          circleWalletSetId: "circle-wallet-set",
+          blockchain: "BASE-SEPOLIA",
+          mode: "circle",
+          updatedAt: "2026-05-13T00:00:00.000Z",
+        },
+      ],
+    },
+    async (statePath) => {
+      const config = loadConfig({
+        CHAIN_MOCK: "false",
+        AGENT_WALLET_STATE_PATH: statePath,
+        CIRCLE_API_KEY: "circle-api-key",
+        CIRCLE_ENTITY_SECRET: "entity-secret",
+        CIRCLE_WALLET_SET_ID: "circle-wallet-set",
+        X402_USDC_ASSET_ADDRESS: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+        CIRCLE_USDC_TOKEN_ID: "circle-usdc-token",
+      });
+      const circleWalletService = new CircleWalletService(config, {
+        client: {
+          createTransaction: async (input: unknown) => {
+            assert.deepEqual(input, {
+              walletId: "circle-peer",
+              destinationAddress: "0x1111111111111111111111111111111111111111",
+              amount: ["1.25"],
+              tokenId: "circle-usdc-token",
+              refId: "escrow:test:release",
+              fee: {
+                type: "level",
+                config: {
+                  feeLevel: "MEDIUM",
+                },
+              },
+            });
+            return {
+              data: {
+                transaction: {
+                  id: "circle-usdc-tx-1",
+                  transactionHash: "0xdef",
+                  state: "INITIATED",
+                },
+              },
+            };
+          },
+          getTransaction: async () => ({ data: {} }),
+          requestTestnetTokens: async () => ({}) as never,
+        },
+      });
+      const service = new AgentWalletService(
+        config,
+        fakeX402FetchService(baseX402Result()),
+        circleWalletService,
+      );
+
+      const result = await service.transfer({
+        fromAgentId: "peer-agent",
+        toAgentId: "main-agent",
+        amountAtomic: "1250000",
+        asset: "USDC",
+        refId: "escrow:test:release",
+      });
+
+      assert.equal(result.asset, "USDC");
+      assert.equal(result.amount, "1.25");
+      assert.equal(result.amountEth, null);
+      assert.equal(result.amountAtomic, "1250000");
+      assert.equal(result.tokenId, "circle-usdc-token");
+      assert.equal(result.tokenAddress, "0x036cbd53842c5426634e7929541ec2318f3dcf7e");
+      assert.equal(result.transactionId, "circle-usdc-tx-1");
+      assert.equal(result.transactionHash, "0xdef");
+    },
+  );
+});
+
+test("AgentWalletService rejects Circle transfer without real source wallet id", async () => {
+  await withTempStateFile(
+    {
+      wallets: [],
+      agentWalletBindings: [
+        {
+          agentName: "ZeroClaw EigenFlux Peer",
+          agentId: "peer-agent",
+          email: "peer@example.com",
+          walletAddress: "0x2222222222222222222222222222222222222222",
+          circleWalletId: null,
+          circleWalletSetId: "mock-circle-wallet-set",
+          blockchain: "BASE-SEPOLIA",
+          mode: "mock",
+          updatedAt: "2026-05-13T00:00:00.000Z",
+        },
+      ],
+    },
+    async (statePath) => {
+      const config = loadConfig({
+        CHAIN_MOCK: "true",
+        AGENT_WALLET_STATE_PATH: statePath,
+      });
+      const service = new AgentWalletService(config, fakeX402FetchService(baseX402Result()));
+
+      await assertRejectsWithAppError(
+        () =>
+          service.transfer({
+            fromAgentId: "peer-agent",
+            toAddress: "0x1111111111111111111111111111111111111111",
+            amountEth: "0.000001",
+          }),
+        {
+          code: "VALIDATION_ERROR",
+          statusCode: 400,
+          message: /real Circle wallet id/,
+        },
+      );
+    },
+  );
+});
+
+test("AgentWalletService returns Circle transaction status", async () => {
+  const config = loadConfig({
+    CHAIN_MOCK: "false",
+    CIRCLE_API_KEY: "circle-api-key",
+    CIRCLE_ENTITY_SECRET: "entity-secret",
+  });
+  const circleWalletService = new CircleWalletService(config, {
+    client: {
+      createTransaction: async () => ({ data: {} }),
+      getTransaction: async (input: unknown) => {
+        assert.deepEqual(input, { id: "circle-tx-1" });
+        return {
+          data: {
+            transaction: {
+              id: "circle-tx-1",
+              txHash: "0xabc",
+              state: "COMPLETE",
+            },
+          },
+        };
+      },
+      requestTestnetTokens: async () => ({}) as never,
+    },
+  });
+  const service = new AgentWalletService(
+    config,
+    fakeX402FetchService(baseX402Result()),
+    circleWalletService,
+  );
+
+  const result = await service.transactionStatus({ transactionId: "circle-tx-1" });
+
+  assert.equal(result.transactionId, "circle-tx-1");
+  assert.equal(result.transactionHash, "0xabc");
+  assert.equal(result.state, "COMPLETE");
 });
 
 test("CircleWalletService creates deterministic mock wallets with exact repeatability and different seed behavior", async () => {

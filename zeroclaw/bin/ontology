@@ -73,7 +73,7 @@ EOF
   fi
   if printf '%s' "$intent" | grep -Eq '"deliveryMode"[[:space:]]*:[[:space:]]*"withdrawal"'; then
     cat <<'EOF'
-{"method":"chain_transfer","needsClarification":false,"allowedTools":["chain_sign_transfer"],"reason":"Withdrawals are chain transfers and must be handled by the chain service after explicit confirmation."}
+{"method":"chain_transfer","needsClarification":false,"allowedTools":["chain_sign_transfer","chain_submit_execution"],"reason":"Withdrawals or external wallet transfers require chain transfer tools after explicit confirmation. Service purchase flows must use ledger escrow, not direct transfer."}
 EOF
     return
   fi

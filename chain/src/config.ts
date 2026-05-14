@@ -44,6 +44,7 @@ export type AppConfig = {
     walletSetId?: string;
     baseUrl: string;
     blockchain: "BASE-SEPOLIA";
+    usdcTokenId?: string;
   };
   agentWallet: {
     statePath?: string;
@@ -210,6 +211,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       walletSetId: pickOptionalEnv(env.CIRCLE_WALLET_SET_ID),
       baseUrl: env.CIRCLE_BASE_URL ?? DEFAULT_CIRCLE_BASE_URL,
       blockchain: "BASE-SEPOLIA",
+      usdcTokenId: pickOptionalEnv(env.CIRCLE_USDC_TOKEN_ID),
     },
     agentWallet: {
       statePath: pickOptionalEnv(env.AGENT_WALLET_STATE_PATH),

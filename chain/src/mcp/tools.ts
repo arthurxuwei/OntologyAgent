@@ -162,15 +162,19 @@ export function createChainMcpServer(runtime: ChainRuntime): McpServer {
       inputSchema: {
         agentName: z.string().describe("Agent name used when a new wallet must be created"),
         agentDescription: z.string().optional().describe("Optional agent description"),
+        agentId: z.string().optional().describe("External network agent id to bind to the wallet"),
+        email: z.string().optional().describe("Agent account email to bind to the wallet"),
         walletAddress: z.string().optional().describe("Existing Agent wallet address to reuse"),
         circleWalletId: z.string().optional().describe("Existing Circle wallet id to reuse"),
       },
     },
-    async ({ agentName, agentDescription, walletAddress, circleWalletId }) =>
+    async ({ agentName, agentDescription, agentId, email, walletAddress, circleWalletId }) =>
       runTool(() =>
         runtime.agentWalletService.getOrCreate({
           agentName,
           agentDescription,
+          agentId,
+          email,
           walletAddress,
           circleWalletId,
         }),
@@ -184,10 +188,12 @@ export function createChainMcpServer(runtime: ChainRuntime): McpServer {
       inputSchema: {
         agentName: z.string().describe("Agent name used to derive the mock wallet id"),
         agentDescription: z.string().optional().describe("Optional agent description"),
+        agentId: z.string().optional().describe("External network agent id to bind to the wallet"),
+        email: z.string().optional().describe("Agent account email to bind to the wallet"),
       },
     },
-    async ({ agentName, agentDescription }) =>
-      runTool(() => runtime.agentWalletService.init({ agentName, agentDescription })),
+    async ({ agentName, agentDescription, agentId, email }) =>
+      runTool(() => runtime.agentWalletService.init({ agentName, agentDescription, agentId, email })),
   );
 
   server.registerTool(
@@ -246,6 +252,31 @@ export function createChainMcpServer(runtime: ChainRuntime): McpServer {
           headers,
           body,
           paymentPreference,
+        }),
+      ),
+  );
+
+  server.registerTool(
+    "agent_wallet_settle_ledger_transfer",
+    {
+      description:
+        "Backend-only settlement for ledger escrow release: transfer real USDC between bound Agent Wallets.",
+      inputSchema: {
+        fromAgentId: z.string().optional().describe("Source agent id bound to a Circle wallet"),
+        fromAgentName: z.string().optional().describe("Source agent name bound to a Circle wallet"),
+        fromCircleWalletId: z.string().optional().describe("Explicit source Circle wallet id"),
+        toAgentId: z.string().optional().describe("Destination agent id bound to a wallet address"),
+        toAgentName: z.string().optional().describe("Destination agent name bound to a wallet address"),
+        toAddress: z.string().optional().describe("Explicit destination wallet address"),
+        amountAtomic: z.string().describe("USDC amount in atomic units"),
+        refId: z.string().optional().describe("Ledger escrow or settlement reference id"),
+      },
+    },
+    async (args) =>
+      runTool(() =>
+        runtime.agentWalletService.transfer({
+          ...args,
+          asset: "USDC",
         }),
       ),
   );

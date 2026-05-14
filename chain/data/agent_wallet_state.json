@@ -17,5 +17,29 @@
       "mode": "circle"
     }
   ],
-  "updatedAt": "2026-05-01T17:04:49.599Z"
+  "agentWalletBindings": [
+    {
+      "agentName": "ZeroClaw EigenFlux Peer",
+      "agentId": "312877741349273600",
+      "email": "xw007120@163.com",
+      "walletAddress": "0x5c515a3c02c52c13731ca6044577d3f798976974",
+      "circleWalletId": "dfbb9cd7-8eff-557c-b22b-09905f1ddaeb",
+      "circleWalletSetId": "9526ed7f-8558-5722-8d29-f584b08577ff",
+      "blockchain": "BASE-SEPOLIA",
+      "mode": "circle",
+      "updatedAt": "2026-05-14T07:57:06.148Z"
+    },
+    {
+      "agentName": "ZeroClaw OntologyAgent",
+      "agentId": "312586087945994240",
+      "email": "xw007110@163.com",
+      "walletAddress": "0xdcb5f2a59ac442b1b14d4bd2d902ef065df015b1",
+      "circleWalletId": "69233e0b-b41d-55a3-ab30-a1f07d869ce8",
+      "circleWalletSetId": "9526ed7f-8558-5722-8d29-f584b08577ff",
+      "blockchain": "BASE-SEPOLIA",
+      "mode": "circle",
+      "updatedAt": "2026-05-14T07:57:06.202Z"
+    }
+  ],
+  "updatedAt": "2026-05-14T08:08:24.301Z"
 }

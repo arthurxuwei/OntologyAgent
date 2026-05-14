@@ -167,6 +167,8 @@ export type X402FetchResult = {
 export type AgentWalletInitCommand = {
   agentName: string;
   agentDescription?: string;
+  agentId?: string;
+  email?: string;
 };
 
 export type AgentWalletInitResult = {
@@ -175,6 +177,7 @@ export type AgentWalletInitResult = {
   blockchain: "BASE-SEPOLIA";
   walletAddress: string;
   mode: "mock" | "circle";
+  binding?: AgentWalletBinding;
 };
 
 export type AgentWalletStatusCommand = {
@@ -184,6 +187,18 @@ export type AgentWalletStatusCommand = {
 
 export type AgentWalletGetOrCreateCommand = AgentWalletInitCommand &
   AgentWalletStatusCommand;
+
+export type AgentWalletBinding = {
+  agentName: string;
+  agentId: string | null;
+  email: string | null;
+  walletAddress: string;
+  circleWalletId: string | null;
+  circleWalletSetId: string | null;
+  blockchain: "BASE-SEPOLIA";
+  mode: "mock" | "circle";
+  updatedAt: string;
+};
 
 export type AgentWalletStatusResult = {
   circleWalletId: string | null;
@@ -198,9 +213,11 @@ export type AgentWalletStatusResult = {
 export type AgentWalletGetOrCreateResult =
   | (AgentWalletInitResult & {
       reused: false;
+      binding?: AgentWalletBinding;
     })
   | (AgentWalletStatusResult & {
       reused: true;
+      binding?: AgentWalletBinding;
     });
 
 export type AgentWalletRegisterX402ServiceCommand = {
@@ -218,6 +235,68 @@ export type AgentWalletRegisterX402ServiceResult = {
   network: string;
   payTo: string;
   active: true;
+};
+
+export type AgentWalletTransferCommand = {
+  fromAgentId?: string;
+  fromAgentName?: string;
+  fromCircleWalletId?: string;
+  toAgentId?: string;
+  toAgentName?: string;
+  toAddress?: string;
+  amountEth?: string;
+  amountAtomic?: string;
+  asset?: "ETH" | "USDC";
+  refId?: string;
+};
+
+export type AgentWalletTransferResult = {
+  fromAgentId: string | null;
+  fromAgentName: string | null;
+  fromCircleWalletId: string;
+  fromAddress: string;
+  toAgentId: string | null;
+  toAgentName: string | null;
+  toAddress: string;
+  asset: "ETH" | "USDC";
+  amount: string;
+  amountEth: string | null;
+  amountAtomic: string | null;
+  tokenId: string | null;
+  tokenAddress: string;
+  blockchain: "BASE-SEPOLIA";
+  transactionId: string | null;
+  transactionHash: string | null;
+  state: string | null;
+  mode: "circle";
+  raw: unknown;
+};
+
+export type AgentWalletTransactionStatusCommand = {
+  transactionId: string;
+};
+
+export type AgentWalletTransactionStatusResult = {
+  transactionId: string;
+  transactionHash: string | null;
+  state: string | null;
+  raw: unknown;
+};
+
+export type AgentWalletFaucetCommand = {
+  agentId?: string;
+  agentName?: string;
+  walletAddress?: string;
+  native?: boolean;
+  usdc?: boolean;
+};
+
+export type AgentWalletFaucetResult = {
+  address: string;
+  blockchain: "BASE-SEPOLIA";
+  native: boolean;
+  usdc: boolean;
+  status: "requested";
 };
 
 export type AgentWalletCallX402ServiceCommand = X402FetchCommand;

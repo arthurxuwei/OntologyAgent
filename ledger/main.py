@@ -39,6 +39,8 @@ DEFAULT_LEDGER_STATE_PATH = "ledger/data/offchain_ledger.json"
 DEFAULT_COINBASE_API_BASE_URL = "https://api.developer.coinbase.com"
 DEFAULT_COINBASE_TOKEN_PATH = "/onramp/v1/token"
 DEFAULT_COINBASE_HOSTED_URL = "https://pay.coinbase.com/buy/select-asset"
+DEFAULT_CHAIN_MCP_URL = "http://chain-mcp:8091/mcp/"
+DEFAULT_CHAIN_RECORDER_ADDRESS = "0x000000000000000000000000000000000000dEaD"
 LEDGER_CONSOLE_PATH = Path(__file__).resolve().parent / "web" / "index.html"
 
 app = FastAPI(title="OntologyAgent offchain ledger")
@@ -72,6 +74,49 @@ class LedgerEntry(BaseModel):
     reason: Optional[str] = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     createdAt: str
+
+
+class LedgerChainRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    recordId: str
+    eventType: Literal["credit", "escrow_lock", "escrow_release", "escrow_refund"]
+    status: Literal["submitted", "failed"]
+    chainTool: str = "chain_submit_execution"
+    chainMcpUrl: str
+    recorderAddress: str
+    txHash: Optional[str] = None
+    mode: Optional[str] = None
+    escrowId: Optional[str] = None
+    entryIds: list[str] = Field(default_factory=list)
+    payload: dict[str, Any] = Field(default_factory=dict)
+    toolResult: dict[str, Any] = Field(default_factory=dict)
+    error: Optional[str] = None
+    createdAt: str
+    updatedAt: str
+
+
+class LedgerSettlementRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    recordId: str
+    eventType: Literal["escrow_release"]
+    status: Literal["submitted", "failed"]
+    settlementTool: str = "agent_wallet_settle_ledger_transfer"
+    chainMcpUrl: str
+    escrowId: str
+    fromAgentId: str
+    toAgentId: str
+    asset: str = DEFAULT_ASSET
+    amountAtomic: str
+    transactionId: Optional[str] = None
+    transactionHash: Optional[str] = None
+    transactionState: Optional[str] = None
+    mode: Optional[str] = None
+    toolResult: dict[str, Any] = Field(default_factory=dict)
+    error: Optional[str] = None
+    createdAt: str
+    updatedAt: str
 
 
 class EscrowRecord(BaseModel):
@@ -149,6 +194,8 @@ class LedgerState(BaseModel):
     escrows: list[EscrowRecord] = Field(default_factory=list)
     onrampSessions: list[OnrampSessionRecord] = Field(default_factory=list)
     onrampEvents: list[OnrampEventRecord] = Field(default_factory=list)
+    chainRecords: list[LedgerChainRecord] = Field(default_factory=list)
+    settlementRecords: list[LedgerSettlementRecord] = Field(default_factory=list)
 
 
 class CreditRequest(BaseModel):
@@ -366,6 +413,267 @@ class CoinbaseOnrampClient:
         return f"{self.hosted_url}?{urlencode(query)}"
 
 
+class LedgerChainRecorder:
+    def __init__(
+        self,
+        *,
+        enabled: bool,
+        chain_mcp_url: str,
+        recorder_address: str,
+        timeout_seconds: float,
+        max_payload_bytes: int,
+        require_success: bool,
+    ) -> None:
+        self.enabled = enabled
+        self.chain_mcp_url = chain_mcp_url
+        self.recorder_address = recorder_address
+        self.timeout_seconds = timeout_seconds
+        self.max_payload_bytes = max_payload_bytes
+        self.require_success = require_success
+
+    async def submit(
+        self,
+        *,
+        event_type: Literal["credit", "escrow_lock", "escrow_release", "escrow_refund"],
+        escrow: Optional[EscrowRecord],
+        entries: list[LedgerEntry],
+        payload: dict[str, Any],
+    ) -> Optional[LedgerChainRecord]:
+        if not self.enabled:
+            return None
+
+        current = now_iso()
+        base_record = {
+            "recordId": f"chainrec_{uuid.uuid4().hex}",
+            "eventType": event_type,
+            "chainMcpUrl": self.chain_mcp_url,
+            "recorderAddress": self.recorder_address,
+            "escrowId": escrow.escrowId if escrow is not None else None,
+            "entryIds": [entry.entryId for entry in entries],
+            "payload": payload,
+            "createdAt": current,
+            "updatedAt": current,
+        }
+
+        try:
+            data = encode_ledger_record_payload(payload, self.max_payload_bytes)
+            result = await self._call_chain_submit_execution(data)
+            structured = result.get("structuredContent")
+            if not isinstance(structured, dict):
+                raise RuntimeError("chain MCP response did not include structuredContent")
+            error_payload = structured.get("error")
+            if isinstance(error_payload, dict):
+                message = error_payload.get("message")
+                raise RuntimeError(str(message or error_payload))
+            execution = structured.get("execution")
+            settlement = structured.get("settlement")
+            tx_hash = None
+            mode = None
+            if isinstance(execution, dict):
+                tx_hash = execution.get("txHash")
+                mode = execution.get("mode")
+            if not isinstance(tx_hash, str) and isinstance(settlement, dict):
+                identifier = settlement.get("identifier")
+                if isinstance(identifier, str) and identifier.startswith("0x"):
+                    tx_hash = identifier
+                mode = mode or settlement.get("mode")
+            if not isinstance(tx_hash, str) or not tx_hash.startswith("0x"):
+                raise RuntimeError("chain MCP response did not include a transaction hash")
+            return LedgerChainRecord(
+                **base_record,
+                status="submitted",
+                txHash=tx_hash,
+                mode=mode if isinstance(mode, str) else None,
+                toolResult=structured,
+            )
+        except Exception as error:
+            record = LedgerChainRecord(
+                **base_record,
+                status="failed",
+                error=str(error),
+            )
+            if self.require_success:
+                raise LedgerChainRecordError(record) from error
+            return record
+
+    async def _call_chain_submit_execution(self, data: str) -> dict[str, Any]:
+        request = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "chain_submit_execution",
+                "arguments": {
+                    "to": self.recorder_address,
+                    "valueEth": "0",
+                    "data": data,
+                },
+            },
+        }
+        async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+            response = await client.post(
+                self.chain_mcp_url,
+                headers={
+                    "Content-Type": "application/json",
+                    "Accept": "application/json, text/event-stream",
+                },
+                json=request,
+            )
+        if response.status_code >= 400:
+            raise RuntimeError(f"chain MCP request failed: HTTP {response.status_code} {response.text}")
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise RuntimeError("chain MCP response was not a JSON object")
+        if "error" in payload:
+            raise RuntimeError(f"chain MCP returned error: {payload['error']}")
+        result = payload.get("result")
+        if not isinstance(result, dict):
+            raise RuntimeError("chain MCP response did not include result")
+        return result
+
+
+class LedgerChainRecordError(RuntimeError):
+    def __init__(self, record: LedgerChainRecord) -> None:
+        super().__init__(record.error or "ledger chain record failed")
+        self.record = record
+
+
+class LedgerSettlementClient:
+    def __init__(
+        self,
+        *,
+        enabled: bool,
+        chain_mcp_url: str,
+        timeout_seconds: float,
+        require_success: bool,
+    ) -> None:
+        self.enabled = enabled
+        self.chain_mcp_url = chain_mcp_url
+        self.timeout_seconds = timeout_seconds
+        self.require_success = require_success
+
+    async def submit_release(self, escrow: EscrowRecord) -> Optional[LedgerSettlementRecord]:
+        if not self.enabled:
+            return None
+
+        current = now_iso()
+        base_record = {
+            "recordId": f"settle_{uuid.uuid4().hex}",
+            "eventType": "escrow_release",
+            "chainMcpUrl": self.chain_mcp_url,
+            "escrowId": escrow.escrowId,
+            "fromAgentId": escrow.buyerAgentId,
+            "toAgentId": escrow.sellerAgentId,
+            "asset": escrow.asset,
+            "amountAtomic": escrow.amountAtomic,
+            "createdAt": current,
+            "updatedAt": current,
+        }
+        try:
+            result = await self._call_settlement_tool(escrow)
+            transfer = self._extract_tool_content(result)
+            if transfer.get("error") is not None:
+                raise RuntimeError(json.dumps(transfer["error"], sort_keys=True))
+            return LedgerSettlementRecord(
+                **base_record,
+                status="submitted",
+                transactionId=transfer.get("transactionId")
+                if isinstance(transfer.get("transactionId"), str)
+                else None,
+                transactionHash=transfer.get("transactionHash")
+                if isinstance(transfer.get("transactionHash"), str)
+                else None,
+                transactionState=transfer.get("state")
+                if isinstance(transfer.get("state"), str)
+                else None,
+                mode=transfer.get("mode") if isinstance(transfer.get("mode"), str) else None,
+                toolResult=result,
+            )
+        except Exception as error:
+            record = LedgerSettlementRecord(
+                **base_record,
+                status="failed",
+                error=str(error),
+            )
+            if self.require_success:
+                raise LedgerSettlementError(record) from error
+            return record
+
+    async def _call_settlement_tool(self, escrow: EscrowRecord) -> dict[str, Any]:
+        request = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "agent_wallet_settle_ledger_transfer",
+                "arguments": {
+                    "fromAgentId": escrow.buyerAgentId,
+                    "toAgentId": escrow.sellerAgentId,
+                    "amountAtomic": escrow.amountAtomic,
+                    "refId": f"{escrow.escrowId}:release",
+                },
+            },
+        }
+        async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+            response = await client.post(
+                self.chain_mcp_url,
+                headers={
+                    "Content-Type": "application/json",
+                    "Accept": "application/json, text/event-stream",
+                },
+                json=request,
+            )
+        if response.status_code >= 400:
+            raise RuntimeError(
+                f"chain MCP settlement request failed: HTTP {response.status_code} {response.text}"
+            )
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise RuntimeError("chain MCP settlement response was not a JSON object")
+        if "error" in payload:
+            raise RuntimeError(f"chain MCP settlement returned error: {payload['error']}")
+        result = payload.get("result")
+        if isinstance(result, dict) and result.get("isError") is True:
+            content = self._extract_tool_content(payload)
+            if content.get("error") is not None:
+                raise RuntimeError(json.dumps(content["error"], sort_keys=True))
+            raise RuntimeError("chain MCP settlement tool returned isError=true")
+        return payload
+
+    @staticmethod
+    def _extract_tool_content(result: dict[str, Any]) -> dict[str, Any]:
+        content = result.get("result", {}).get("content", [])
+        if not isinstance(content, list) or not content:
+            return {}
+        first = content[0]
+        if not isinstance(first, dict):
+            return {}
+        text = first.get("text")
+        if not isinstance(text, str):
+            return {}
+        parsed = json.loads(text)
+        if not isinstance(parsed, dict):
+            return {}
+        return parsed
+
+
+class LedgerSettlementError(RuntimeError):
+    def __init__(self, record: LedgerSettlementRecord) -> None:
+        super().__init__(record.error or "ledger settlement failed")
+        self.record = record
+
+
+def encode_ledger_record_payload(payload: dict[str, Any], max_payload_bytes: int) -> str:
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode(
+        "utf-8"
+    )
+    if len(raw) > max_payload_bytes:
+        raise ValueError(
+            f"ledger chain record payload is {len(raw)} bytes; max is {max_payload_bytes}"
+        )
+    return "0x" + raw.hex()
+
+
 class OffchainLedgerStore:
     def __init__(self, path: str) -> None:
         self.path = path
@@ -552,6 +860,40 @@ class OffchainLedgerStore:
             return updated_escrow
 
         return self._mutate(mutate)
+
+    def entries_for_escrow_event(
+        self,
+        *,
+        escrow_id: str,
+        entry_type: Literal["escrow_lock", "escrow_release", "escrow_refund"],
+    ) -> list[LedgerEntry]:
+        state = self.load()
+        return [
+            entry
+            for entry in state.entries
+            if entry.escrowId == escrow_id and entry.entryType == entry_type
+        ]
+
+    def add_chain_record(self, record: LedgerChainRecord) -> LedgerChainRecord:
+        def mutate(state: LedgerState) -> LedgerChainRecord:
+            state.chainRecords.append(record)
+            return record
+
+        return self._mutate(mutate)
+
+    def add_settlement_record(self, record: LedgerSettlementRecord) -> LedgerSettlementRecord:
+        def mutate(state: LedgerState) -> LedgerSettlementRecord:
+            state.settlementRecords.append(record)
+            return record
+
+        return self._mutate(mutate)
+
+    def get_escrow(self, escrow_id: str) -> EscrowRecord:
+        state = self.load()
+        for escrow in state.escrows:
+            if escrow.escrowId == escrow_id:
+                return escrow
+        raise LookupError("escrow not found")
 
     def find_onramp_session_by_idempotency_key(
         self,
@@ -777,9 +1119,129 @@ def get_coinbase_onramp_client() -> CoinbaseOnrampClient:
     )
 
 
+@lru_cache(maxsize=1)
+def get_chain_recorder() -> LedgerChainRecorder:
+    return LedgerChainRecorder(
+        enabled=os.getenv("LEDGER_CHAIN_RECORD_ENABLED", "false").lower()
+        in {"1", "true", "yes", "on"},
+        chain_mcp_url=os.getenv("LEDGER_CHAIN_MCP_URL", DEFAULT_CHAIN_MCP_URL),
+        recorder_address=os.getenv("LEDGER_CHAIN_RECORDER_ADDRESS", DEFAULT_CHAIN_RECORDER_ADDRESS),
+        timeout_seconds=float(os.getenv("LEDGER_CHAIN_RECORD_TIMEOUT_SECONDS", "30")),
+        max_payload_bytes=int(os.getenv("LEDGER_CHAIN_RECORD_MAX_BYTES", "2048")),
+        require_success=os.getenv("LEDGER_CHAIN_RECORD_REQUIRE_SUCCESS", "false").lower()
+        in {"1", "true", "yes", "on"},
+    )
+
+
+@lru_cache(maxsize=1)
+def get_ledger_settlement_client() -> LedgerSettlementClient:
+    return LedgerSettlementClient(
+        enabled=os.getenv("LEDGER_SETTLEMENT_ENABLED", "false").lower()
+        in {"1", "true", "yes", "on"},
+        chain_mcp_url=os.getenv("LEDGER_CHAIN_MCP_URL", DEFAULT_CHAIN_MCP_URL),
+        timeout_seconds=float(os.getenv("LEDGER_SETTLEMENT_TIMEOUT_SECONDS", "60")),
+        require_success=os.getenv("LEDGER_SETTLEMENT_REQUIRE_SUCCESS", "false").lower()
+        in {"1", "true", "yes", "on"},
+    )
+
+
+def ledger_chain_payload(
+    *,
+    event_type: Literal["credit", "escrow_lock", "escrow_release", "escrow_refund"],
+    escrow: Optional[EscrowRecord],
+    entries: list[LedgerEntry],
+    extra: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "kind": "ontology-ledger-event",
+        "eventType": event_type,
+        "entryIds": [entry.entryId for entry in entries],
+        "entries": [
+            {
+                "entryId": entry.entryId,
+                "entryType": entry.entryType,
+                "agentId": entry.agentId,
+                "asset": entry.asset,
+                "availableDeltaAtomic": entry.availableDeltaAtomic,
+                "lockedDeltaAtomic": entry.lockedDeltaAtomic,
+                "escrowId": entry.escrowId,
+                "reason": entry.reason,
+                "createdAt": entry.createdAt,
+            }
+            for entry in entries
+        ],
+        "createdAt": now_iso(),
+    }
+    if escrow is not None:
+        payload["escrow"] = {
+            "escrowId": escrow.escrowId,
+            "buyerAgentId": escrow.buyerAgentId,
+            "sellerAgentId": escrow.sellerAgentId,
+            "amountAtomic": escrow.amountAtomic,
+            "asset": escrow.asset,
+            "status": escrow.status,
+            "taskId": escrow.taskId,
+            "description": escrow.description,
+            "createdAt": escrow.createdAt,
+            "updatedAt": escrow.updatedAt,
+            "releasedAt": escrow.releasedAt,
+            "refundedAt": escrow.refundedAt,
+        }
+    if extra:
+        payload["extra"] = extra
+    return payload
+
+
+async def record_ledger_chain_event(
+    *,
+    event_type: Literal["credit", "escrow_lock", "escrow_release", "escrow_refund"],
+    escrow: Optional[EscrowRecord],
+    entries: list[LedgerEntry],
+    extra: Optional[dict[str, Any]] = None,
+) -> Optional[LedgerChainRecord]:
+    recorder = get_chain_recorder()
+    record = await recorder.submit(
+        event_type=event_type,
+        escrow=escrow,
+        entries=entries,
+        payload=ledger_chain_payload(
+            event_type=event_type,
+            escrow=escrow,
+            entries=entries,
+            extra=extra,
+        ),
+    )
+    if record is None:
+        return None
+    return get_store().add_chain_record(record)
+
+
+async def settle_escrow_release(escrow: EscrowRecord) -> Optional[LedgerSettlementRecord]:
+    record = await get_ledger_settlement_client().submit_release(escrow)
+    if record is None:
+        return None
+    return get_store().add_settlement_record(record)
+
+
 def http_error(error: Exception) -> HTTPException:
     if isinstance(error, LookupError):
         return HTTPException(status_code=404, detail=str(error))
+    if isinstance(error, LedgerChainRecordError):
+        return HTTPException(
+            status_code=502,
+            detail={
+                "message": str(error),
+                "chainRecord": error.record.model_dump(),
+            },
+        )
+    if isinstance(error, LedgerSettlementError):
+        return HTTPException(
+            status_code=502,
+            detail={
+                "message": str(error),
+                "settlementRecord": error.record.model_dump(),
+            },
+        )
     return HTTPException(status_code=400, detail=str(error))
 
 
@@ -871,7 +1333,7 @@ def confirm_onramp_session(
 
 
 @app.post("/ledger/accounts/{agent_id}/credit")
-def credit_agent_balance(agent_id: str, request: CreditRequest) -> dict[str, Any]:
+async def credit_agent_balance(agent_id: str, request: CreditRequest) -> dict[str, Any]:
     try:
         account, entry = get_store().credit(
             agent_id=agent_id,
@@ -879,13 +1341,23 @@ def credit_agent_balance(agent_id: str, request: CreditRequest) -> dict[str, Any
             reason=request.reason,
             metadata=request.metadata,
         )
-    except (LookupError, ValueError) as error:
+        chain_record = await record_ledger_chain_event(
+            event_type="credit",
+            escrow=None,
+            entries=[entry],
+            extra={"agentId": agent_id, "amountAtomic": request.amountAtomic},
+        )
+    except (LookupError, ValueError, LedgerChainRecordError) as error:
         raise http_error(error) from error
-    return {"account": account.model_dump(), "entry": entry.model_dump()}
+    return {
+        "account": account.model_dump(),
+        "entry": entry.model_dump(),
+        "chainRecord": chain_record.model_dump() if chain_record is not None else None,
+    }
 
 
 @app.post("/ledger/escrows")
-def create_escrow(request: CreateEscrowRequest) -> dict[str, Any]:
+async def create_escrow(request: CreateEscrowRequest) -> dict[str, Any]:
     try:
         escrow, entry = get_store().create_escrow(
             buyer_agent_id=request.buyerAgentId,
@@ -895,27 +1367,67 @@ def create_escrow(request: CreateEscrowRequest) -> dict[str, Any]:
             description=request.description,
             metadata=request.metadata,
         )
-    except (LookupError, ValueError) as error:
+        chain_record = await record_ledger_chain_event(
+            event_type="escrow_lock",
+            escrow=escrow,
+            entries=[entry],
+        )
+    except (LookupError, ValueError, LedgerChainRecordError) as error:
         raise http_error(error) from error
-    return {"escrow": escrow.model_dump(), "entry": entry.model_dump()}
+    return {
+        "escrow": escrow.model_dump(),
+        "entry": entry.model_dump(),
+        "chainRecord": chain_record.model_dump() if chain_record is not None else None,
+    }
 
 
 @app.post("/ledger/escrows/{escrow_id}/release")
-def release_escrow(escrow_id: str) -> dict[str, Any]:
+async def release_escrow(escrow_id: str) -> dict[str, Any]:
     try:
+        locked_escrow = get_store().get_escrow(escrow_id)
+        if locked_escrow.status != "locked":
+            raise ValueError("escrow is not locked")
+        settlement_record = await settle_escrow_release(locked_escrow)
         escrow = get_store().release_escrow(escrow_id)
-    except (LookupError, ValueError) as error:
+        entries = get_store().entries_for_escrow_event(
+            escrow_id=escrow.escrowId,
+            entry_type="escrow_release",
+        )
+        chain_record = await record_ledger_chain_event(
+            event_type="escrow_release",
+            escrow=escrow,
+            entries=entries,
+        )
+    except (LookupError, ValueError, LedgerChainRecordError, LedgerSettlementError) as error:
         raise http_error(error) from error
-    return {"escrow": escrow.model_dump()}
+    return {
+        "escrow": escrow.model_dump(),
+        "settlementRecord": settlement_record.model_dump()
+        if settlement_record is not None
+        else None,
+        "chainRecord": chain_record.model_dump() if chain_record is not None else None,
+    }
 
 
 @app.post("/ledger/escrows/{escrow_id}/refund")
-def refund_escrow(escrow_id: str) -> dict[str, Any]:
+async def refund_escrow(escrow_id: str) -> dict[str, Any]:
     try:
         escrow = get_store().refund_escrow(escrow_id)
-    except (LookupError, ValueError) as error:
+        entries = get_store().entries_for_escrow_event(
+            escrow_id=escrow.escrowId,
+            entry_type="escrow_refund",
+        )
+        chain_record = await record_ledger_chain_event(
+            event_type="escrow_refund",
+            escrow=escrow,
+            entries=entries,
+        )
+    except (LookupError, ValueError, LedgerChainRecordError) as error:
         raise http_error(error) from error
-    return {"escrow": escrow.model_dump()}
+    return {
+        "escrow": escrow.model_dump(),
+        "chainRecord": chain_record.model_dump() if chain_record is not None else None,
+    }
 
 
 _ledger_mcp_app = build_mcp_app(get_store)
