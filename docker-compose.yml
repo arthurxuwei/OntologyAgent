@@ -19,7 +19,6 @@ services:
     depends_on:
       - chain
       - ledger
-      - freqtrade
 
   ledger:
     build:
@@ -99,29 +98,6 @@ services:
       X402_FACILITATOR_URL: ${X402_FACILITATOR_URL:-https://x402.org/facilitator}
       X402_TIMEOUT_SECONDS: ${X402_TIMEOUT_SECONDS:-20}
       X402_GATEWAY_VERIFYING_CONTRACT: ${X402_GATEWAY_VERIFYING_CONTRACT:-0x0077777d7EBA4688BDeF3E311b846F25870A19B9}
-    restart: unless-stopped
-
-  freqtrade:
-    build:
-      context: ./freqtrade
-    container_name: freqtrade
-    ports:
-      - "8080:8080"
-      - "8090:8090"
-    environment:
-      FREQTRADE_USERNAME: ${FREQTRADE_USERNAME:-freqtrade}
-      FREQTRADE_PASSWORD: ${FREQTRADE_PASSWORD:-freqtrade}
-      FREQTRADE_TIMEOUT_SECONDS: ${FREQTRADE_TIMEOUT_SECONDS:-20}
-      FREQTRADE_ALLOW_WRITE_ACTIONS: ${FREQTRADE_ALLOW_WRITE_ACTIONS:-true}
-      FREQTRADE_API_URL: ${FREQTRADE_API_URL:-http://127.0.0.1:8080/api/v1}
-      FREQTRADE_MCP_PORT: ${FREQTRADE_MCP_PORT:-8090}
-      FREQTRADE_CONFIG_PATH: /app/config/config.json
-      FREQTRADE_STRATEGY_PATH: /app/strategies
-      FREQTRADE_STRATEGY_NAME: ${FREQTRADE_STRATEGY_NAME:-SimpleAgentStrategy}
-    volumes:
-      - ./freqtrade/config:/app/config
-      - ./freqtrade/strategies:/app/strategies
-      - ./freqtrade/data:/app/data
     restart: unless-stopped
 
   x402-mock:

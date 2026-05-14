@@ -12,7 +12,6 @@ BANNED_IMPORTS = {
     "payment_router",
     "ledger_client",
     "autonomy",
-    "freqtrade_mcp_client",
 }
 
 

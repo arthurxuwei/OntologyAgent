@@ -68,7 +68,7 @@ ontology chain call chain_get_user_operation_status '{"userOpHash":"0x..."}'
 ```
 
 For potentially spending tools such as `chain_sign_transfer`, `chain_submit_execution`,
-`chain_submit_user_operation`, `chain_x402_fetch`, and `chain_execute_trade_intent`, first route
+`chain_submit_user_operation`, and `chain_x402_fetch`, first route
 the payment intent and ask for explicit user confirmation.
 
 ## Response Guidelines

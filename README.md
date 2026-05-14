@@ -4,7 +4,6 @@
 
 - `agent`：Python Agent 本体，负责交互式会话、tool orchestration，以及对子 Agent 的管理
 - `chain`：TypeScript 链上 MCP skill provider，负责钱包、执行、UserOperation 和 x402 buyer flow
-- `freqtrade`：单容器 Freqtrade + MCP skill provider，负责量化策略和 CEX 交易技能
 - `ledger`：独立链下账本服务，负责 Agent Wallet 内部余额、Escrow 锁款、放款、退款和流水记录
 
 另外还有一个仅用于本地测试的辅助服务：
@@ -34,8 +33,6 @@ docker compose up -d --build
 - `x402-seller` 演示资源：`GET http://localhost:8001/x402/demo-resource`
 - `x402-seller` Circle Nanopayments 演示资源：`GET http://localhost:8001/x402/agent-services/research-summary/nanopayments`
 - `chain` MCP：`http://localhost:8091/mcp/`
-- `freqtrade` REST API：`http://localhost:8080/api/v1`
-- `freqtrade` MCP：`http://localhost:8090/mcp/`
 
 ## Worktree 注意事项
 
@@ -68,7 +65,6 @@ docker compose --env-file "$(dirname "$(git rev-parse --git-common-dir)")/.env" 
 - `agent` 是 agent 本体，不承载 seller resource
 - `ledger` 是独立链下账本服务，不属于 `agent` 或 `chain` 进程
 - 链上动作只能通过 `chain` MCP tools 完成
-- 中心化交易和量化动作只能通过 `freqtrade` MCP tools 完成
 - `chain` 不再提供 Fastify HTTP 业务接口
 - 撮合型 A2A 的 Escrow/余额状态应落在 `ledger`，而不是用 x402 或链上交易直接承担
 
@@ -80,7 +76,6 @@ docker compose --env-file "$(dirname "$(git rev-parse --git-common-dir)")/.env" 
   - `stop_wealth_agent`
   - `run_wealth_tick`
   - `update_wealth_config`
-  - `execute_freqtrade_trade_intent`（让 `freqtrade` 生成 trade intent，再由 `chain` 用 Base 钱包执行）
 - 本地 Agent Wallet ledger 工具
   - `route_payment_intent`（任何付款、x402、转账或 Escrow 动作前先选择支付方式）
   - `agent_wallet_get_ledger_state`
@@ -95,28 +90,6 @@ docker compose --env-file "$(dirname "$(git rev-parse --git-common-dir)")/.env" 
   - `chain_submit_execution`
   - `chain_submit_user_operation`
   - `chain_x402_fetch`
-  - `chain_execute_trade_intent`
-- `freqtrade` MCP tools
-  - `get_trading_status`
-  - `list_strategies`
-  - `get_open_trades`
-  - `get_closed_trades`
-  - `get_performance_summary`
-  - `evaluate_trade_signal`
-  - `start_bot`
-  - `stop_bot`
-  - `pause_trading`
-  - `resume_trading`
-  - `force_enter_trade`
-  - `force_exit_trade`
-  - `get_budget_snapshot`（内部账本 / 自治循环使用）
-  - `sync_dry_run_wallet`（内部 dry-run 资金同步使用）
-
-### Freqtrade Signal Evaluation（V1）
-
-- `evaluate_trade_signal` 是只读工具，不会创建 trade intent，也不会触发链上执行
-- V1 仅支持 `ETH/USDC`
-- V1 返回 `buy` / `sell` / `hold`，并附带 `reason`、`confidence` 和仓位上下文
 
 ### Offchain Ledger Service（V1）
 
@@ -221,32 +194,24 @@ COINBASE_ONRAMP_BEARER_TOKEN=...
 - `COINBASE_ONRAMP_TOKEN_PATH=/onramp/v1/token`
 - `COINBASE_ONRAMP_HOSTED_URL=https://pay.coinbase.com/buy/select-asset`
 
-### Default Freqtrade Strategy（V1）
-
-- 默认策略 `SimpleAgentStrategy` 使用 `5m` 上的 `EMA 9/21` crossover
-- 默认信号目标交易对是 `ETH/USDC`
-- 默认情况下，`evaluate_trade_signal` 会基于该策略返回 `buy` / `sell` / `hold`
-
 ## 自治运行
 
 当前 `agent` 同时支持三条运行路径：
 
 - `POST /agent/run`：单轮调用
 - `POST /agent/sessions` + `POST /agent/sessions/{sessionId}/messages`：持续交互式会话
-- 后台自治循环：按固定周期读取链上钱包和 Freqtrade dry-run 状态，再由一个理财子 Agent 做保护性判断
+- 后台自治循环：按固定周期读取链上钱包和 ledger 状态，再由一个理财子 Agent 做保护性判断
 
 自治循环默认是 **关闭** 的，避免一启动就自动花费真实资产。启用后：
 
 - 启动资金默认来自链上钱包余额
-- 自治子 Agent 只关心钱包余额、dry-run 盈亏和风险阈值
-- 自治子 Agent 不会主动调用 x402，也不会自动同步 `dry_run_wallet`
+- 自治子 Agent 只关心钱包余额、ledger 状态和风险阈值
+- 自治子 Agent 不会主动调用 x402
 - 后续统一按资金健康账本跟踪：
   - `startingCapitalEth`
   - `startingCapitalUsd`
   - `currentWalletBalanceEth`
   - `currentWalletBalanceUsd`
-  - `dryRunRealizedPnl`
-  - `dryRunUnrealizedPnl`
   - `netWorthEstimate`
   - `healthStatus`
   - `lastProtectiveAction`
@@ -266,8 +231,7 @@ COINBASE_ONRAMP_BEARER_TOKEN=...
 管家仍然负责：
 
 - 是否调用 x402
-- 是否给 Freqtrade dry-run 增加资金
-- 是否执行其他链上或交易动作
+- 是否执行其他链上动作
 
 在这些业务动作之前，建议先调用 `get_wealth_status` 查看理财子 Agent 的当前状态。管家也可以直接通过 `start_wealth_agent`、`stop_wealth_agent`、`run_wealth_tick` 管理子 Agent，并通过 `update_wealth_config` 调整运行时风控阈值。
 
@@ -406,19 +370,6 @@ X402_PAY_TO=0x... \
 ./scripts/demo-chain-mcp.sh
 ```
 
-### Freqtrade MCP 演示
-
-```bash
-./scripts/demo-freqtrade-mcp.sh
-```
-
-这个脚本会：
-
-- 启动 `agent`、`chain`、`freqtrade`
-- 检查 `freqtrade` REST API 是否就绪
-- 让 `agent` 通过 MCP 发现投资工具
-- 调一次 `get_trading_status`
-
 ### Simplescraper live x402 验证
 
 ```bash
@@ -456,7 +407,6 @@ PRIVATE_KEY=0x... \
 - `BRAIN_AGENT_MODEL`：管家使用的模型名；会被 `docker compose` 直接注入 `agent` 容器，默认 `gpt-4o-mini`
 - `CHAIN_MCP_URL`：`agent` 访问链上 MCP 的地址，默认 `http://chain-mcp:8091/mcp/`
 - `CHAIN_TIMEOUT_SECONDS`：请求相关超时，默认 `20`
-- `FREQTRADE_MCP_URL`：`agent` 访问 Freqtrade MCP 的地址，默认 `http://freqtrade:8090/mcp/`
 - `BRAIN_AGENT_MODEL`：Agent 模型名，默认 `gpt-4o-mini`
 - `AUTONOMY_ENABLED`：是否开启后台自治循环，默认 `false`
 - `AUTONOMY_INTERVAL_SECONDS`：自治轮询间隔，默认 `60`
@@ -558,13 +508,6 @@ curl -X POST http://localhost:8000/agent-wallet/reset
 
 独立链下账本状态存储在 `LEDGER_STATE_PATH`。本地清空账本可删除 `ledger/data/offchain_ledger.json` 后重启 `ledger` 服务。
 
-### Base 链上交易意图桥接（V1）
-
-- Base 资金始终保留在 `chain` 钱包侧
-- `freqtrade` 只负责生成 trade intent，不直接持有或执行链上资金
-- `chain_execute_trade_intent` 在 `CHAIN_MOCK=true` 时返回 mock 结果，便于本地回归
-- 非 mock 模式下，如果没有接入真实 DEX / aggregator，会返回结构化拒绝结果，而不是伪造成功
-
 ### x402-seller
 
 - `X402_PAY_TO`：seller 收款地址
@@ -574,21 +517,11 @@ curl -X POST http://localhost:8000/agent-wallet/reset
 - `X402_TIMEOUT_SECONDS`：seller 请求 facilitator 的超时，默认 `20`
 - `X402_GATEWAY_VERIFYING_CONTRACT`：Circle Gateway `GatewayWalletBatched` verifying contract；Base Sepolia 默认 `0x0077777d7EBA4688BDeF3E311b846F25870A19B9`
 
-### freqtrade
-
-- `FREQTRADE_USERNAME`：Freqtrade REST API 用户名，默认 `freqtrade`
-- `FREQTRADE_PASSWORD`：Freqtrade REST API 密码，默认 `freqtrade`
-- `FREQTRADE_TIMEOUT_SECONDS`：Freqtrade API / MCP 调用超时，默认 `20`
-- `FREQTRADE_ALLOW_WRITE_ACTIONS`：是否允许写操作，默认 `true`
-- `FREQTRADE_STRATEGY_NAME`：默认策略，默认 `SimpleAgentStrategy`
-- `FREQTRADE_CONFIG_PATH`：Freqtrade 配置路径；管家如需调整 `dry_run_wallet`，会通过 `sync_dry_run_wallet` 更新这里
-
 ## 交互式 Agent
 
 `agent` 内置 LangGraph Agent，会自动使用：
 
 - `chain` 链上 MCP tools
-- `freqtrade` 投资 MCP tools
 - 本地的理财子管理工具
 
 单轮调用示例：

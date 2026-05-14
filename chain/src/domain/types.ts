@@ -37,19 +37,6 @@ export type ExecutionCommand = {
   data?: string;
 };
 
-export type TradeIntentCommand = {
-  intentId: string;
-  pair: string;
-  side: "long" | "short";
-  amount: string;
-  amountType: "base" | "quote";
-  maxSlippageBps: number;
-  strategy?: string;
-  orderType?: "market" | "limit";
-  limitPrice?: string;
-  reason?: string;
-};
-
 export type UserOperationCommand = {
   target: string;
   maxCostEth: string;
@@ -91,21 +78,6 @@ export type ExecutionResult = {
   settlement: SettlementResult;
   decision: PolicyDecision;
   policy: PolicySnapshot;
-};
-
-export type TradeIntentExecutionResult = {
-  intentId: string;
-  pair: string;
-  side: "long" | "short";
-  status: "submitted" | "rejected";
-  mode: "mock" | "network";
-  sellToken: string;
-  buyToken: string;
-  sellAmount: string;
-  buyAmount: string | null;
-  txHash: string | null;
-  failureStage: "intent" | "quote" | null;
-  failureReason: string | null;
 };
 
 export type PaymentAttempt = {

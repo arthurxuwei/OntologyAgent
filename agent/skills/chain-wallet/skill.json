@@ -14,8 +14,7 @@
         "chain_submit_user_operation",
         "chain_get_transaction_receipt",
         "chain_get_user_operation_status",
-        "chain_x402_fetch",
-        "chain_execute_trade_intent"
+        "chain_x402_fetch"
       ]
     }
   },
