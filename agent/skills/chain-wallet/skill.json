@@ -1,14 +1,13 @@
 {
   "name": "chain-wallet",
   "enabled": true,
-  "description": "Expose chain MCP wallet, transfer, x402, execution, and settlement tools.",
+  "description": "Expose direct chain MCP wallet, transfer, x402, and execution tools.",
   "instructions": "instructions.md",
   "mcpServers": {
     "chain": {
       "url": "http://chain-mcp:8091/mcp/",
       "tools": [
         "chain_get_wallet_state",
-        "agent_wallet_get_or_create",
         "chain_sign_transfer",
         "chain_submit_execution",
         "chain_submit_user_operation",
@@ -19,11 +18,6 @@
     }
   },
   "hiddenTools": {
-    "chain": [
-      "agent_wallet_init",
-      "agent_wallet_status",
-      "agent_wallet_register_x402_service",
-      "agent_wallet_call_x402_service"
-    ]
+    "chain": []
   }
 }

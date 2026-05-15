@@ -33,6 +33,7 @@ class LedgerServiceTests(unittest.TestCase):
         self.previous_settlement_require_success = os.environ.get(
             "LEDGER_SETTLEMENT_REQUIRE_SUCCESS"
         )
+        self.previous_settlement_mcp_url = os.environ.get("LEDGER_SETTLEMENT_MCP_URL")
         os.environ["LEDGER_STATE_PATH"] = self.state_path
         os.environ["LEDGER_CHAIN_RECORD_ENABLED"] = "false"
         os.environ["LEDGER_CHAIN_RECORD_REQUIRE_SUCCESS"] = "false"
@@ -67,6 +68,7 @@ class LedgerServiceTests(unittest.TestCase):
             "LEDGER_SETTLEMENT_REQUIRE_SUCCESS",
             self.previous_settlement_require_success,
         )
+        self._restore_env("LEDGER_SETTLEMENT_MCP_URL", self.previous_settlement_mcp_url)
         main.get_coinbase_onramp_client.cache_clear()
         main.get_chain_recorder.cache_clear()
         main.get_ledger_settlement_client.cache_clear()
@@ -556,6 +558,16 @@ class LedgerServiceTests(unittest.TestCase):
         state = self.client.get("/ledger/state").json()
         self.assertEqual(len(state["settlementRecords"]), 1)
         self.assertEqual(state["settlementRecords"][0]["status"], "submitted")
+
+    def test_settlement_client_uses_dedicated_circle_mcp_url(self) -> None:
+        os.environ["LEDGER_SETTLEMENT_ENABLED"] = "true"
+        os.environ["LEDGER_SETTLEMENT_MCP_URL"] = "http://circle.test/mcp/"
+        main.get_ledger_settlement_client.cache_clear()
+
+        client = main.get_ledger_settlement_client()
+
+        self.assertTrue(client.enabled)
+        self.assertEqual(client.settlement_mcp_url, "http://circle.test/mcp/")
 
     def test_required_settlement_failure_blocks_release(self) -> None:
         class FakeSettlementClient:

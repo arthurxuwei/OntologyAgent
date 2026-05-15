@@ -30,7 +30,7 @@ const USDC_DECIMALS = 6n;
 export class AgentWalletService {
   constructor(
     private readonly config: AppConfig,
-    private readonly x402FetchService: X402FetchService,
+    private readonly x402FetchService?: X402FetchService,
     private readonly circleWalletService = new CircleWalletService(config),
     private readonly stateStore = new AgentWalletStateStore(config.agentWallet.statePath),
   ) {}
@@ -201,6 +201,13 @@ export class AgentWalletService {
   async callX402Service(
     command: AgentWalletCallX402ServiceCommand,
   ): Promise<AgentWalletCallX402ServiceResult> {
+    if (!this.x402FetchService) {
+      throw new AppError(
+        "VALIDATION_ERROR",
+        "x402 service calls are available through chain_x402_fetch, not circle wallet tools",
+        400,
+      );
+    }
     const result = await this.x402FetchService.execute(command);
     return {
       ...result,

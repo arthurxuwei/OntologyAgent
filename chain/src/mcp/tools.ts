@@ -1,16 +1,12 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { generateEntitySecretCiphertext } from "@circle-fin/developer-controlled-wallets";
 import { z } from "zod/v4";
 
 import { createTransactionSender } from "../chain-executor.js";
 import { loadConfig, type AppConfig } from "../config.js";
-import { normalizeError } from "../domain/errors.js";
 import { BundlerClient } from "../erc4337.js";
 import { NetworkClient } from "../infra/network-client.js";
 import { PrivateKeySigner } from "../infra/signers/private-key-signer.js";
 import { PolicyGuard } from "../policies/policy-guard.js";
-import { AgentWalletService } from "../services/agent-wallet-service.js";
-import { CircleWalletService } from "../services/circle-wallet-service.js";
 import { ExecutionService } from "../services/execution-service.js";
 import { SettlementService } from "../services/settlement-service.js";
 import { SignTransferService } from "../services/sign-transfer-service.js";
@@ -19,6 +15,7 @@ import { UserOperationStatusService } from "../services/user-operation-status-se
 import { UserOperationService } from "../services/user-operation-service.js";
 import { WalletStateService } from "../services/wallet-state-service.js";
 import { X402FetchService } from "../services/x402-fetch-service.js";
+import { runTool } from "./result.js";
 
 type ChainRuntime = {
   walletStateService: WalletStateService;
@@ -28,7 +25,6 @@ type ChainRuntime = {
   userOperationStatusService: UserOperationStatusService;
   userOperationService: UserOperationService;
   x402FetchService: X402FetchService;
-  agentWalletService: AgentWalletService;
 };
 
 type ChainRuntimeOverrides = {
@@ -36,56 +32,6 @@ type ChainRuntimeOverrides = {
   userOperationStatusService?: UserOperationStatusService;
   x402FetchService?: X402FetchService;
 };
-
-type StructuredPayload = Record<string, unknown>;
-
-function structuredText(value: unknown): string {
-  return JSON.stringify(value, null, 2);
-}
-
-function successResult(result: StructuredPayload) {
-  return {
-    content: [
-      {
-        type: "text" as const,
-        text: structuredText(result),
-      },
-    ],
-    structuredContent: result,
-  };
-}
-
-function errorResult(error: unknown) {
-  const normalized = normalizeError(error);
-  const payload = {
-    error: {
-      code: normalized.code,
-      message: normalized.message,
-      details: normalized.details,
-    },
-  };
-
-  return {
-    content: [
-      {
-        type: "text" as const,
-        text: structuredText(payload),
-      },
-    ],
-    structuredContent: payload,
-    isError: true,
-  };
-}
-
-async function runTool<Result>(
-  handler: () => Promise<Result>,
-): Promise<ReturnType<typeof successResult> | ReturnType<typeof errorResult>> {
-  try {
-    return successResult((await handler()) as StructuredPayload);
-  } catch (error) {
-    return errorResult(error);
-  }
-}
 
 export function createChainRuntime(
   config: AppConfig = loadConfig(),
@@ -104,13 +50,6 @@ export function createChainRuntime(
   const settlementService = new SettlementService();
   const x402FetchService =
     overrides?.x402FetchService ?? new X402FetchService(config, policyGuard);
-  const circleWalletService = new CircleWalletService(config, {
-    createEntitySecretCiphertext: (entitySecret) =>
-      generateEntitySecretCiphertext({
-        apiKey: config.circle.apiKey ?? "",
-        entitySecret,
-      }),
-  });
 
   return {
     walletStateService: new WalletStateService(config, policyGuard, networkClient, signer),
@@ -123,11 +62,6 @@ export function createChainRuntime(
       new UserOperationStatusService(config, bundlerClient),
     userOperationService: new UserOperationService(bundlerClient, policyGuard, settlementService),
     x402FetchService,
-    agentWalletService: new AgentWalletService(
-      config,
-      x402FetchService,
-      circleWalletService,
-    ),
   };
 }
 
@@ -136,147 +70,6 @@ export function createChainMcpServer(runtime: ChainRuntime): McpServer {
     name: "ontologyagent-chain",
     version: "1.0.0",
   });
-
-  server.registerTool(
-    "agent_wallet_import_circle_wallets",
-    {
-      description:
-        "Import existing Circle wallets for the configured wallet set into local Agent Wallet state.",
-      inputSchema: {},
-    },
-    async () =>
-      runTool(async () => {
-        const wallets = await runtime.agentWalletService.listCircleWallets();
-        return runtime.agentWalletService.saveLocalWallets(wallets);
-      }),
-  );
-
-  server.registerTool(
-    "agent_wallet_get_or_create",
-    {
-      description:
-        "Get an existing Agent Wallet when an address or Circle wallet id is supplied; otherwise create one for a named agent.",
-      inputSchema: {
-        agentName: z.string().describe("Agent name used when a new wallet must be created"),
-        agentDescription: z.string().optional().describe("Optional agent description"),
-        agentId: z.string().optional().describe("External network agent id to bind to the wallet"),
-        email: z.string().optional().describe("Agent account email to bind to the wallet"),
-        walletAddress: z.string().optional().describe("Existing Agent wallet address to reuse"),
-        circleWalletId: z.string().optional().describe("Existing Circle wallet id to reuse"),
-      },
-    },
-    async ({ agentName, agentDescription, agentId, email, walletAddress, circleWalletId }) =>
-      runTool(() =>
-        runtime.agentWalletService.getOrCreate({
-          agentName,
-          agentDescription,
-          agentId,
-          email,
-          walletAddress,
-          circleWalletId,
-        }),
-      ),
-  );
-
-  server.registerTool(
-    "agent_wallet_init",
-    {
-      description: "Initialize an Agent Wallet for a named agent.",
-      inputSchema: {
-        agentName: z.string().describe("Agent name used to derive the mock wallet id"),
-        agentDescription: z.string().optional().describe("Optional agent description"),
-        agentId: z.string().optional().describe("External network agent id to bind to the wallet"),
-        email: z.string().optional().describe("Agent account email to bind to the wallet"),
-      },
-    },
-    async ({ agentName, agentDescription, agentId, email }) =>
-      runTool(() => runtime.agentWalletService.init({ agentName, agentDescription, agentId, email })),
-  );
-
-  server.registerTool(
-    "agent_wallet_status",
-    {
-      description: "Return Agent Wallet status by wallet address or Circle wallet id.",
-      inputSchema: {
-        walletAddress: z.string().optional().describe("Agent wallet address"),
-        circleWalletId: z.string().optional().describe("Circle wallet id"),
-      },
-    },
-    async ({ walletAddress, circleWalletId }) =>
-      runTool(() => runtime.agentWalletService.status({ walletAddress, circleWalletId })),
-  );
-
-  server.registerTool(
-    "agent_wallet_register_x402_service",
-    {
-      description: "Register an x402 paid service exposed by an Agent Wallet.",
-      inputSchema: {
-        name: z.string().describe("Service name"),
-        path: z.string().describe("HTTP path beginning with /"),
-        priceAtomic: z.string().describe("USDC price in atomic units"),
-        payTo: z.string().describe("Payment recipient address"),
-      },
-    },
-    async ({ name, path, priceAtomic, payTo }) =>
-      runTool(() =>
-        runtime.agentWalletService.registerX402Service({ name, path, priceAtomic, payTo }),
-      ),
-  );
-
-  server.registerTool(
-    "agent_wallet_call_x402_service",
-    {
-      description: "Call an x402 service through the Agent Wallet flow.",
-      inputSchema: {
-        url: z.string().url().describe("Target x402 upstream URL"),
-        method: z
-          .enum(["GET", "POST", "PUT", "PATCH", "DELETE"])
-          .default("GET")
-          .describe("HTTP method"),
-        headers: z.record(z.string(), z.string()).optional().describe("Optional request headers"),
-        body: z.unknown().optional().describe("Optional request body"),
-        paymentPreference: z
-          .enum(["standard", "circle-gateway"])
-          .optional()
-          .describe("Optional x402 payment requirement preference"),
-      },
-    },
-    async ({ url, method, headers, body, paymentPreference }) =>
-      runTool(() =>
-        runtime.agentWalletService.callX402Service({
-          url,
-          method,
-          headers,
-          body,
-          paymentPreference,
-        }),
-      ),
-  );
-
-  server.registerTool(
-    "agent_wallet_settle_ledger_transfer",
-    {
-      description:
-        "Backend-only settlement for ledger escrow release: transfer real USDC between bound Agent Wallets.",
-      inputSchema: {
-        fromAgentId: z.string().optional().describe("Source agent id bound to a Circle wallet"),
-        fromAgentName: z.string().optional().describe("Source agent name bound to a Circle wallet"),
-        fromCircleWalletId: z.string().optional().describe("Explicit source Circle wallet id"),
-        toAgentId: z.string().optional().describe("Destination agent id bound to a wallet address"),
-        toAgentName: z.string().optional().describe("Destination agent name bound to a wallet address"),
-        toAddress: z.string().optional().describe("Explicit destination wallet address"),
-        amountAtomic: z.string().describe("USDC amount in atomic units"),
-        refId: z.string().optional().describe("Ledger escrow or settlement reference id"),
-      },
-    },
-    async (args) =>
-      runTool(() =>
-        runtime.agentWalletService.transfer({
-          ...args,
-          asset: "USDC",
-        }),
-      ),
-  );
 
   server.registerTool(
     "chain_get_wallet_state",

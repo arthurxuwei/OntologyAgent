@@ -1,8 +1,23 @@
 {
   "name": "agent-wallet",
-  "enabled": false,
-  "description": "Create and manage local Agent Wallet records backed by chain MCP wallet creation.",
+  "enabled": true,
+  "description": "Create and manage local Agent Wallet records backed by the Circle MCP service.",
   "instructions": "instructions.md",
-  "mcpServers": {},
-  "hiddenTools": {}
+  "mcpServers": {
+    "circle": {
+      "url": "http://circle-mcp:8093/mcp/",
+      "tools": [
+        "agent_wallet_get_or_create",
+        "agent_wallet_status"
+      ]
+    }
+  },
+  "hiddenTools": {
+    "circle": [
+      "agent_wallet_import_circle_wallets",
+      "agent_wallet_init",
+      "agent_wallet_settle_ledger_transfer",
+      "agent_wallet_transaction_status"
+    ]
+  }
 }

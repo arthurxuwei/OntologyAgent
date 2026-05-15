@@ -3,7 +3,8 @@
 当前仓库由三条能力线组成：
 
 - `agent`：Python Agent 本体，负责交互式会话、tool orchestration，以及对子 Agent 的管理
-- `chain`：TypeScript 链上 MCP skill provider，负责钱包、执行、UserOperation 和 x402 buyer flow
+- `chain`：TypeScript 链上 MCP skill provider，负责直接链上执行、UserOperation、交易状态和 x402 buyer flow
+- `circle`：独立 Circle MCP skill provider，负责 Agent Wallet 生命周期、Circle 钱包状态和 ledger release 的真实结算
 - `ledger`：独立链下账本服务，负责 Agent Wallet 内部余额、Escrow 锁款、放款、退款和流水记录
 
 另外还有一个仅用于本地测试的辅助服务：
@@ -33,6 +34,7 @@ docker compose up -d --build
 - `x402-seller` 演示资源：`GET http://localhost:8001/x402/demo-resource`
 - `x402-seller` Circle Nanopayments 演示资源：`GET http://localhost:8001/x402/agent-services/research-summary/nanopayments`
 - `chain` MCP：`http://localhost:8091/mcp/`
+- `circle` MCP：`http://localhost:8093/mcp/`
 
 ## Worktree 注意事项
 
@@ -65,6 +67,7 @@ docker compose --env-file "$(dirname "$(git rev-parse --git-common-dir)")/.env" 
 - `agent` 是 agent 本体，不承载 seller resource
 - `ledger` 是独立链下账本服务，不属于 `agent` 或 `chain` 进程
 - 链上动作只能通过 `chain` MCP tools 完成
+- Circle Agent Wallet 生命周期和 Circle 转账结算只能通过 `circle` MCP tools 完成
 - `chain` 不再提供 Fastify HTTP 业务接口
 - 撮合型 A2A 的 Escrow/余额状态应落在 `ledger`，而不是用 x402 或链上交易直接承担
 
@@ -90,6 +93,9 @@ docker compose --env-file "$(dirname "$(git rev-parse --git-common-dir)")/.env" 
   - `chain_submit_execution`
   - `chain_submit_user_operation`
   - `chain_x402_fetch`
+- `circle` MCP tools
+  - `agent_wallet_get_or_create`
+  - `agent_wallet_status`
 
 ### Offchain Ledger Service（V1）
 
@@ -457,11 +463,17 @@ PRIVATE_KEY=0x... \
 - `X402_BUYER_PRIVATE_KEY`：x402 buyer 专用私钥；为空时回退到 `PRIVATE_KEY`
 - `X402_USDC_SINGLE_CAP`：x402 单笔 USDC 上限，默认 `1.0`
 - `X402_USDC_DAILY_CAP`：x402 每日 USDC 上限，默认 `2.0`
+
+### circle
+
+- `CIRCLE_MCP_PORT`：circle MCP 端口，默认 `8093`
+- `AGENT_WALLET_STATE_PATH`：Agent Wallet 本地 demo 状态文件，Docker 默认 `/app/data/agent_wallet_state.json`
 - `CIRCLE_API_KEY`：Circle sandbox API key；`CHAIN_MOCK=false` 且创建真实 Agent Wallet 时需要
 - `CIRCLE_ENTITY_SECRET`：Circle entity secret；用于按请求生成 entity secret ciphertext
 - `CIRCLE_ENTITY_SECRET_CIPHERTEXT`：兼容旧配置，仅用于本地 mock/迁移场景；真实 Circle 请求会要求 `CIRCLE_ENTITY_SECRET`
 - `CIRCLE_WALLET_SET_ID`：已有 Circle wallet set id；为空时由 Circle wallet service 创建/使用默认流程
 - `CIRCLE_BASE_URL`：Circle Web3 Services base URL，默认 `https://api.circle.com/v1/w3s`
+- `CIRCLE_USDC_TOKEN_ID`：Circle USDC token id；真实 Circle transfer 时使用
 
 ### ledger
 
@@ -473,6 +485,8 @@ PRIVATE_KEY=0x... \
 - `COINBASE_ONRAMP_API_BASE_URL`：Coinbase API base URL，默认 `https://api.developer.coinbase.com`
 - `COINBASE_ONRAMP_TOKEN_PATH`：Coinbase Onramp session token path，默认 `/onramp/v1/token`
 - `COINBASE_ONRAMP_HOSTED_URL`：Coinbase hosted onramp URL，默认 `https://pay.coinbase.com/buy/select-asset`
+- `LEDGER_CHAIN_MCP_URL`：ledger 链上审计记录使用的 chain MCP 地址，默认 `http://chain-mcp:8091/mcp/`
+- `LEDGER_SETTLEMENT_MCP_URL`：ledger release 真实结算使用的 Circle MCP 地址，默认 `http://circle-mcp:8093/mcp/`
 
 ## Agent Wallet MVP x402 Demo
 
@@ -553,7 +567,7 @@ curl -X POST http://localhost:8000/agent-wallet/reset
 - 首次访问会返回 `402 Payment Required`
 - `accepts` 同时包含标准 x402 `exact` 付款项和 Circle Gateway `GatewayWalletBatched` 付款项
 - seller 会按 buyer 在 `PAYMENT-SIGNATURE.accepted` 中选择的付款项执行 verify / settle，而不是固定使用第一项
-- buyer 可在 `chain_x402_fetch` / `agent_wallet_call_x402_service` 中传 `paymentPreference: "circle-gateway"`，优先选择 `GatewayWalletBatched`
+- buyer 可在 `chain_x402_fetch` 中传 `paymentPreference: "circle-gateway"`，优先选择 `GatewayWalletBatched`
 - buyer 成功重试后，返回 `research-summary-nanopayments` 业务 JSON，并带 `PAYMENT-RESPONSE`
 
 在 `CHAIN_MOCK=true` 的本地回归场景下，脚本会把 facilitator 切到独立的 `x402-mock` 服务，而不是 `agent` 本体。

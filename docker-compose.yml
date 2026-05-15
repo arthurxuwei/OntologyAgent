@@ -18,6 +18,7 @@ services:
     restart: unless-stopped
     depends_on:
       - chain
+      - circle
       - ledger
 
   ledger:
@@ -41,6 +42,7 @@ services:
       LEDGER_CHAIN_RECORDER_ADDRESS: ${LEDGER_CHAIN_RECORDER_ADDRESS:-0x000000000000000000000000000000000000dEaD}
       LEDGER_SETTLEMENT_ENABLED: ${LEDGER_SETTLEMENT_ENABLED:-false}
       LEDGER_SETTLEMENT_REQUIRE_SUCCESS: ${LEDGER_SETTLEMENT_REQUIRE_SUCCESS:-false}
+      LEDGER_SETTLEMENT_MCP_URL: ${LEDGER_SETTLEMENT_MCP_URL:-http://circle-mcp:8093/mcp/}
       LEDGER_SETTLEMENT_TIMEOUT_SECONDS: ${LEDGER_SETTLEMENT_TIMEOUT_SECONDS:-60}
     volumes:
       - ./ledger/data:/app/data
@@ -70,6 +72,25 @@ services:
       X402_USDC_ASSET_ADDRESS: ${X402_USDC_ASSET_ADDRESS:-0x036CbD53842c5426634e7929541eC2318f3dCF7e}
       X402_USDC_SINGLE_CAP: ${X402_USDC_SINGLE_CAP:-1.0}
       X402_USDC_DAILY_CAP: ${X402_USDC_DAILY_CAP:-2.0}
+    networks:
+      default:
+        aliases:
+          - chain-mcp
+    restart: unless-stopped
+
+  circle:
+    build:
+      context: ./chain
+    container_name: circle
+    command: npm run start:circle
+    ports:
+      - "8093:8093"
+    environment:
+      CIRCLE_MCP_PORT: ${CIRCLE_MCP_PORT:-8093}
+      CHAIN_MOCK: ${CHAIN_MOCK:-false}
+      CHAIN_MOCK_BALANCE_ETH: ${CHAIN_MOCK_BALANCE_ETH:-1.0}
+      CHAIN_MOCK_USDC_BALANCE: ${CHAIN_MOCK_USDC_BALANCE:-0}
+      X402_USDC_ASSET_ADDRESS: ${X402_USDC_ASSET_ADDRESS:-0x036CbD53842c5426634e7929541eC2318f3dCF7e}
       CIRCLE_API_KEY: ${CIRCLE_API_KEY:-}
       CIRCLE_ENTITY_SECRET: ${CIRCLE_ENTITY_SECRET:-}
       CIRCLE_ENTITY_SECRET_CIPHERTEXT: ${CIRCLE_ENTITY_SECRET_CIPHERTEXT:-}
@@ -82,7 +103,7 @@ services:
     networks:
       default:
         aliases:
-          - chain-mcp
+          - circle-mcp
     restart: unless-stopped
 
   x402-seller:

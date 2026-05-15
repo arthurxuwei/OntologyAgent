@@ -10,7 +10,8 @@
 - Ledger service build: `docker compose build ledger`
 
 ## Critical Architecture Notes
-- Chain actions ONLY via chain MCP tools (signing, execution, UserOperations, x402 fetch)
+- Direct chain actions ONLY via chain MCP tools (signing, execution, UserOperations, x402 fetch)
+- Circle Agent Wallet lifecycle and Circle settlement ONLY via circle MCP tools
 - Offchain balances and Escrow state live in the standalone `ledger` service, not in `agent` or `chain`
 - Any payment, x402 call, chain transfer, escrow lock, release, or refund MUST call route_payment_intent first
 - After routing, use only the returned allowedTools; if the router returns needs_clarification, ask the user before paying
@@ -23,6 +24,7 @@
 ## Key Environment Variables
 - Agent: OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_ENDPOINT, BRAIN_AGENT_MODEL
 - Chain: PRIVATE_KEY, RPC_URL, CHAIN_ID, CHAIN_MOCK
+- Circle: CIRCLE_API_KEY, CIRCLE_ENTITY_SECRET, CIRCLE_WALLET_SET_ID, CIRCLE_USDC_TOKEN_ID
 - Ledger: LEDGER_STATE_PATH
 
 ## Testing & Verification

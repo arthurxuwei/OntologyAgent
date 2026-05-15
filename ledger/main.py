@@ -40,6 +40,7 @@ DEFAULT_COINBASE_API_BASE_URL = "https://api.developer.coinbase.com"
 DEFAULT_COINBASE_TOKEN_PATH = "/onramp/v1/token"
 DEFAULT_COINBASE_HOSTED_URL = "https://pay.coinbase.com/buy/select-asset"
 DEFAULT_CHAIN_MCP_URL = "http://chain-mcp:8091/mcp/"
+DEFAULT_SETTLEMENT_MCP_URL = "http://circle-mcp:8093/mcp/"
 DEFAULT_CHAIN_RECORDER_ADDRESS = "0x000000000000000000000000000000000000dEaD"
 LEDGER_CONSOLE_PATH = Path(__file__).resolve().parent / "web" / "index.html"
 
@@ -543,12 +544,12 @@ class LedgerSettlementClient:
         self,
         *,
         enabled: bool,
-        chain_mcp_url: str,
+        settlement_mcp_url: str,
         timeout_seconds: float,
         require_success: bool,
     ) -> None:
         self.enabled = enabled
-        self.chain_mcp_url = chain_mcp_url
+        self.settlement_mcp_url = settlement_mcp_url
         self.timeout_seconds = timeout_seconds
         self.require_success = require_success
 
@@ -560,7 +561,7 @@ class LedgerSettlementClient:
         base_record = {
             "recordId": f"settle_{uuid.uuid4().hex}",
             "eventType": "escrow_release",
-            "chainMcpUrl": self.chain_mcp_url,
+            "chainMcpUrl": self.settlement_mcp_url,
             "escrowId": escrow.escrowId,
             "fromAgentId": escrow.buyerAgentId,
             "toAgentId": escrow.sellerAgentId,
@@ -616,7 +617,7 @@ class LedgerSettlementClient:
         }
         async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
             response = await client.post(
-                self.chain_mcp_url,
+                self.settlement_mcp_url,
                 headers={
                     "Content-Type": "application/json",
                     "Accept": "application/json, text/event-stream",
@@ -625,19 +626,19 @@ class LedgerSettlementClient:
             )
         if response.status_code >= 400:
             raise RuntimeError(
-                f"chain MCP settlement request failed: HTTP {response.status_code} {response.text}"
+                f"settlement MCP request failed: HTTP {response.status_code} {response.text}"
             )
         payload = response.json()
         if not isinstance(payload, dict):
-            raise RuntimeError("chain MCP settlement response was not a JSON object")
+            raise RuntimeError("settlement MCP response was not a JSON object")
         if "error" in payload:
-            raise RuntimeError(f"chain MCP settlement returned error: {payload['error']}")
+            raise RuntimeError(f"settlement MCP returned error: {payload['error']}")
         result = payload.get("result")
         if isinstance(result, dict) and result.get("isError") is True:
             content = self._extract_tool_content(payload)
             if content.get("error") is not None:
                 raise RuntimeError(json.dumps(content["error"], sort_keys=True))
-            raise RuntimeError("chain MCP settlement tool returned isError=true")
+            raise RuntimeError("settlement MCP tool returned isError=true")
         return payload
 
     @staticmethod
@@ -1138,7 +1139,7 @@ def get_ledger_settlement_client() -> LedgerSettlementClient:
     return LedgerSettlementClient(
         enabled=os.getenv("LEDGER_SETTLEMENT_ENABLED", "false").lower()
         in {"1", "true", "yes", "on"},
-        chain_mcp_url=os.getenv("LEDGER_CHAIN_MCP_URL", DEFAULT_CHAIN_MCP_URL),
+        settlement_mcp_url=os.getenv("LEDGER_SETTLEMENT_MCP_URL", DEFAULT_SETTLEMENT_MCP_URL),
         timeout_seconds=float(os.getenv("LEDGER_SETTLEMENT_TIMEOUT_SECONDS", "60")),
         require_success=os.getenv("LEDGER_SETTLEMENT_REQUIRE_SUCCESS", "false").lower()
         in {"1", "true", "yes", "on"},

@@ -61,13 +61,6 @@ test("chain MCP exposes the expected tool names", async () => {
     const response = await client.listTools();
     const toolNames = response.tools.map((tool) => tool.name).sort();
     assert.deepEqual(toolNames, [
-      "agent_wallet_call_x402_service",
-      "agent_wallet_get_or_create",
-      "agent_wallet_import_circle_wallets",
-      "agent_wallet_init",
-      "agent_wallet_register_x402_service",
-      "agent_wallet_settle_ledger_transfer",
-      "agent_wallet_status",
       "chain_get_transaction_receipt",
       "chain_get_user_operation_status",
       "chain_get_wallet_state",
@@ -77,20 +70,6 @@ test("chain MCP exposes the expected tool names", async () => {
       "chain_x402_fetch",
     ]);
   });
-});
-
-test("chain runtime wires live Circle wallet creation with a per-request ciphertext factory", () => {
-  const runtime = createChainRuntime(
-    loadConfig({
-      PRIVATE_KEY: "0x59c6995e998f97a5a0044966f0945382d7fb8f3c2b5b2dd8f04c208dbb0f4f8d",
-      CIRCLE_API_KEY: "circle-api-key",
-      CIRCLE_WALLET_SET_ID: "circle-wallet-set",
-      CIRCLE_ENTITY_SECRET: "entity-secret",
-    }),
-  );
-
-  const circleWalletService = (runtime.agentWalletService as any).circleWalletService;
-  assert.equal(typeof circleWalletService.createEntitySecretCiphertext, "function");
 });
 
 test("chain_get_wallet_state returns the configured mock wallet balance", async () => {

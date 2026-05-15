@@ -4,9 +4,10 @@ This directory contains OntologyAgent capabilities packaged in the same style as
 
 - `skills/ontology-ledger/SKILL.md` teaches ZeroClaw how to use the local ledger and escrow service.
 - `skills/ontology-chain/SKILL.md` teaches ZeroClaw how to use the local chain MCP service.
+- `skills/ontology-circle/SKILL.md` teaches ZeroClaw how to use the local Circle Agent Wallet MCP service.
 - `skills/ontology-a2a-service-trade/SKILL.md` teaches ZeroClaw how to coordinate EigenFlux
   messages with ledger escrow for autonomous buyer/seller service trades.
-- `bin/ontology` is the CLI command ZeroClaw should call for ledger and chain operations.
+- `bin/ontology` is the CLI command ZeroClaw should call for ledger, chain, and Circle operations.
 
 Install into the local runtime workspace:
 
@@ -46,6 +47,8 @@ ontology ledger health
 ontology ledger state
 ontology chain health
 ontology chain wallet-state
+ontology circle health
+ontology circle tools
 ```
 
 For write or paid actions, ZeroClaw should first run `ontology ledger route '<json-intent>'`
