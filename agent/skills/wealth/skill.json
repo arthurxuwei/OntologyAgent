@@ -1,8 +1,0 @@
-{
-  "name": "wealth",
-  "enabled": false,
-  "description": "Manage the local wealth guard loop and runtime risk settings.",
-  "instructions": "instructions.md",
-  "mcpServers": {},
-  "hiddenTools": {}
-}
