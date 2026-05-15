@@ -279,39 +279,9 @@ http://localhost:8000/
 AGENT_BASE_URL=http://localhost:8000 ./scripts/agent-chat.sh
 ```
 
-### Chain MCP 演示
+### x402 Nanopayments 集成验证
 
-```bash
-./scripts/demo-chain-mcp.sh
-```
-
-这个脚本会：
-
-- 启动完整 compose 栈
-- 等待 `agent`、`chain` 和 `x402-seller` 就绪
-- 发现 chain MCP tools
-- 依次调用：
-  - `chain_sign_transfer`
-  - `chain_x402_fetch`
-  - `chain_submit_execution`
-  - `chain_submit_user_operation`
-
-如需本地 mock 验证：
-
-```bash
-CHAIN_MOCK=true ./scripts/demo-chain-mcp.sh
-```
-
-如需走 Circle Nanopayments 风格的 buyer 选择逻辑：
-
-```bash
-CHAIN_MOCK=true \
-DEMO_X402_RESOURCE_PATH=/x402/agent-services/research-summary/nanopayments \
-DEMO_X402_PAYMENT_PREFERENCE=circle-gateway \
-./scripts/demo-chain-mcp.sh
-```
-
-也可以跑 buyer/seller/facilitator 集成用例。先让 compose 里的 `x402-seller`
+可以跑 buyer/seller/facilitator 集成用例。先让 compose 里的 `x402-seller`
 使用 mock facilitator，然后在 `chain` 容器里执行：
 
 ```bash
@@ -365,16 +335,6 @@ docker run --rm --network ontologyagent_default \
 - `self_transfer`：检查 seller `payTo` 是否等于 buyer 地址
 - `authorization_validity_too_short`：检查 seller 是否广告至少 7 天以上的 Gateway `maxTimeoutSeconds`
 - verify / settle 失败：检查 buyer 签名格式、Gateway balance、facilitator 是否支持 Circle Gateway
-
-如需 live 测试，至少准备：
-
-```bash
-PRIVATE_KEY=0x... \
-DEMO_SIGN_TRANSFER_TO=0x... \
-DEMO_X402_PAYMENT_TO=0x... \
-X402_PAY_TO=0x... \
-./scripts/demo-chain-mcp.sh
-```
 
 ### Simplescraper live x402 验证
 

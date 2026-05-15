@@ -4,7 +4,6 @@
 - Start all services: `docker compose up -d --build`
 - Worktree docker compose: `docker compose --env-file "$(dirname "$(git rev-parse --git-common-dir)")/.env" up -d`
 - Agent chat: `./scripts/agent-chat.sh`
-- Chain MCP demo: `./scripts/demo-chain-mcp.sh`
 - Live x402 test: `PRIVATE_KEY=0x... ./scripts/live-x402-simplescraper.sh`
 - Ledger tests: `cd ledger && python -m unittest discover -s tests`
 - Ledger service build: `docker compose build ledger`
