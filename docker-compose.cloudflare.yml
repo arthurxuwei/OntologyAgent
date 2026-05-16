@@ -5,6 +5,5 @@ services:
     command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN:?Set CLOUDFLARE_TUNNEL_TOKEN}
     depends_on:
       - ledger
-      - chain
       - circle
     restart: unless-stopped

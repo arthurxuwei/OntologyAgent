@@ -104,7 +104,7 @@ jobs:
             --tag "${image_prefix}/ledger:latest" \
             ./ledger
 
-      - name: Build chain image
+      - name: Build chain and circle runtime image
         run: |
           image_prefix="${{ steps.image-meta.outputs.image-prefix }}"
           image_tag="${{ steps.image-meta.outputs.image-tag }}"
@@ -186,6 +186,6 @@ jobs:
               compose_files="${compose_files} -f docker-compose.cloudflare.yml"
             fi
             docker compose --env-file .env --env-file .env.deploy ${compose_files} pull
-            docker compose --env-file .env --env-file .env.deploy ${compose_files} up -d
+            docker compose --env-file .env --env-file .env.deploy ${compose_files} up -d --remove-orphans
             docker compose --env-file .env --env-file .env.deploy ${compose_files} ps
           '
