@@ -7,9 +7,7 @@ on:
     paths:
       - ".github/workflows/deploy-core-services.yml"
       - "docker-compose.core.yml"
-      - "docker-compose.caddy.yml"
       - "docker-compose.cloudflare.yml"
-      - "Caddyfile.core"
       - "ledger/**"
       - "chain/**"
   workflow_dispatch:
@@ -153,13 +151,11 @@ jobs:
           test -n "${LIGHTHOUSE_USER}"
           remote="${LIGHTHOUSE_USER}@${LIGHTHOUSE_HOST}"
           ssh -i ~/.ssh/lighthouse_key "${remote}" '
-            sudo install -d -o "$USER" -g "$USER" /opt/ontologyagent /opt/ontologyagent/data /opt/ontologyagent/data/ledger /opt/ontologyagent/data/chain /opt/ontologyagent/data/caddy /opt/ontologyagent/data/caddy/data /opt/ontologyagent/data/caddy/config
+            sudo install -d -o "$USER" -g "$USER" /opt/ontologyagent /opt/ontologyagent/data /opt/ontologyagent/data/ledger /opt/ontologyagent/data/chain
             touch /opt/ontologyagent/.env
           '
           scp -i ~/.ssh/lighthouse_key docker-compose.core.yml "${remote}:/opt/ontologyagent/docker-compose.core.yml"
-          scp -i ~/.ssh/lighthouse_key docker-compose.caddy.yml "${remote}:/opt/ontologyagent/docker-compose.caddy.yml"
           scp -i ~/.ssh/lighthouse_key docker-compose.cloudflare.yml "${remote}:/opt/ontologyagent/docker-compose.cloudflare.yml"
-          scp -i ~/.ssh/lighthouse_key Caddyfile.core "${remote}:/opt/ontologyagent/Caddyfile.core"
 
       - name: Update deployment env
         env:
@@ -188,7 +184,7 @@ jobs:
           fi
           ssh -i ~/.ssh/lighthouse_key "${remote}" '
             cd /opt/ontologyagent
-            compose_files="-f docker-compose.core.yml -f docker-compose.caddy.yml"
+            compose_files="-f docker-compose.core.yml"
             if grep -q "^CLOUDFLARE_TUNNEL_TOKEN=." .env.deploy; then
               compose_files="${compose_files} -f docker-compose.cloudflare.yml"
             fi
