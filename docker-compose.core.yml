@@ -17,8 +17,6 @@ services:
       COINBASE_API_PRIVATE_KEY: ${COINBASE_API_PRIVATE_KEY:-}
       LEDGER_CHAIN_RECORD_ENABLED: ${LEDGER_CHAIN_RECORD_ENABLED:-false}
       LEDGER_CHAIN_RECORD_REQUIRE_SUCCESS: ${LEDGER_CHAIN_RECORD_REQUIRE_SUCCESS:-false}
-      LEDGER_CHAIN_MCP_URL: ${LEDGER_CHAIN_MCP_URL:-http://chain-mcp:8091/mcp/}
-      LEDGER_CHAIN_RECORDER_ADDRESS: ${LEDGER_CHAIN_RECORDER_ADDRESS:-0x000000000000000000000000000000000000dEaD}
       LEDGER_SETTLEMENT_ENABLED: ${LEDGER_SETTLEMENT_ENABLED:-false}
       LEDGER_SETTLEMENT_REQUIRE_SUCCESS: ${LEDGER_SETTLEMENT_REQUIRE_SUCCESS:-false}
       LEDGER_SETTLEMENT_MCP_URL: ${LEDGER_SETTLEMENT_MCP_URL:-http://circle-mcp:8093/mcp/}
@@ -26,40 +24,7 @@ services:
     volumes:
       - ${ONTOLOGY_DATA_ROOT:-/opt/ontologyagent/data}/ledger:/app/data
     depends_on:
-      - chain
       - circle
-    restart: unless-stopped
-
-  chain:
-    image: ${GHCR_IMAGE_PREFIX:?Set GHCR_IMAGE_PREFIX}/chain:${IMAGE_TAG:-latest}
-    container_name: ontologyagent-chain
-    ports:
-      - "8091:8091"
-    environment:
-      CHAIN_MCP_PORT: ${CHAIN_MCP_PORT:-8091}
-      PRIVATE_KEY: ${PRIVATE_KEY:-}
-      RPC_URL: ${RPC_URL:-https://base-sepolia-rpc.publicnode.com}
-      CHAIN_ID: ${CHAIN_ID:-84532}
-      DAILY_LIMIT: ${DAILY_LIMIT:-2.0}
-      SINGLE_TX_CAP: ${SINGLE_TX_CAP:-1.0}
-      WHITELISTED_RECIPIENTS: ${WHITELISTED_RECIPIENTS:-}
-      CHAIN_MOCK: ${CHAIN_MOCK:-false}
-      CHAIN_MOCK_BALANCE_ETH: ${CHAIN_MOCK_BALANCE_ETH:-1.0}
-      BUNDLER_RPC_URL: ${BUNDLER_RPC_URL:-}
-      ENTRY_POINT_ADDRESS: ${ENTRY_POINT_ADDRESS:-0x0576a174D229E3cFA37253523E645A78A0C91B57}
-      X402_FACILITATOR_URL: ${X402_FACILITATOR_URL:-https://x402.org/facilitator}
-      X402_NETWORK: ${X402_NETWORK:-eip155:84532}
-      X402_BUYER_PRIVATE_KEY: ${X402_BUYER_PRIVATE_KEY:-}
-      X402_USDC_ASSET_ADDRESS: ${X402_USDC_ASSET_ADDRESS:-0x036CbD53842c5426634e7929541eC2318f3dCF7e}
-      X402_USDC_SINGLE_CAP: ${X402_USDC_SINGLE_CAP:-1.0}
-      X402_USDC_DAILY_CAP: ${X402_USDC_DAILY_CAP:-2.0}
-      AGENT_WALLET_STATE_PATH: ${AGENT_WALLET_STATE_PATH:-/app/data/agent_wallet_state.json}
-    volumes:
-      - ${ONTOLOGY_DATA_ROOT:-/opt/ontologyagent/data}/chain:/app/data
-    networks:
-      default:
-        aliases:
-          - chain-mcp
     restart: unless-stopped
 
   circle:
