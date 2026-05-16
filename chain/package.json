@@ -7,7 +7,7 @@
     "start": "tsx src/index.ts",
     "start:circle": "tsx src/index-circle.ts",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test test/**/*.test.ts"
+    "test": "node --import tsx --test test/*.test.ts"
   },
   "dependencies": {
     "@circle-fin/developer-controlled-wallets": "^10.3.0",
