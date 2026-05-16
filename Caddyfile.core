@@ -1,0 +1,7 @@
+ledger.curawealth.ai {
+	reverse_proxy ledger:8092
+}
+
+circle.curawealth.ai {
+	reverse_proxy circle:8093
+}
