@@ -180,7 +180,7 @@ jobs:
         run: |
           remote="${LIGHTHOUSE_USER}@${LIGHTHOUSE_HOST}"
           if [ -n "${GHCR_PAT:-}" ]; then
-            printf '%s' "${GHCR_PAT}" | ssh -i ~/.ssh/lighthouse_key "${remote}" 'docker login ghcr.io -u github-actions --password-stdin'
+            printf '%s' "${GHCR_PAT}" | ssh -i ~/.ssh/lighthouse_key "${remote}" 'sudo docker login ghcr.io -u github-actions --password-stdin'
           fi
           ssh -i ~/.ssh/lighthouse_key "${remote}" '
             cd /opt/ontologyagent
@@ -188,7 +188,7 @@ jobs:
             if grep -q "^CLOUDFLARE_TUNNEL_TOKEN=." .env.deploy; then
               compose_files="${compose_files} -f docker-compose.cloudflare.yml"
             fi
-            docker compose --env-file .env --env-file .env.deploy ${compose_files} pull
-            docker compose --env-file .env --env-file .env.deploy ${compose_files} up -d --remove-orphans
-            docker compose --env-file .env --env-file .env.deploy ${compose_files} ps
+            sudo docker compose --env-file .env --env-file .env.deploy ${compose_files} pull
+            sudo docker compose --env-file .env --env-file .env.deploy ${compose_files} up -d --remove-orphans
+            sudo docker compose --env-file .env --env-file .env.deploy ${compose_files} ps
           '
