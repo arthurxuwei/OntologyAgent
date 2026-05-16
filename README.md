@@ -1,4 +1,4 @@
-# OntologyAgent
+# Chief Core Services
 
 当前仓库由三条能力线组成：
 
@@ -291,11 +291,11 @@ X402_PAY_TO=0x2222222222222222222222222222222222222222 \
 X402_FACILITATOR_URL=http://x402-mock:8000/x402/facilitator \
 docker compose up -d --build x402-mock x402-seller
 
-docker run --rm --network ontologyagent_default \
+docker run --rm --network chief_default \
   -v "$PWD/chain:/workspace" \
   -w /workspace \
   -e RUN_X402_NANOPAYMENTS_INTEGRATION=true \
-  ontologyagent-chain \
+  chief-chain \
   node --import tsx --test test/x402-nanopayments.integration.test.ts
 ```
 
@@ -316,7 +316,7 @@ X402_PAY_TO=0x... \
 X402_FACILITATOR_URL="${X402_LIVE_FACILITATOR_URL:-https://gateway-api-testnet.circle.com}" \
 docker compose up -d --build x402-seller
 
-docker run --rm --network ontologyagent_default \
+docker run --rm --network chief_default \
   -v "$PWD/chain:/workspace" \
   -w /workspace \
   -e RUN_X402_NANOPAYMENTS_LIVE=true \
@@ -324,7 +324,7 @@ docker run --rm --network ontologyagent_default \
   -e X402_LIVE_PAY_TO=0x... \
   -e X402_LIVE_FACILITATOR_URL="${X402_LIVE_FACILITATOR_URL:-https://gateway-api-testnet.circle.com}" \
   -e RPC_URL="${RPC_URL:-https://base-sepolia-rpc.publicnode.com}" \
-  ontologyagent-chain \
+  chief-chain \
   node --import tsx --test test/x402-nanopayments.integration.test.ts
 ```
 

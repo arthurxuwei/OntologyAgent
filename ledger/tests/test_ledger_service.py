@@ -117,7 +117,7 @@ class LedgerServiceTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         html = response.text
-        self.assertIn("OntologyAgent Ledger", html)
+        self.assertIn("Chief Ledger", html)
         self.assertIn('id="ledger-state"', html)
         self.assertIn('id="credit-form"', html)
         self.assertIn('id="onramp-form"', html)

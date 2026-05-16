@@ -15,7 +15,7 @@ from x402_seller import (
     default_gateway_verifying_contract,
 )
 
-app = FastAPI(title="OntologyAgent x402-seller")
+app = FastAPI(title="Chief x402-seller")
 
 
 @lru_cache(maxsize=1)
@@ -49,7 +49,7 @@ def health() -> dict[str, Any]:
         or "",
     )
     return {
-        "service": "OntologyAgent-x402-seller",
+        "service": "chief-x402-seller",
         "status": "ok",
         "x402Network": os.getenv("X402_NETWORK", BASE_SEPOLIA_NETWORK),
         "x402PayToConfigured": bool(os.getenv("X402_PAY_TO")),

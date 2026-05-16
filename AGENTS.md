@@ -1,4 +1,4 @@
-# OntologyAgent Agent Guidelines
+# Agent Guidelines
 
 ## Essential Commands
 - Start all services: `docker compose up -d --build`

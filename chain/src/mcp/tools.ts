@@ -67,7 +67,7 @@ export function createChainRuntime(
 
 export function createChainMcpServer(runtime: ChainRuntime): McpServer {
   const server = new McpServer({
-    name: "ontologyagent-chain",
+    name: "chief-chain",
     version: "1.0.0",
   });
 

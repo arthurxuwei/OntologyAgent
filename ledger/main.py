@@ -44,7 +44,7 @@ DEFAULT_SETTLEMENT_MCP_URL = "http://circle-mcp:8093/mcp/"
 DEFAULT_CHAIN_RECORDER_ADDRESS = "0x000000000000000000000000000000000000dEaD"
 LEDGER_CONSOLE_PATH = Path(__file__).resolve().parent / "web" / "index.html"
 
-app = FastAPI(title="OntologyAgent offchain ledger")
+app = FastAPI(title="Chief offchain ledger")
 
 
 def now_iso() -> str:
@@ -1154,7 +1154,7 @@ def ledger_chain_payload(
     extra: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
-        "kind": "ontology-ledger-event",
+        "kind": "chief-ledger-event",
         "eventType": event_type,
         "entryIds": [entry.entryId for entry in entries],
         "entries": [
@@ -1248,7 +1248,7 @@ def http_error(error: Exception) -> HTTPException:
 
 @app.get("/health")
 def health() -> dict[str, Any]:
-    return {"service": "OntologyAgent-ledger", "status": "ok"}
+    return {"service": "chief-ledger", "status": "ok"}
 
 
 @app.get("/")

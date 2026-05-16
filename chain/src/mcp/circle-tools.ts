@@ -39,7 +39,7 @@ export function createCircleRuntime(
 
 export function createCircleMcpServer(runtime: CircleRuntime): McpServer {
   const server = new McpServer({
-    name: "ontologyagent-circle",
+    name: "chief-circle",
     version: "1.0.0",
   });
 

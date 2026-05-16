@@ -24,7 +24,7 @@ behind authentication, IP allowlists, a VPN, or an identity-aware proxy.
 Configure these repository secrets:
 
 - `LIGHTHOUSE_HOST`: public IP or hostname of the Tencent Lighthouse instance.
-- `LIGHTHOUSE_USER`: SSH user. Use a user that can write `/opt/ontologyagent`
+- `LIGHTHOUSE_USER`: SSH user. Use a user that can write `/opt/chief`
   and run Docker without an interactive sudo prompt.
 - `LIGHTHOUSE_SSH_KEY`: private SSH key for the deploy user.
 - `GHCR_PAT`: optional token for server-side `docker login ghcr.io`. This is
@@ -42,13 +42,13 @@ Install Docker and the Docker Compose plugin on the Lighthouse instance, then
 create the deployment directory:
 
 ```bash
-mkdir -p /opt/ontologyagent/data/ledger /opt/ontologyagent/data/chain
+mkdir -p /opt/chief/data/ledger /opt/chief/data/chain
 ```
 
-Create `/opt/ontologyagent/.env` on the server. Do not commit this file.
+Create `/opt/chief/.env` on the server. Do not commit this file.
 
 ```bash
-cat > /opt/ontologyagent/.env <<'EOF'
+cat > /opt/chief/.env <<'EOF'
 CHAIN_MOCK=true
 
 CIRCLE_API_KEY=
@@ -84,12 +84,12 @@ tccli lighthouse CreateFirewallRules --region <region> \
   --FirewallRules.0.Port 8092 \
   --FirewallRules.0.CidrBlock 0.0.0.0/0 \
   --FirewallRules.0.Action ACCEPT \
-  --FirewallRules.0.FirewallRuleDescription ontology-ledger \
+  --FirewallRules.0.FirewallRuleDescription chief-ledger \
   --FirewallRules.1.Protocol TCP \
   --FirewallRules.1.Port 8093 \
   --FirewallRules.1.CidrBlock 0.0.0.0/0 \
   --FirewallRules.1.Action ACCEPT \
-  --FirewallRules.1.FirewallRuleDescription ontology-circle-mcp
+  --FirewallRules.1.FirewallRuleDescription chief-circle-mcp
 ```
 
 Keep `80` and `443` closed until a later Nginx/domain phase.
@@ -106,7 +106,7 @@ Trust, then add public hostnames that target the Docker service names:
 Copy the tunnel token into the GitHub repository secret
 `CLOUDFLARE_TUNNEL_TOKEN`. On the next deploy, the workflow copies
 `docker-compose.cloudflare.yml`, writes the token into
-`/opt/ontologyagent/.env.deploy`, and includes the `cloudflared` service in the
+`/opt/chief/.env.deploy`, and includes the `cloudflared` service in the
 Compose command.
 
 Once the Cloudflare hostnames respond, remove the naked public exposure from the
@@ -137,8 +137,8 @@ On push to `main`, `.github/workflows/deploy-core-services.yml`:
    chain and Circle MCP entrypoints, but only Circle is deployed for now.
 4. Pushes both images to GHCR with `<sha>` and `latest` tags.
 5. Copies `docker-compose.core.yml` and `docker-compose.cloudflare.yml` to
-   `/opt/ontologyagent`.
-6. Writes `/opt/ontologyagent/.env.deploy` with the image prefix and SHA tag.
+   `/opt/chief`.
+6. Writes `/opt/chief/.env.deploy` with the image prefix and SHA tag.
 7. Pulls and restarts the core services with Docker Compose. If
    `CLOUDFLARE_TUNNEL_TOKEN` is configured, it also starts `cloudflared`.
 
@@ -170,7 +170,7 @@ curl -fsS http://<lighthouse-ip>:8093/mcp/ \
 Verify persistence on the server:
 
 ```bash
-cd /opt/ontologyagent
+cd /opt/chief
 docker compose --env-file .env --env-file .env.deploy -f docker-compose.core.yml restart ledger
 curl -fsS http://127.0.0.1:8092/ledger/state
 ```
@@ -178,7 +178,7 @@ curl -fsS http://127.0.0.1:8092/ledger/state
 Inspect deployment state:
 
 ```bash
-cd /opt/ontologyagent
+cd /opt/chief
 docker compose --env-file .env --env-file .env.deploy -f docker-compose.core.yml ps
 docker compose --env-file .env --env-file .env.deploy -f docker-compose.core.yml logs --tail=100 ledger
 docker compose --env-file .env --env-file .env.deploy -f docker-compose.core.yml logs --tail=100 circle

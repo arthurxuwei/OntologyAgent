@@ -151,11 +151,11 @@ jobs:
           test -n "${LIGHTHOUSE_USER}"
           remote="${LIGHTHOUSE_USER}@${LIGHTHOUSE_HOST}"
           ssh -i ~/.ssh/lighthouse_key "${remote}" '
-            sudo install -d -o "$USER" -g "$USER" /opt/ontologyagent /opt/ontologyagent/data /opt/ontologyagent/data/ledger /opt/ontologyagent/data/chain
-            touch /opt/ontologyagent/.env
+            sudo install -d -o "$USER" -g "$USER" /opt/chief /opt/chief/data /opt/chief/data/ledger /opt/chief/data/chain
+            touch /opt/chief/.env
           '
-          scp -i ~/.ssh/lighthouse_key docker-compose.core.yml "${remote}:/opt/ontologyagent/docker-compose.core.yml"
-          scp -i ~/.ssh/lighthouse_key docker-compose.cloudflare.yml "${remote}:/opt/ontologyagent/docker-compose.cloudflare.yml"
+          scp -i ~/.ssh/lighthouse_key docker-compose.core.yml "${remote}:/opt/chief/docker-compose.core.yml"
+          scp -i ~/.ssh/lighthouse_key docker-compose.cloudflare.yml "${remote}:/opt/chief/docker-compose.cloudflare.yml"
 
       - name: Update deployment env
         env:
@@ -166,11 +166,11 @@ jobs:
           CLOUDFLARE_TUNNEL_TOKEN: ${{ secrets.CLOUDFLARE_TUNNEL_TOKEN }}
         run: |
           remote="${LIGHTHOUSE_USER}@${LIGHTHOUSE_HOST}"
-          printf 'GHCR_IMAGE_PREFIX=%s\nIMAGE_TAG=%s\nONTOLOGY_DATA_ROOT=/opt/ontologyagent/data\nCLOUDFLARE_TUNNEL_TOKEN=%s\n' \
+          printf 'GHCR_IMAGE_PREFIX=%s\nIMAGE_TAG=%s\nCHIEF_DATA_ROOT=/opt/chief/data\nCLOUDFLARE_TUNNEL_TOKEN=%s\n' \
             "${IMAGE_PREFIX}" \
             "${IMAGE_TAG}" \
             "${CLOUDFLARE_TUNNEL_TOKEN}" \
-            | ssh -i ~/.ssh/lighthouse_key "${remote}" 'cat > /opt/ontologyagent/.env.deploy'
+            | ssh -i ~/.ssh/lighthouse_key "${remote}" 'cat > /opt/chief/.env.deploy'
 
       - name: Pull and restart services
         env:
@@ -183,12 +183,15 @@ jobs:
             printf '%s' "${GHCR_PAT}" | ssh -i ~/.ssh/lighthouse_key "${remote}" 'sudo docker login ghcr.io -u github-actions --password-stdin'
           fi
           ssh -i ~/.ssh/lighthouse_key "${remote}" '
-            cd /opt/ontologyagent
+            cd /opt/chief
             compose_files="-f docker-compose.core.yml"
             if grep -q "^CLOUDFLARE_TUNNEL_TOKEN=." .env.deploy; then
               compose_files="${compose_files} -f docker-compose.cloudflare.yml"
             fi
             sudo docker compose --env-file .env --env-file .env.deploy ${compose_files} pull
+            sudo docker ps -q --filter publish=8092 | xargs -r sudo docker rm -f
+            sudo docker ps -q --filter publish=8093 | xargs -r sudo docker rm -f
+            sudo docker ps -aq --filter ancestor=cloudflare/cloudflared:latest | xargs -r sudo docker rm -f
             sudo docker compose --env-file .env --env-file .env.deploy ${compose_files} up -d --remove-orphans
             sudo docker compose --env-file .env --env-file .env.deploy ${compose_files} ps
           '

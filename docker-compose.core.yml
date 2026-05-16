@@ -1,9 +1,9 @@
-name: ontologyagent-core
+name: chief-core
 
 services:
   ledger:
     image: ${GHCR_IMAGE_PREFIX:?Set GHCR_IMAGE_PREFIX}/ledger:${IMAGE_TAG:-latest}
-    container_name: ontologyagent-ledger
+    container_name: chief-ledger
     ports:
       - "8092:8092"
     environment:
@@ -22,14 +22,14 @@ services:
       LEDGER_SETTLEMENT_MCP_URL: ${LEDGER_SETTLEMENT_MCP_URL:-http://circle-mcp:8093/mcp/}
       LEDGER_SETTLEMENT_TIMEOUT_SECONDS: ${LEDGER_SETTLEMENT_TIMEOUT_SECONDS:-60}
     volumes:
-      - ${ONTOLOGY_DATA_ROOT:-/opt/ontologyagent/data}/ledger:/app/data
+      - ${CHIEF_DATA_ROOT:-/opt/chief/data}/ledger:/app/data
     depends_on:
       - circle
     restart: unless-stopped
 
   circle:
     image: ${GHCR_IMAGE_PREFIX:?Set GHCR_IMAGE_PREFIX}/chain:${IMAGE_TAG:-latest}
-    container_name: ontologyagent-circle
+    container_name: chief-circle
     command: npm run start:circle
     ports:
       - "8093:8093"
@@ -47,7 +47,7 @@ services:
       CIRCLE_USDC_TOKEN_ID: ${CIRCLE_USDC_TOKEN_ID:-}
       AGENT_WALLET_STATE_PATH: ${AGENT_WALLET_STATE_PATH:-/app/data/agent_wallet_state.json}
     volumes:
-      - ${ONTOLOGY_DATA_ROOT:-/opt/ontologyagent/data}/chain:/app/data
+      - ${CHIEF_DATA_ROOT:-/opt/chief/data}/chain:/app/data
     networks:
       default:
         aliases:

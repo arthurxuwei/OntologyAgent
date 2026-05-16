@@ -1,7 +1,7 @@
 services:
   cloudflared:
     image: cloudflare/cloudflared:latest
-    container_name: ontologyagent-cloudflared
+    container_name: chief-cloudflared
     command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN:?Set CLOUDFLARE_TUNNEL_TOKEN}
     depends_on:
       - ledger

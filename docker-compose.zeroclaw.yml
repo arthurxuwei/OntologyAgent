@@ -1,3 +1,5 @@
+name: chief-zeroclaw
+
 services:
   zeroclaw:
     image: ghcr.io/zeroclaw-labs/zeroclaw:debian
@@ -12,13 +14,13 @@ services:
       ALL_PROXY: ${ALL_PROXY:-http://host.docker.internal:7897}
       NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,host.docker.internal}
       EIGENFLUX_HOME: /zeroclaw-data/workspace/.eigenflux
-      ONTOLOGY_LEDGER_URL: http://host.docker.internal:8092
-      ONTOLOGY_CHAIN_MCP_URL: http://host.docker.internal:8091/mcp/
+      CHIEF_LEDGER_URL: http://host.docker.internal:8092
+      CHIEF_CHAIN_MCP_URL: http://host.docker.internal:8091/mcp/
     volumes:
       - ./runtime/config:/zeroclaw-data/.zeroclaw
       - ./runtime/workspace:/zeroclaw-data/workspace
       - ./runtime/config/bin/eigenflux:/usr/local/bin/eigenflux:ro
-      - ./runtime/config/bin/ontology:/usr/local/bin/ontology:ro
+      - ./runtime/config/bin/chief:/usr/local/bin/chief:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
@@ -36,13 +38,13 @@ services:
       ALL_PROXY: ${ALL_PROXY:-http://host.docker.internal:7897}
       NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,host.docker.internal}
       EIGENFLUX_HOME: /zeroclaw-data/workspace/.eigenflux
-      ONTOLOGY_LEDGER_URL: http://host.docker.internal:8092
-      ONTOLOGY_CHAIN_MCP_URL: http://host.docker.internal:8091/mcp/
+      CHIEF_LEDGER_URL: http://host.docker.internal:8092
+      CHIEF_CHAIN_MCP_URL: http://host.docker.internal:8091/mcp/
     volumes:
       - ./runtime-peer/config:/zeroclaw-data/.zeroclaw
       - ./runtime-peer/workspace:/zeroclaw-data/workspace
       - ./runtime-peer/config/bin/eigenflux:/usr/local/bin/eigenflux:ro
-      - ./runtime-peer/config/bin/ontology:/usr/local/bin/ontology:ro
+      - ./runtime-peer/config/bin/chief:/usr/local/bin/chief:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped

@@ -178,7 +178,7 @@ test("AgentWalletService allows multiple agent bindings to share one wallet addr
       wallets: [],
       agentWalletBindings: [
         {
-          agentName: "ZeroClaw OntologyAgent",
+          agentName: "ZeroClaw Chief Agent",
           agentId: "312586087945994240",
           email: "xw007110@163.com",
           walletAddress: "0x3333333333333333333333333333333333333333",
@@ -210,7 +210,7 @@ test("AgentWalletService allows multiple agent bindings to share one wallet addr
       assert.equal(state.agentWalletBindings.length, 2);
       assert.deepEqual(
         state.agentWalletBindings.map((binding) => binding.agentName).sort(),
-        ["ZeroClaw EigenFlux Peer", "ZeroClaw OntologyAgent"],
+        ["ZeroClaw Chief Agent", "ZeroClaw EigenFlux Peer"],
       );
       assert.ok(
         state.agentWalletBindings.every(
@@ -379,7 +379,7 @@ test("AgentWalletService creates Circle transfer between bound agents", async ()
       wallets: [],
       agentWalletBindings: [
         {
-          agentName: "ZeroClaw OntologyAgent",
+          agentName: "ZeroClaw Chief Agent",
           agentId: "main-agent",
           email: "main@example.com",
           walletAddress: "0x1111111111111111111111111111111111111111",
@@ -476,7 +476,7 @@ test("AgentWalletService creates Circle USDC transfer from atomic amount", async
       wallets: [],
       agentWalletBindings: [
         {
-          agentName: "ZeroClaw OntologyAgent",
+          agentName: "ZeroClaw Chief Agent",
           agentId: "main-agent",
           email: "main@example.com",
           walletAddress: "0x1111111111111111111111111111111111111111",
