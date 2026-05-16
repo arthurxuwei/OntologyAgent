@@ -150,7 +150,10 @@ jobs:
         run: |
           test -n "${LIGHTHOUSE_USER}"
           remote="${LIGHTHOUSE_USER}@${LIGHTHOUSE_HOST}"
-          ssh -i ~/.ssh/lighthouse_key "${remote}" 'mkdir -p /opt/ontologyagent/data/ledger /opt/ontologyagent/data/chain'
+          ssh -i ~/.ssh/lighthouse_key "${remote}" '
+            sudo install -d -o "$USER" -g "$USER" /opt/ontologyagent /opt/ontologyagent/data /opt/ontologyagent/data/ledger /opt/ontologyagent/data/chain
+            touch /opt/ontologyagent/.env
+          '
           scp -i ~/.ssh/lighthouse_key docker-compose.core.yml "${remote}:/opt/ontologyagent/docker-compose.core.yml"
           scp -i ~/.ssh/lighthouse_key docker-compose.cloudflare.yml "${remote}:/opt/ontologyagent/docker-compose.cloudflare.yml"
 
