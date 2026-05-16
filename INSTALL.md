@@ -1,31 +1,25 @@
 # Install OntologyAgent CLI
 
-Install the `ontology` CLI and OntologyAgent skills into a ZeroClaw-style
-runtime. This install path covers `ledger`, `circle`, and A2A service-trade
-skills only.
+Install the `ontology` CLI and only the OntologyAgent skills this deployment
+uses: `ontology-ledger`, `ontology-circle`, and `ontology-a2a-service-trade`.
 
 Run from the repository root:
 
 ```bash
 ROOT_DIR="$(pwd)"
 RUNTIME_DIR="${ZEROCLAW_RUNTIME_DIR:-$ROOT_DIR/runtime}"
-SKILLS_SRC="$ROOT_DIR/zeroclaw/skills"
-BIN_SRC="$ROOT_DIR/zeroclaw/bin/ontology"
-WORKSPACE_SKILLS_DEST="$RUNTIME_DIR/workspace/skills"
-AGENTS_SKILLS_DEST="$RUNTIME_DIR/workspace/.agents/skills"
+SKILLS_DEST="$RUNTIME_DIR/workspace/.agents/skills"
 BIN_DEST="$RUNTIME_DIR/config/bin"
 
-mkdir -p "$WORKSPACE_SKILLS_DEST" "$AGENTS_SKILLS_DEST" "$BIN_DEST"
+mkdir -p "$SKILLS_DEST" "$BIN_DEST"
+rm -rf "$SKILLS_DEST"/ontology-*
+rm -rf "$RUNTIME_DIR/workspace/skills"/ontology-*
 
-for skill_dir in "$SKILLS_SRC"/*; do
-  [ -d "$skill_dir" ] || continue
-  skill_name="$(basename "$skill_dir")"
-  rm -rf "$WORKSPACE_SKILLS_DEST/$skill_name" "$AGENTS_SKILLS_DEST/$skill_name"
-  cp -R "$skill_dir" "$WORKSPACE_SKILLS_DEST/$skill_name"
-  cp -R "$skill_dir" "$AGENTS_SKILLS_DEST/$skill_name"
+for skill_name in ontology-ledger ontology-circle ontology-a2a-service-trade; do
+  cp -R "$ROOT_DIR/zeroclaw/skills/$skill_name" "$SKILLS_DEST/$skill_name"
 done
 
-cp "$BIN_SRC" "$BIN_DEST/ontology"
+cp "$ROOT_DIR/zeroclaw/bin/ontology" "$BIN_DEST/ontology"
 chmod +x "$BIN_DEST/ontology"
 ```
 
@@ -33,14 +27,20 @@ This installs:
 
 ```text
 runtime/config/bin/ontology
-runtime/workspace/skills/ontology-*
-runtime/workspace/.agents/skills/ontology-*
+runtime/workspace/.agents/skills/ontology-ledger
+runtime/workspace/.agents/skills/ontology-circle
+runtime/workspace/.agents/skills/ontology-a2a-service-trade
 ```
+
+`zeroclaw/bin/ontology` is the repository source file. `runtime/config/bin/ontology`
+is the installed host executable. The container example below mounts that same
+installed file as `/usr/local/bin/ontology`; it is not a second CLI to maintain.
 
 To install into another runtime directory:
 
 ```bash
-ZEROCLAW_RUNTIME_DIR=/path/to/runtime bash -c '<run the install block above>'
+export ZEROCLAW_RUNTIME_DIR=/path/to/runtime
+# then run the install block above
 ```
 
 ## Verify
@@ -48,7 +48,7 @@ ZEROCLAW_RUNTIME_DIR=/path/to/runtime bash -c '<run the install block above>'
 On the host:
 
 ```bash
-runtime/config/bin/ontology help
+test -x runtime/config/bin/ontology
 runtime/config/bin/ontology ledger health
 runtime/config/bin/ontology ledger state
 runtime/config/bin/ontology circle health
