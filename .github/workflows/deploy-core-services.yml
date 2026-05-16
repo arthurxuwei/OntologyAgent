@@ -88,8 +88,8 @@ jobs:
       - name: Resolve image names
         id: image-meta
         run: |
-          repo="${GITHUB_REPOSITORY,,}"
-          echo "image-prefix=${REGISTRY}/${repo}" >> "$GITHUB_OUTPUT"
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          echo "image-prefix=${REGISTRY}/${owner}/chief-core" >> "$GITHUB_OUTPUT"
           echo "image-tag=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
 
       - name: Log in to GHCR
