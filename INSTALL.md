@@ -16,7 +16,7 @@ runtime/config/bin/ontology
 ```
 
 It also installs the OntologyAgent skills into the local runtime workspace so an
-agent can discover the ledger, chain, Circle, and A2A service-trade workflows.
+agent can discover the ledger, Circle, and A2A service-trade workflows.
 
 ## Prerequisites
 
@@ -35,7 +35,6 @@ The default local endpoints used by the CLI are:
 
 ```text
 ledger: http://host.docker.internal:8092
-chain:  http://host.docker.internal:8091/mcp/
 circle: http://host.docker.internal:8093/mcp/
 ```
 
@@ -43,7 +42,6 @@ When the CLI runs on the host instead of inside a container, it falls back to:
 
 ```text
 ledger: http://127.0.0.1:8092
-chain:  http://127.0.0.1:8091/mcp/
 circle: http://127.0.0.1:8093/mcp/
 ```
 
@@ -92,15 +90,9 @@ runtime/config/bin/ontology ledger state
 Check MCP connectivity when those services are enabled:
 
 ```bash
-runtime/config/bin/ontology chain health
-runtime/config/bin/ontology chain tools
 runtime/config/bin/ontology circle health
 runtime/config/bin/ontology circle tools
 ```
-
-If the service is intentionally not deployed, its health command is expected to
-fail. For example, a ledger-and-circle-only deployment should not expose the
-standalone chain MCP endpoint.
 
 ## Use From A ZeroClaw Container
 
@@ -125,14 +117,6 @@ ontology circle health
 ontology circle tools
 ```
 
-If chain MCP is deployed:
-
-```bash
-ontology chain health
-ontology chain wallet-state
-ontology chain tools
-```
-
 ## Configure Remote Endpoints
 
 Override endpoint URLs with environment variables when services are remote or
@@ -141,7 +125,6 @@ when a container cannot reach `host.docker.internal`:
 ```bash
 export ONTOLOGY_LEDGER_URL=http://<lighthouse-ip>:8092
 export ONTOLOGY_CIRCLE_MCP_URL=http://<lighthouse-ip>:8093/mcp/
-export ONTOLOGY_CHAIN_MCP_URL=http://127.0.0.1:8091/mcp/
 ```
 
 Fallback URLs can also be set:
@@ -149,7 +132,6 @@ Fallback URLs can also be set:
 ```bash
 export ONTOLOGY_LEDGER_FALLBACK_URL=http://127.0.0.1:8092
 export ONTOLOGY_CIRCLE_MCP_FALLBACK_URL=http://127.0.0.1:8093/mcp/
-export ONTOLOGY_CHAIN_MCP_FALLBACK_URL=http://127.0.0.1:8091/mcp/
 ```
 
 Do not commit private keys, Circle credentials, RPC secrets, or deployment
@@ -159,10 +141,10 @@ files, or GitHub Secrets.
 ## Agent Safety Rules
 
 Agents should use the installed `ontology` command as their only local entrypoint
-for OntologyAgent ledger, chain, and Circle operations.
+for OntologyAgent ledger and Circle operations.
 
-Before any payment, x402 call, transfer, escrow lock, escrow release, or refund,
-the agent must route the intent:
+Before any payment, escrow lock, escrow release, or refund, the agent must route
+the intent:
 
 ```bash
 ontology ledger route '{"deliveryMode":"async_task","requiresAcceptance":true,"amountAtomic":"1000000","asset":"USDC"}'
@@ -171,8 +153,8 @@ ontology ledger route '{"deliveryMode":"async_task","requiresAcceptance":true,"a
 Continue only with the returned `allowedTools` or command family. If the router
 returns `needs_clarification`, ask the user for clarification before proceeding.
 
-Use ledger state, not chain or Circle state, to answer whether an A2A service
-trade has been prepaid, locked, released, or refunded:
+Use ledger state, not Circle state, to answer whether an A2A service trade has
+been prepaid, locked, released, or refunded:
 
 ```bash
 ontology ledger state
@@ -198,15 +180,6 @@ ontology circle health
 ontology circle tools
 ontology circle call agent_wallet_get_or_create '{"agentName":"Example Agent","agentId":"agent_123","email":"agent@example.com"}'
 ontology circle call agent_wallet_status '{"walletAddress":"0x..."}'
-```
-
-Chain, when deployed:
-
-```bash
-ontology chain health
-ontology chain tools
-ontology chain wallet-state
-ontology chain call chain_get_transaction_receipt '{"txHash":"0x..."}'
 ```
 
 ## Update Or Reinstall
