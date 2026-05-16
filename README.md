@@ -7,6 +7,8 @@
 - `circle`：独立 Circle MCP skill provider，负责 Agent Wallet 生命周期、Circle 钱包状态和 ledger release 的真实结算
 - `ledger`：独立链下账本服务，负责 Agent Wallet 内部余额、Escrow 锁款、放款、退款和流水记录
 
+Agent / ZeroClaw 安装包已拆到独立仓库：[chief-install](https://github.com/arthurxuwei/chief-install)。
+
 另外还有一个仅用于本地测试的辅助服务：
 
 - `x402-seller`：独立的 x402 seller demo 资源服务
