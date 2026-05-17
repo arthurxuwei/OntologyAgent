@@ -171,7 +171,7 @@ class LedgerServiceTests(unittest.TestCase):
                 "global.fetch = async (url, options = {}) => {"
                 "fetchCalls.push({ url, method: options.method || 'GET', body: options.body || null });"
                 "if (url === '/ledger/state') return { ok: true, json: async () => ({"
-                "accounts: [{ agentId: 'agent_buyer', availableAtomic: '5000000', lockedAtomic: '3000000' }],"
+                "accounts: [{ agentId: 'agent_buyer', walletAddress: '0x1111111111111111111111111111111111111111', availableAtomic: '5000000', lockedAtomic: '3000000' }],"
                 "entries: [{ entryId: 'entry_1', entryType: 'credit', agentId: 'agent_buyer' }],"
                 "escrows: [{ escrowId: 'escrow_1', buyerAgentId: 'agent_buyer', sellerAgentId: 'agent_seller', amountAtomic: '3000000', status: 'locked' }],"
                 "onrampSessions: [{ sessionId: 'onramp_1', agentId: 'agentA', paymentAmount: '10.00', status: 'created', onrampUrl: 'https://pay.coinbase.com/buy/select-asset?sessionToken=abc' }]"
@@ -248,6 +248,7 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertIn("Locked", output["stateHtml"])
         self.assertIn("3,000,000", output["stateHtml"])
         self.assertIn("agent_buyer", output["stateHtml"])
+        self.assertIn("0x1111111111111111111111111111111111111111", output["stateHtml"])
         self.assertIn("agent_seller", output["stateHtml"])
         self.assertIn("escrow_1", output["stateHtml"])
         self.assertIn("onramp_1", output["stateHtml"])
@@ -360,6 +361,11 @@ class LedgerServiceTests(unittest.TestCase):
         state = self.client.get("/ledger/state").json()
         self.assertEqual(len(state["accounts"]), 1)
         self.assertEqual(state["accounts"][0]["agentId"], "agent_research")
+        self.assertEqual(
+            state["accounts"][0]["walletAddress"],
+            "0x1111111111111111111111111111111111111111",
+        )
+        self.assertEqual(state["accounts"][0]["circleWalletId"], "circle-wallet-1")
         self.assertEqual(state["entries"], [])
 
     def test_wallet_get_or_create_requires_circle_binding_agent_id_to_match_request(self) -> None:

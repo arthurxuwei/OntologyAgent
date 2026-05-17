@@ -535,6 +535,7 @@
             "Accounts",
             [
               { label: "Agent ID", render: (account) => `<span class="mono">${shortValue(account.agentId)}</span>` },
+              { label: "Wallet Address", render: (account) => `<span class="mono">${shortValue(account.walletAddress || account.circleWalletId)}</span>` },
               { label: "Available", render: (account) => formatAtomic(account.availableAtomic) },
               { label: "Locked", render: (account) => formatAtomic(account.lockedAtomic) },
               { label: "Updated", render: (account) => formatDate(account.updatedAt || account.createdAt) },

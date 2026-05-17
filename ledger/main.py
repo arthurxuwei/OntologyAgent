@@ -56,6 +56,8 @@ class LedgerAccount(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     agentId: str
+    walletAddress: Optional[str] = None
+    circleWalletId: Optional[str] = None
     asset: str = DEFAULT_ASSET
     availableAtomic: str = "0"
     lockedAtomic: str = "0"
@@ -782,6 +784,28 @@ class OffchainLedgerStore:
 
         return self._mutate(mutate)
 
+    def bind_account_wallet(
+        self,
+        *,
+        agent_id: str,
+        wallet_address: Optional[str],
+        circle_wallet_id: Optional[str],
+    ) -> LedgerAccount:
+        def mutate(state: LedgerState) -> LedgerAccount:
+            account, account_index = self._account_for_update(
+                state, agent_id, create=True
+            )
+            updates: dict[str, Any] = {"updatedAt": now_iso()}
+            if wallet_address is not None:
+                updates["walletAddress"] = wallet_address
+            if circle_wallet_id is not None:
+                updates["circleWalletId"] = circle_wallet_id
+            updated = account.model_copy(update=updates)
+            state.accounts[account_index] = updated
+            return updated
+
+        return self._mutate(mutate)
+
     def credit(
         self,
         *,
@@ -1336,7 +1360,26 @@ async def get_or_create_agent_wallet(request: AgentWalletRequest) -> dict[str, A
     binding_agent_id = binding.get("agentId") if isinstance(binding, dict) else None
     if binding_agent_id is not None and binding_agent_id != request.agentId:
         raise ValueError("circle wallet binding agentId mismatch")
-    account = get_store().ensure_account(request.agentId)
+
+    wallet_address = wallet.get("walletAddress")
+    circle_wallet_id = wallet.get("circleWalletId")
+    if isinstance(binding, dict):
+        wallet_address = wallet_address or binding.get("walletAddress")
+        circle_wallet_id = circle_wallet_id or binding.get("circleWalletId")
+    wallet_address = (
+        wallet_address if isinstance(wallet_address, str) and wallet_address else None
+    )
+    circle_wallet_id = (
+        circle_wallet_id if isinstance(circle_wallet_id, str) and circle_wallet_id else None
+    )
+    if wallet_address is not None or circle_wallet_id is not None:
+        account = get_store().bind_account_wallet(
+            agent_id=request.agentId,
+            wallet_address=wallet_address,
+            circle_wallet_id=circle_wallet_id,
+        )
+    else:
+        account = get_store().ensure_account(request.agentId)
     return {
         "wallet": wallet,
         "account": account.model_dump(),
