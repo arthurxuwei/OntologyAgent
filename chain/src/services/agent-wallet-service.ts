@@ -103,6 +103,25 @@ export class AgentWalletService {
       };
     }
 
+    const importedWallet = await this.importUnusedCircleWallet();
+    if (importedWallet) {
+      const binding = await this.stateStore.saveBinding({
+        agentName,
+        agentId: command.agentId,
+        email: command.email,
+        circleWalletId: importedWallet.circleWalletId,
+        circleWalletSetId: importedWallet.circleWalletSetId,
+        blockchain: importedWallet.blockchain,
+        walletAddress: importedWallet.walletAddress,
+        mode: importedWallet.mode,
+      });
+      return {
+        ...importedWallet,
+        reused: true,
+        ...(binding ? { binding } : {}),
+      };
+    }
+
     const created = await this.init({
       agentName,
       agentDescription: command.agentDescription,
@@ -134,6 +153,16 @@ export class AgentWalletService {
 
   async saveLocalWallets(wallets: Awaited<ReturnType<CircleWalletService["listWallets"]>>) {
     return this.stateStore.saveWallets(wallets);
+  }
+
+  private async importUnusedCircleWallet(): Promise<AgentWalletStatusResult | null> {
+    if (this.config.network.mockChain || !this.config.agentWallet.statePath) {
+      return null;
+    }
+
+    const wallets = await this.circleWalletService.listWallets();
+    await this.stateStore.saveWallets(wallets);
+    return this.stateStore.findUnboundWallet();
   }
 
   async status(command: AgentWalletStatusCommand): Promise<AgentWalletStatusResult> {
