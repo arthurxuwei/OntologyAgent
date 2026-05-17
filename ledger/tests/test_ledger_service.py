@@ -156,16 +156,17 @@ class LedgerServiceTests(unittest.TestCase):
                 "const fetchCalls = [];"
                 "global.window = { openCalls: [], open(url, target, features) { this.openCalls.push({ url, target, features }); return null; } };"
                 "const makeElement = (id = '') => ({"
-                "id, textContent: '', value: '', disabled: false, children: [], style: {},"
+                "id, textContent: '', innerHTML: '', value: '', disabled: false, children: [], style: {},"
                 "appendChild(child) { this.children.push(child); if (!this.value && child.value) this.value = child.value; },"
-                "replaceChildren() { this.children = []; this.value = ''; },"
+                "replaceChildren(...children) { this.children = children; this.value = ''; },"
                 "addEventListener(event, handler) { listeners.set(`${id}:${event}`, handler.name || 'anonymous'); },"
                 "focus() {}"
                 "});"
                 "global.document = {"
                 "getElementById(id) { if (!elements.has(id)) elements.set(id, makeElement(id)); return elements.get(id); },"
                 "querySelectorAll() { return []; },"
-                "createElement(tag) { return makeElement(tag); }"
+                "createElement(tag) { return makeElement(tag); },"
+                "createTextNode(text) { return { textContent: text, innerHTML: String(text) }; }"
                 "};"
                 "global.fetch = async (url, options = {}) => {"
                 "fetchCalls.push({ url, method: options.method || 'GET', body: options.body || null });"
@@ -211,6 +212,7 @@ class LedgerServiceTests(unittest.TestCase):
                 "elements.get('onramp-confirm-tx-hash').value = '0xabc123';"
                 "await confirmOnrampSession({ preventDefault() {} });"
                 "process.stdout.write(JSON.stringify({"
+                "stateHtml: elements.get('ledger-state').innerHTML,"
                 "stateText: elements.get('ledger-state').textContent,"
                 "escrowSelection: selectedEscrowId(),"
                 "onrampSelection: selectedOnrampSessionId(),"
@@ -239,9 +241,19 @@ class LedgerServiceTests(unittest.TestCase):
         import json
 
         output = json.loads(node_result.stdout)
-        self.assertIn("Accounts: 1", output["stateText"])
-        self.assertIn("Escrows: 1", output["stateText"])
-        self.assertIn("Onramps: 1", output["stateText"])
+        self.assertIn("Accounts", output["stateHtml"])
+        self.assertIn("1", output["stateHtml"])
+        self.assertIn("Available", output["stateHtml"])
+        self.assertIn("5,000,000", output["stateHtml"])
+        self.assertIn("Locked", output["stateHtml"])
+        self.assertIn("3,000,000", output["stateHtml"])
+        self.assertIn("agent_buyer", output["stateHtml"])
+        self.assertIn("agent_seller", output["stateHtml"])
+        self.assertIn("escrow_1", output["stateHtml"])
+        self.assertIn("onramp_1", output["stateHtml"])
+        self.assertIn("entry_1", output["stateHtml"])
+        self.assertNotIn("{", output["stateHtml"])
+        self.assertNotIn('"accounts"', output["stateHtml"])
         self.assertEqual(output["escrowSelection"], "escrow_1")
         self.assertEqual(output["onrampSelection"], "onramp_1")
         self.assertEqual(output["walletListener"], "getOrCreateWallet")

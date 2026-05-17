@@ -82,6 +82,113 @@
         line-height: 1.5;
       }
 
+      .ledger-state {
+        display: grid;
+        gap: 16px;
+      }
+
+      .metric-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .metric {
+        border: 1px solid rgba(15, 118, 110, 0.18);
+        background: #f4fbf8;
+        border-radius: 8px;
+        padding: 12px;
+        min-width: 0;
+      }
+
+      .metric span {
+        display: block;
+        color: var(--muted);
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+
+      .metric strong {
+        display: block;
+        margin-top: 6px;
+        font-size: 22px;
+        line-height: 1.1;
+        overflow-wrap: anywhere;
+      }
+
+      .state-section {
+        display: grid;
+        gap: 8px;
+      }
+
+      .table-wrap {
+        width: 100%;
+        overflow-x: auto;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.55);
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+      }
+
+      th,
+      td {
+        padding: 9px 10px;
+        border-bottom: 1px solid rgba(217, 201, 168, 0.75);
+        text-align: left;
+        vertical-align: top;
+        white-space: nowrap;
+      }
+
+      th {
+        color: var(--muted);
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        background: #f4ead4;
+      }
+
+      tr:last-child td {
+        border-bottom: 0;
+      }
+
+      .mono {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 12px;
+      }
+
+      .status {
+        display: inline-block;
+        border-radius: 999px;
+        padding: 3px 8px;
+        background: #e0f2f1;
+        color: #115e59;
+        font-size: 12px;
+      }
+
+      .status-released,
+      .status-credited,
+      .status-submitted {
+        background: #dcfce7;
+        color: #166534;
+      }
+
+      .status-refunded,
+      .status-failed {
+        background: #fee2e2;
+        color: var(--danger);
+      }
+
+      .empty {
+        color: var(--muted);
+        padding: 12px;
+      }
+
       label {
         display: grid;
         gap: 6px;
@@ -135,6 +242,7 @@
 
       @media (max-width: 860px) {
         .grid { grid-template-columns: 1fr; }
+        .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       }
     </style>
   </head>
@@ -323,6 +431,77 @@
         return onrampSessionSelectEl.value || onrampSessionSelectEl.children?.[0]?.value || "";
       }
 
+      function escapeHtml(value) {
+        return String(value ?? "")
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#39;");
+      }
+
+      function formatAtomic(value) {
+        try {
+          return BigInt(value ?? 0).toLocaleString("en-US");
+        } catch {
+          return escapeHtml(value ?? "0");
+        }
+      }
+
+      function sumAtomic(records, field) {
+        return records.reduce((total, record) => {
+          try {
+            return total + BigInt(record?.[field] ?? 0);
+          } catch {
+            return total;
+          }
+        }, 0n);
+      }
+
+      function statusBadge(status) {
+        const safeStatus = escapeHtml(status || "unknown");
+        const statusClass = String(status || "unknown").toLowerCase().replace(/[^a-z0-9_-]/g, "-");
+        return `<span class="status status-${statusClass}">${safeStatus}</span>`;
+      }
+
+      function shortValue(value, fallback = "none") {
+        const text = String(value ?? "").trim();
+        return text ? escapeHtml(text) : `<span class="empty">${escapeHtml(fallback)}</span>`;
+      }
+
+      function formatDate(value) {
+        if (!value) {
+          return "none";
+        }
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) {
+          return escapeHtml(value);
+        }
+        return escapeHtml(date.toLocaleString());
+      }
+
+      function renderTable(columns, rows, emptyLabel) {
+        if (rows.length === 0) {
+          return `<div class="empty">${escapeHtml(emptyLabel)}</div>`;
+        }
+        const header = columns.map((column) => `<th>${escapeHtml(column.label)}</th>`).join("");
+        const body = rows
+          .map((row) => (
+            `<tr>${columns.map((column) => `<td>${column.render(row)}</td>`).join("")}</tr>`
+          ))
+          .join("");
+        return `<div class="table-wrap"><table><thead><tr>${header}</tr></thead><tbody>${body}</tbody></table></div>`;
+      }
+
+      function renderStateSection(title, columns, rows, emptyLabel) {
+        return [
+          `<section class="state-section">`,
+          `<h2>${escapeHtml(title)}</h2>`,
+          renderTable(columns, rows, emptyLabel),
+          `</section>`,
+        ].join("");
+      }
+
       async function requestJson(url, options = {}) {
         const response = await fetch(url, {
           headers: {
@@ -343,18 +522,64 @@
         const entries = Array.isArray(state?.entries) ? state.entries : [];
         const escrows = Array.isArray(state?.escrows) ? state.escrows : [];
         const onrampSessions = Array.isArray(state?.onrampSessions) ? state.onrampSessions : [];
-        const latestEscrow = escrows[escrows.length - 1];
-        const latestOnramp = onrampSessions[onrampSessions.length - 1];
-        ledgerStateEl.textContent = [
-          `Accounts: ${accounts.length}`,
-          `Entries: ${entries.length}`,
-          `Escrows: ${escrows.length}`,
-          `Onramps: ${onrampSessions.length}`,
-          `Latest Escrow: ${latestEscrow ? `${latestEscrow.status} ${latestEscrow.escrowId}` : "none"}`,
-          `Latest Onramp: ${latestOnramp ? `${latestOnramp.status} ${latestOnramp.sessionId}` : "none"}`,
-          "",
-          JSON.stringify({ accounts, escrows, onrampSessions }, null, 2),
-        ].join("\n");
+        const recentEntries = entries.slice(-6).reverse();
+        ledgerStateEl.innerHTML = [
+          `<div class="ledger-state">`,
+          `<div class="metric-grid">`,
+          `<div class="metric"><span>Accounts</span><strong>${accounts.length}</strong></div>`,
+          `<div class="metric"><span>Available</span><strong>${formatAtomic(sumAtomic(accounts, "availableAtomic"))}</strong></div>`,
+          `<div class="metric"><span>Locked</span><strong>${formatAtomic(sumAtomic(accounts, "lockedAtomic"))}</strong></div>`,
+          `<div class="metric"><span>Escrows / Onramps</span><strong>${escrows.length} / ${onrampSessions.length}</strong></div>`,
+          `</div>`,
+          renderStateSection(
+            "Accounts",
+            [
+              { label: "Agent ID", render: (account) => `<span class="mono">${shortValue(account.agentId)}</span>` },
+              { label: "Available", render: (account) => formatAtomic(account.availableAtomic) },
+              { label: "Locked", render: (account) => formatAtomic(account.lockedAtomic) },
+              { label: "Updated", render: (account) => formatDate(account.updatedAt || account.createdAt) },
+            ],
+            accounts,
+            "No accounts",
+          ),
+          renderStateSection(
+            "Escrows",
+            [
+              { label: "Status", render: (escrow) => statusBadge(escrow.status) },
+              { label: "Buyer", render: (escrow) => `<span class="mono">${shortValue(escrow.buyerAgentId)}</span>` },
+              { label: "Seller", render: (escrow) => `<span class="mono">${shortValue(escrow.sellerAgentId)}</span>` },
+              { label: "Amount", render: (escrow) => formatAtomic(escrow.amountAtomic) },
+              { label: "Task", render: (escrow) => `<span class="mono">${shortValue(escrow.taskId || escrow.escrowId)}</span>` },
+            ],
+            escrows,
+            "No escrows",
+          ),
+          renderStateSection(
+            "Onramp Sessions",
+            [
+              { label: "Status", render: (session) => statusBadge(session.status) },
+              { label: "Agent", render: (session) => `<span class="mono">${shortValue(session.agentId)}</span>` },
+              { label: "Fiat Amount", render: (session) => `${shortValue(session.paymentAmount, "0")} ${shortValue(session.paymentCurrency || "USD")}` },
+              { label: "Credited", render: (session) => formatAtomic(session.creditedAmountAtomic || 0) },
+              { label: "Session", render: (session) => `<span class="mono">${shortValue(session.sessionId)}</span>` },
+            ],
+            onrampSessions,
+            "No onramp sessions",
+          ),
+          renderStateSection(
+            "Recent Entries",
+            [
+              { label: "Type", render: (entry) => statusBadge(entry.entryType) },
+              { label: "Agent", render: (entry) => `<span class="mono">${shortValue(entry.agentId)}</span>` },
+              { label: "Available Delta", render: (entry) => formatAtomic(entry.availableDeltaAtomic || 0) },
+              { label: "Locked Delta", render: (entry) => formatAtomic(entry.lockedDeltaAtomic || 0) },
+              { label: "Reason", render: (entry) => shortValue(entry.reason || entry.entryId) },
+            ],
+            recentEntries,
+            "No entries",
+          ),
+          `</div>`,
+        ].join("");
 
         const previousValue = escrowSelectEl.value;
         escrowSelectEl.replaceChildren();
