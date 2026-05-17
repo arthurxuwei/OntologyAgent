@@ -34,6 +34,7 @@ class LedgerServiceTests(unittest.TestCase):
             "LEDGER_SETTLEMENT_REQUIRE_SUCCESS"
         )
         self.previous_settlement_mcp_url = os.environ.get("LEDGER_SETTLEMENT_MCP_URL")
+        self.previous_wallet_mcp_url = os.environ.get("LEDGER_WALLET_MCP_URL")
         os.environ["LEDGER_STATE_PATH"] = self.state_path
         os.environ["LEDGER_CHAIN_RECORD_ENABLED"] = "false"
         os.environ["LEDGER_CHAIN_RECORD_REQUIRE_SUCCESS"] = "false"
@@ -43,11 +44,13 @@ class LedgerServiceTests(unittest.TestCase):
         main.get_coinbase_onramp_client.cache_clear()
         main.get_chain_recorder.cache_clear()
         main.get_ledger_settlement_client.cache_clear()
+        main.get_ledger_wallet_client.cache_clear()
         self.client = TestClient(main.app)
 
     def tearDown(self) -> None:
         main.get_store.cache_clear()
         main.get_ledger_settlement_client.cache_clear()
+        main.get_ledger_wallet_client.cache_clear()
         if self.previous_state_path is None:
             os.environ.pop("LEDGER_STATE_PATH", None)
         else:
@@ -69,9 +72,11 @@ class LedgerServiceTests(unittest.TestCase):
             self.previous_settlement_require_success,
         )
         self._restore_env("LEDGER_SETTLEMENT_MCP_URL", self.previous_settlement_mcp_url)
+        self._restore_env("LEDGER_WALLET_MCP_URL", self.previous_wallet_mcp_url)
         main.get_coinbase_onramp_client.cache_clear()
         main.get_chain_recorder.cache_clear()
         main.get_ledger_settlement_client.cache_clear()
+        main.get_ledger_wallet_client.cache_clear()
 
     def _restore_env(self, name: str, previous: str | None) -> None:
         if previous is None:
@@ -119,6 +124,7 @@ class LedgerServiceTests(unittest.TestCase):
         html = response.text
         self.assertIn("Chief Ledger", html)
         self.assertIn('id="ledger-state"', html)
+        self.assertIn('id="wallet-form"', html)
         self.assertIn('id="credit-form"', html)
         self.assertIn('id="onramp-form"', html)
         self.assertIn('id="onramp-confirm-form"', html)
@@ -169,6 +175,10 @@ class LedgerServiceTests(unittest.TestCase):
                 "escrows: [{ escrowId: 'escrow_1', buyerAgentId: 'agent_buyer', sellerAgentId: 'agent_seller', amountAtomic: '3000000', status: 'locked' }],"
                 "onrampSessions: [{ sessionId: 'onramp_1', agentId: 'agentA', paymentAmount: '10.00', status: 'created', onrampUrl: 'https://pay.coinbase.com/buy/select-asset?sessionToken=abc' }]"
                 "}) };"
+                "if (url === '/ledger/wallets/get-or-create') return { ok: true, json: async () => ({"
+                "wallet: { walletAddress: '0x1111111111111111111111111111111111111111', circleWalletId: 'circle-wallet-1' },"
+                "account: { agentId: 'agent_research', availableAtomic: '0', lockedAtomic: '0' }"
+                "}) };"
                 "if (url === '/onramp/sessions') return { ok: true, json: async () => ({"
                 "sessionId: 'onramp_2', agentId: 'agentA', paymentAmount: '10.00', status: 'created', onrampUrl: 'https://pay.coinbase.com/buy/select-asset?sessionToken=def'"
                 "}) };"
@@ -180,6 +190,12 @@ class LedgerServiceTests(unittest.TestCase):
                 "(async () => {"
                 "eval(scriptText);"
                 "await refreshLedgerState();"
+                "elements.get('wallet-agent-name').value = 'Research Agent';"
+                "elements.get('wallet-agent-id').value = 'agent_research';"
+                "elements.get('wallet-email').value = 'agent@example.com';"
+                "elements.get('wallet-circle-wallet-id').value = 'circle-wallet-1';"
+                "elements.get('wallet-address').value = '0x1111111111111111111111111111111111111111';"
+                "await getOrCreateWallet({ preventDefault() {} });"
                 "elements.get('credit-agent-id').value = 'agent_buyer';"
                 "elements.get('credit-amount').value = '5000000';"
                 "elements.get('credit-reason').value = 'demo funding';"
@@ -199,14 +215,17 @@ class LedgerServiceTests(unittest.TestCase):
                 "escrowSelection: selectedEscrowId(),"
                 "onrampSelection: selectedOnrampSessionId(),"
                 "creditListener: listeners.get('credit-form:submit'),"
+                "walletListener: listeners.get('wallet-form:submit'),"
                 "onrampListener: listeners.get('onramp-form:submit'),"
                 "onrampConfirmListener: listeners.get('onramp-confirm-form:submit'),"
                 "escrowListener: listeners.get('escrow-form:submit'),"
                 "settlementListener: listeners.get('settlement-form:submit'),"
+                "walletCall: fetchCalls.find((call) => call.url === '/ledger/wallets/get-or-create'),"
                 "creditCall: fetchCalls.find((call) => call.url === '/ledger/accounts/agent_buyer/credit'),"
                 "onrampCall: fetchCalls.find((call) => call.url === '/onramp/sessions'),"
                 "confirmCall: fetchCalls.find((call) => call.url === '/onramp/sessions/onramp_1/confirm'),"
                 "openCall: window.openCalls[0],"
+                "walletOutput: elements.get('wallet-output').textContent,"
                 "onrampOutput: elements.get('onramp-output').textContent"
                 "}));"
                 "})().catch((error) => { console.error(error); process.exit(1); });",
@@ -225,11 +244,23 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertIn("Onramps: 1", output["stateText"])
         self.assertEqual(output["escrowSelection"], "escrow_1")
         self.assertEqual(output["onrampSelection"], "onramp_1")
+        self.assertEqual(output["walletListener"], "getOrCreateWallet")
         self.assertEqual(output["creditListener"], "creditAccount")
         self.assertEqual(output["onrampListener"], "createOnrampSession")
         self.assertEqual(output["onrampConfirmListener"], "confirmOnrampSession")
         self.assertEqual(output["escrowListener"], "createEscrow")
         self.assertEqual(output["settlementListener"], "preventSettlementSubmit")
+        self.assertEqual(output["walletCall"]["method"], "POST")
+        self.assertEqual(
+            json.loads(output["walletCall"]["body"]),
+            {
+                "agentName": "Research Agent",
+                "agentId": "agent_research",
+                "email": "agent@example.com",
+                "circleWalletId": "circle-wallet-1",
+                "walletAddress": "0x1111111111111111111111111111111111111111",
+            },
+        )
         self.assertEqual(output["creditCall"]["method"], "POST")
         self.assertEqual(
             json.loads(output["creditCall"]["body"]),
@@ -256,6 +287,7 @@ class LedgerServiceTests(unittest.TestCase):
         )
         self.assertEqual(output["openCall"]["target"], "_blank")
         self.assertIn("https://pay.coinbase.com/buy/select-asset", output["openCall"]["url"])
+        self.assertIn("agent_research", output["walletOutput"])
         self.assertIn("onramp_1", output["onrampOutput"])
 
     def test_credit_creates_account_and_entry(self) -> None:
@@ -273,6 +305,105 @@ class LedgerServiceTests(unittest.TestCase):
         state = self.client.get("/ledger/state").json()
         self.assertEqual(len(state["entries"]), 1)
         self.assertEqual(state["entries"][0]["entryType"], "credit")
+
+    def test_wallet_get_or_create_creates_zero_balance_ledger_account(self) -> None:
+        class FakeWalletClient:
+            async def get_or_create(self, request):
+                return {
+                    "circleWalletId": "circle-wallet-1",
+                    "walletAddress": "0x1111111111111111111111111111111111111111",
+                    "mode": "circle",
+                    "binding": {
+                        "agentName": request.agentName,
+                        "agentId": request.agentId,
+                        "email": request.email,
+                        "walletAddress": "0x1111111111111111111111111111111111111111",
+                        "circleWalletId": "circle-wallet-1",
+                        "circleWalletSetId": "circle-wallet-set",
+                        "blockchain": "BASE-SEPOLIA",
+                        "mode": "circle",
+                        "updatedAt": main.now_iso(),
+                    },
+                }
+
+        with patch.object(main, "get_ledger_wallet_client", return_value=FakeWalletClient()):
+            response = self.client.post(
+                "/ledger/wallets/get-or-create",
+                json={
+                    "agentName": "Research Agent",
+                    "agentId": "agent_research",
+                    "email": "agent@example.com",
+                    "circleWalletId": "circle-wallet-1",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["wallet"]["circleWalletId"], "circle-wallet-1")
+        self.assertEqual(payload["wallet"]["binding"]["agentId"], "agent_research")
+        self.assertEqual(payload["account"]["agentId"], "agent_research")
+        self.assertEqual(payload["account"]["availableAtomic"], "0")
+        self.assertEqual(payload["account"]["lockedAtomic"], "0")
+
+        state = self.client.get("/ledger/state").json()
+        self.assertEqual(len(state["accounts"]), 1)
+        self.assertEqual(state["accounts"][0]["agentId"], "agent_research")
+        self.assertEqual(state["entries"], [])
+
+    def test_wallet_get_or_create_requires_circle_binding_agent_id_to_match_request(self) -> None:
+        class FakeWalletClient:
+            async def get_or_create(self, request):
+                return {
+                    "binding": {
+                        "agentId": "other_agent",
+                    },
+                }
+
+        with patch.object(main, "get_ledger_wallet_client", return_value=FakeWalletClient()):
+            response = self.client.post(
+                "/ledger/wallets/get-or-create",
+                json={
+                    "agentName": "Research Agent",
+                    "agentId": "agent_research",
+                },
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["detail"], "circle wallet binding agentId mismatch")
+        self.assertEqual(self.client.get("/ledger/state").json()["accounts"], [])
+
+    def test_wallet_get_or_create_mcp_tool_creates_ledger_account(self) -> None:
+        class FakeWalletClient:
+            async def get_or_create(self, request):
+                return {
+                    "circleWalletId": "circle-wallet-1",
+                    "walletAddress": "0x1111111111111111111111111111111111111111",
+                    "mode": "circle",
+                    "binding": {
+                        "agentName": request.agentName,
+                        "agentId": request.agentId,
+                        "walletAddress": "0x1111111111111111111111111111111111111111",
+                        "circleWalletId": "circle-wallet-1",
+                        "circleWalletSetId": "circle-wallet-set",
+                        "blockchain": "BASE-SEPOLIA",
+                        "mode": "circle",
+                        "updatedAt": main.now_iso(),
+                    },
+                }
+
+        tool = getattr(main, "agent_wallet_get_or_create_tool", None)
+        self.assertIsNotNone(tool)
+        with patch.object(main, "get_ledger_wallet_client", return_value=FakeWalletClient()):
+            result = asyncio.run(
+                tool(
+                    agentName="Research Agent",
+                    agentId="agent_research",
+                    circleWalletId="circle-wallet-1",
+                )
+            )
+
+        self.assertEqual(result["account"]["agentId"], "agent_research")
+        self.assertEqual(self.client.get("/ledger/state").json()["accounts"][0]["agentId"], "agent_research")
 
     def test_create_onramp_session_persists_coinbase_hosted_url(self) -> None:
         os.environ["COINBASE_ONRAMP_MOCK"] = "true"

@@ -87,6 +87,28 @@ async def agent_wallet_credit_balance_tool(
     }
 
 
+async def agent_wallet_get_or_create_tool(
+    agentName: str,
+    agentId: str,
+    email: Optional[str] = None,
+    walletAddress: Optional[str] = None,
+    circleWalletId: Optional[str] = None,
+    agentDescription: Optional[str] = None,
+) -> dict[str, Any]:
+    from main import AgentWalletRequest, get_or_create_agent_wallet
+
+    return await get_or_create_agent_wallet(
+        AgentWalletRequest(
+            agentName=agentName,
+            agentId=agentId,
+            email=email,
+            walletAddress=walletAddress,
+            circleWalletId=circleWalletId,
+            agentDescription=agentDescription,
+        )
+    )
+
+
 def _coinbase_bearer_for(method: str, host: str, path: str) -> str:
     bearer_token = os.getenv("COINBASE_ONRAMP_BEARER_TOKEN")
     if bearer_token:
@@ -357,6 +379,7 @@ def build_mcp_app(store_factory: Callable[[], Any]) -> Any:
     )
     mcp.tool(name="route_payment_intent")(route_payment_intent_tool)
     mcp.tool(name="agent_wallet_get_ledger_state")(agent_wallet_get_ledger_state_tool)
+    mcp.tool(name="agent_wallet_get_or_create")(agent_wallet_get_or_create_tool)
     mcp.tool(name="agent_wallet_credit_balance")(agent_wallet_credit_balance_tool)
     mcp.tool(name="agent_wallet_create_onramp_session")(
         agent_wallet_create_onramp_session_tool

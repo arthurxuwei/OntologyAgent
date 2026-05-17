@@ -154,6 +154,32 @@
       </section>
 
       <section class="grid">
+        <form class="card" id="wallet-form">
+          <h2>Agent Wallet</h2>
+          <label>
+            Agent Name
+            <input id="wallet-agent-name" value="Research Agent" autocomplete="off" required />
+          </label>
+          <label>
+            Agent ID
+            <input id="wallet-agent-id" value="agent_research" autocomplete="off" required />
+          </label>
+          <label>
+            Email
+            <input id="wallet-email" value="" autocomplete="off" />
+          </label>
+          <label>
+            Circle Wallet ID
+            <input id="wallet-circle-wallet-id" value="" autocomplete="off" />
+          </label>
+          <label>
+            Wallet Address
+            <input id="wallet-address" value="" autocomplete="off" />
+          </label>
+          <button class="primary" type="submit">Get Or Create Wallet</button>
+          <div class="summary" id="wallet-output">No wallet binding yet.</div>
+        </form>
+
         <form class="card" id="credit-form">
           <h2>Credit Account</h2>
           <label>
@@ -256,11 +282,18 @@
     <script>
       const ledgerStateEl = document.getElementById("ledger-state");
       const refreshButtonEl = document.getElementById("refresh-button");
+      const walletFormEl = document.getElementById("wallet-form");
       const creditFormEl = document.getElementById("credit-form");
       const onrampFormEl = document.getElementById("onramp-form");
       const onrampConfirmFormEl = document.getElementById("onramp-confirm-form");
       const escrowFormEl = document.getElementById("escrow-form");
       const settlementFormEl = document.getElementById("settlement-form");
+      const walletAgentNameEl = document.getElementById("wallet-agent-name");
+      const walletAgentIdEl = document.getElementById("wallet-agent-id");
+      const walletEmailEl = document.getElementById("wallet-email");
+      const walletCircleWalletIdEl = document.getElementById("wallet-circle-wallet-id");
+      const walletAddressEl = document.getElementById("wallet-address");
+      const walletOutputEl = document.getElementById("wallet-output");
       const creditAgentIdEl = document.getElementById("credit-agent-id");
       const creditAmountEl = document.getElementById("credit-amount");
       const creditReasonEl = document.getElementById("credit-reason");
@@ -367,6 +400,29 @@
         renderLedgerState(state);
       }
 
+      async function getOrCreateWallet(event) {
+        event.preventDefault();
+        const email = walletEmailEl.value.trim();
+        const circleWalletId = walletCircleWalletIdEl.value.trim();
+        const walletAddress = walletAddressEl.value.trim();
+        const payload = await requestJson("/ledger/wallets/get-or-create", {
+          method: "POST",
+          body: JSON.stringify({
+            agentName: walletAgentNameEl.value.trim(),
+            agentId: walletAgentIdEl.value.trim(),
+            email: email || null,
+            circleWalletId: circleWalletId || null,
+            walletAddress: walletAddress || null,
+          }),
+        });
+        walletOutputEl.textContent = [
+          `Agent: ${payload.account.agentId}`,
+          `Available Atomic: ${payload.account.availableAtomic}`,
+          `Wallet: ${payload.wallet.walletAddress || payload.wallet.circleWalletId || "bound"}`,
+        ].join("\n");
+        await refreshLedgerState();
+      }
+
       async function creditAccount(event) {
         event.preventDefault();
         const reason = creditReasonEl.value.trim();
@@ -456,6 +512,7 @@
       }
 
       refreshButtonEl.addEventListener("click", refreshLedgerState);
+      walletFormEl.addEventListener("submit", getOrCreateWallet);
       creditFormEl.addEventListener("submit", creditAccount);
       onrampFormEl.addEventListener("submit", createOnrampSession);
       onrampConfirmFormEl.addEventListener("submit", confirmOnrampSession);

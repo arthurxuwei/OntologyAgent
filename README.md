@@ -4,10 +4,25 @@
 
 - `agent`：Python Agent 本体，负责交互式会话、tool orchestration，以及对子 Agent 的管理
 - `chain`：TypeScript 链上 MCP skill provider，负责直接链上执行、UserOperation、交易状态和 x402 buyer flow
-- `circle`：独立 Circle MCP skill provider，负责 Agent Wallet 生命周期、Circle 钱包状态和 ledger release 的真实结算
-- `ledger`：独立链下账本服务，负责 Agent Wallet 内部余额、Escrow 锁款、放款、退款和流水记录
+- `circle`：内部 Circle MCP backend，负责真实 Circle 钱包生命周期和 ledger release 结算
+- `ledger`：独立链下账本服务，也是公网统一入口，负责 Agent Wallet onboarding、内部余额、Escrow 锁款、放款、退款和流水记录
 
 Agent / ZeroClaw 安装包已拆到独立仓库：[chief-install](https://github.com/arthurxuwei/chief-install)。
+
+## ZeroClaw 运行
+
+ZeroClaw 运行时使用 `docker-compose.zeroclaw.yml`。`chief` 由
+`chief-install` 的 `INSTALL.md` 安装到 `runtime*/config/bin/chief`，容器内对应
+`/zeroclaw-data/.zeroclaw/bin/chief`。compose 只把
+`/zeroclaw-data/.zeroclaw/bin` 加到 `PATH`，不额外挂载 `chief`，也不注入
+`CHIEF_*` 环境变量；`chief` CLI 默认访问公网 Chief 服务。
+
+安装或更新 `chief-install` 后需要重建运行中的 ZeroClaw 容器，让
+新的 `PATH` 和已安装的 `chief` 生效：
+
+```bash
+docker compose -f docker-compose.zeroclaw.yml up -d --force-recreate
+```
 
 另外还有一个仅用于本地测试的辅助服务：
 
@@ -69,7 +84,7 @@ docker compose --env-file "$(dirname "$(git rev-parse --git-common-dir)")/.env" 
 - `agent` 是 agent 本体，不承载 seller resource
 - `ledger` 是独立链下账本服务，不属于 `agent` 或 `chain` 进程
 - 链上动作只能通过 `chain` MCP tools 完成
-- Circle Agent Wallet 生命周期和 Circle 转账结算只能通过 `circle` MCP tools 完成
+- Agent Wallet 生命周期和 Circle 转账结算由 `ledger` 统一入口触发；`circle` MCP 只作为内部 backend
 - `chain` 不再提供 Fastify HTTP 业务接口
 - 撮合型 A2A 的 Escrow/余额状态应落在 `ledger`，而不是用 x402 或链上交易直接承担
 
@@ -84,6 +99,7 @@ docker compose --env-file "$(dirname "$(git rev-parse --git-common-dir)")/.env" 
 - 本地 Agent Wallet ledger 工具
   - `route_payment_intent`（任何付款、x402、转账或 Escrow 动作前先选择支付方式）
   - `agent_wallet_get_ledger_state`
+  - `agent_wallet_get_or_create`
   - `agent_wallet_credit_balance`
   - `agent_wallet_create_onramp_session`
   - `agent_wallet_create_escrow`
@@ -95,9 +111,7 @@ docker compose --env-file "$(dirname "$(git rev-parse --git-common-dir)")/.env" 
   - `chain_submit_execution`
   - `chain_submit_user_operation`
   - `chain_x402_fetch`
-- `circle` MCP tools
-  - `agent_wallet_get_or_create`
-  - `agent_wallet_status`
+- 内部 `circle` MCP backend（不作为 agent/public 入口）
 
 ### Offchain Ledger Service（V1）
 
@@ -107,6 +121,7 @@ docker compose --env-file "$(dirname "$(git rev-parse --git-common-dir)")/.env" 
 
 - `GET /health`
 - `GET /ledger/state`
+- `POST /ledger/wallets/get-or-create`
 - `POST /ledger/accounts/{agentId}/credit`
 - `POST /ledger/escrows`
 - `POST /ledger/escrows/{escrowId}/release`
@@ -449,6 +464,7 @@ PRIVATE_KEY=0x... \
 - `COINBASE_ONRAMP_HOSTED_URL`：Coinbase hosted onramp URL，默认 `https://pay.coinbase.com/buy/select-asset`
 - `LEDGER_CHAIN_MCP_URL`：ledger 链上审计记录使用的 chain MCP 地址，默认 `http://chain-mcp:8091/mcp/`
 - `LEDGER_SETTLEMENT_MCP_URL`：ledger release 真实结算使用的 Circle MCP 地址，默认 `http://circle-mcp:8093/mcp/`
+- `LEDGER_WALLET_MCP_URL`：ledger Agent Wallet onboarding 使用的内部 Circle MCP 地址，默认 `http://circle-mcp:8093/mcp/`
 
 ## Agent Wallet MVP x402 Demo
 

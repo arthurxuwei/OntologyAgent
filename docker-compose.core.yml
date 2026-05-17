@@ -21,6 +21,8 @@ services:
       LEDGER_SETTLEMENT_REQUIRE_SUCCESS: ${LEDGER_SETTLEMENT_REQUIRE_SUCCESS:-false}
       LEDGER_SETTLEMENT_MCP_URL: ${LEDGER_SETTLEMENT_MCP_URL:-http://circle-mcp:8093/mcp/}
       LEDGER_SETTLEMENT_TIMEOUT_SECONDS: ${LEDGER_SETTLEMENT_TIMEOUT_SECONDS:-60}
+      LEDGER_WALLET_MCP_URL: ${LEDGER_WALLET_MCP_URL:-http://circle-mcp:8093/mcp/}
+      LEDGER_WALLET_TIMEOUT_SECONDS: ${LEDGER_WALLET_TIMEOUT_SECONDS:-60}
     volumes:
       - ${CHIEF_DATA_ROOT:-/opt/chief/data}/ledger:/app/data
     depends_on:
@@ -31,8 +33,6 @@ services:
     image: ${GHCR_IMAGE_PREFIX:?Set GHCR_IMAGE_PREFIX}/chain:${IMAGE_TAG:-latest}
     container_name: chief-circle
     command: npm run start:circle
-    ports:
-      - "8093:8093"
     environment:
       CIRCLE_MCP_PORT: ${CIRCLE_MCP_PORT:-8093}
       CHAIN_MOCK: ${CHAIN_MOCK:-false}

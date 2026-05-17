@@ -25,6 +25,7 @@ from mcp_tools import (
     agent_wallet_create_escrow_tool,
     agent_wallet_create_onramp_session_tool,
     agent_wallet_credit_balance_tool,
+    agent_wallet_get_or_create_tool,
     agent_wallet_get_ledger_state_tool,
     agent_wallet_refund_escrow_tool,
     agent_wallet_release_escrow_tool,
@@ -41,6 +42,7 @@ DEFAULT_COINBASE_TOKEN_PATH = "/onramp/v1/token"
 DEFAULT_COINBASE_HOSTED_URL = "https://pay.coinbase.com/buy/select-asset"
 DEFAULT_CHAIN_MCP_URL = "http://chain-mcp:8091/mcp/"
 DEFAULT_SETTLEMENT_MCP_URL = "http://circle-mcp:8093/mcp/"
+DEFAULT_WALLET_MCP_URL = "http://circle-mcp:8093/mcp/"
 DEFAULT_CHAIN_RECORDER_ADDRESS = "0x000000000000000000000000000000000000dEaD"
 LEDGER_CONSOLE_PATH = Path(__file__).resolve().parent / "web" / "index.html"
 
@@ -205,6 +207,17 @@ class CreditRequest(BaseModel):
     amountAtomic: str
     reason: Optional[str] = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentWalletRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    agentName: str
+    agentId: str
+    email: Optional[str] = None
+    walletAddress: Optional[str] = None
+    circleWalletId: Optional[str] = None
+    agentDescription: Optional[str] = None
 
 
 class CreateEscrowRequest(BaseModel):
@@ -664,6 +677,85 @@ class LedgerSettlementError(RuntimeError):
         self.record = record
 
 
+class LedgerWalletClient:
+    def __init__(self, *, wallet_mcp_url: str, timeout_seconds: float) -> None:
+        self.wallet_mcp_url = wallet_mcp_url
+        self.timeout_seconds = timeout_seconds
+
+    async def get_or_create(self, request: AgentWalletRequest) -> dict[str, Any]:
+        payload = await self._call_wallet_tool(
+            "agent_wallet_get_or_create",
+            {
+                "agentName": request.agentName,
+                "agentId": request.agentId,
+                "email": request.email,
+                "walletAddress": request.walletAddress,
+                "circleWalletId": request.circleWalletId,
+                "agentDescription": request.agentDescription,
+            },
+        )
+        wallet = self._extract_tool_content(payload)
+        if not wallet:
+            raise RuntimeError("wallet MCP response did not include wallet content")
+        return wallet
+
+    async def _call_wallet_tool(self, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        request = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": tool_name,
+                "arguments": {
+                    key: value
+                    for key, value in arguments.items()
+                    if value is not None
+                },
+            },
+        }
+        async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+            response = await client.post(
+                self.wallet_mcp_url,
+                headers={
+                    "Content-Type": "application/json",
+                    "Accept": "application/json, text/event-stream",
+                },
+                json=request,
+            )
+        if response.status_code >= 400:
+            raise RuntimeError(
+                f"wallet MCP request failed: HTTP {response.status_code} {response.text}"
+            )
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise RuntimeError("wallet MCP response was not a JSON object")
+        if "error" in payload:
+            raise RuntimeError(f"wallet MCP returned error: {payload['error']}")
+        result = payload.get("result")
+        if isinstance(result, dict) and result.get("isError") is True:
+            content = self._extract_tool_content(payload)
+            if content.get("error") is not None:
+                raise RuntimeError(json.dumps(content["error"], sort_keys=True))
+            raise RuntimeError("wallet MCP tool returned isError=true")
+        return payload
+
+    @staticmethod
+    def _extract_tool_content(result: dict[str, Any]) -> dict[str, Any]:
+        content = result.get("result", {}).get("content", [])
+        if not isinstance(content, list) or not content:
+            return {}
+        first = content[0]
+        if not isinstance(first, dict):
+            return {}
+        text = first.get("text")
+        if not isinstance(text, str):
+            return {}
+        parsed = json.loads(text)
+        if not isinstance(parsed, dict):
+            return {}
+        return parsed
+
+
 def encode_ledger_record_payload(payload: dict[str, Any], max_payload_bytes: int) -> str:
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode(
         "utf-8"
@@ -683,6 +775,13 @@ class OffchainLedgerStore:
     def load(self) -> LedgerState:
         with self._lock:
             return self._load_unlocked()
+
+    def ensure_account(self, agent_id: str) -> LedgerAccount:
+        def mutate(state: LedgerState) -> LedgerAccount:
+            account, _ = self._account_for_update(state, agent_id, create=True)
+            return account
+
+        return self._mutate(mutate)
 
     def credit(
         self,
@@ -1146,6 +1245,14 @@ def get_ledger_settlement_client() -> LedgerSettlementClient:
     )
 
 
+@lru_cache(maxsize=1)
+def get_ledger_wallet_client() -> LedgerWalletClient:
+    return LedgerWalletClient(
+        wallet_mcp_url=os.getenv("LEDGER_WALLET_MCP_URL", DEFAULT_WALLET_MCP_URL),
+        timeout_seconds=float(os.getenv("LEDGER_WALLET_TIMEOUT_SECONDS", "60")),
+    )
+
+
 def ledger_chain_payload(
     *,
     event_type: Literal["credit", "escrow_lock", "escrow_release", "escrow_refund"],
@@ -1222,6 +1329,19 @@ async def settle_escrow_release(escrow: EscrowRecord) -> Optional[LedgerSettleme
     if record is None:
         return None
     return get_store().add_settlement_record(record)
+
+
+async def get_or_create_agent_wallet(request: AgentWalletRequest) -> dict[str, Any]:
+    wallet = await get_ledger_wallet_client().get_or_create(request)
+    binding = wallet.get("binding")
+    binding_agent_id = binding.get("agentId") if isinstance(binding, dict) else None
+    if binding_agent_id is not None and binding_agent_id != request.agentId:
+        raise ValueError("circle wallet binding agentId mismatch")
+    account = get_store().ensure_account(request.agentId)
+    return {
+        "wallet": wallet,
+        "account": account.model_dump(),
+    }
 
 
 def http_error(error: Exception) -> HTTPException:
@@ -1355,6 +1475,14 @@ async def credit_agent_balance(agent_id: str, request: CreditRequest) -> dict[st
         "entry": entry.model_dump(),
         "chainRecord": chain_record.model_dump() if chain_record is not None else None,
     }
+
+
+@app.post("/ledger/wallets/get-or-create")
+async def create_or_reuse_agent_wallet(request: AgentWalletRequest) -> dict[str, Any]:
+    try:
+        return await get_or_create_agent_wallet(request)
+    except (ValueError, RuntimeError) as error:
+        raise http_error(error) from error
 
 
 @app.post("/ledger/escrows")
