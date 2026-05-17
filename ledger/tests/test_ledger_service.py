@@ -871,23 +871,21 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertEqual(result["allowedTools"], ["agent_wallet_create_onramp_session"])
 
     def test_ledger_mcp_tools_operate_on_local_store(self) -> None:
-        credit_tool = getattr(main, "agent_wallet_credit_balance_tool", None)
         state_tool = getattr(main, "agent_wallet_get_ledger_state_tool", None)
         create_tool = getattr(main, "agent_wallet_create_escrow_tool", None)
         release_tool = getattr(main, "agent_wallet_release_escrow_tool", None)
         refund_tool = getattr(main, "agent_wallet_refund_escrow_tool", None)
-        self.assertIsNotNone(credit_tool)
+        self.assertFalse(hasattr(main, "agent_wallet_credit_balance_tool"))
         self.assertIsNotNone(state_tool)
         self.assertIsNotNone(create_tool)
         self.assertIsNotNone(release_tool)
         self.assertIsNotNone(refund_tool)
 
-        asyncio.run(
-            credit_tool(
-                agentId="agent_buyer",
-                amountAtomic="5000000",
-                reason="demo funding",
-            )
+        main.get_store().credit(
+            agent_id="agent_buyer",
+            amount_atomic="5000000",
+            reason="demo funding",
+            metadata={},
         )
         escrow = asyncio.run(
             create_tool(
@@ -907,12 +905,11 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertEqual(accounts["agent_buyer"]["lockedAtomic"], "0")
         self.assertEqual(accounts["agent_seller"]["availableAtomic"], "3000000")
 
-        asyncio.run(
-            credit_tool(
-                agentId="agent_refund_buyer",
-                amountAtomic="4000000",
-                reason="demo funding",
-            )
+        main.get_store().credit(
+            agent_id="agent_refund_buyer",
+            amount_atomic="4000000",
+            reason="demo funding",
+            metadata={},
         )
         refund_escrow = asyncio.run(
             create_tool(

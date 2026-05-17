@@ -24,7 +24,6 @@ from fastapi.responses import FileResponse
 from mcp_tools import (
     agent_wallet_create_escrow_tool,
     agent_wallet_create_onramp_session_tool,
-    agent_wallet_credit_balance_tool,
     agent_wallet_get_or_create_tool,
     agent_wallet_get_ledger_state_tool,
     agent_wallet_refund_escrow_tool,

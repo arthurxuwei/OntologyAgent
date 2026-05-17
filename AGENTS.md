@@ -14,7 +14,7 @@
 - Offchain balances and Escrow state live in the standalone `ledger` service, not in `agent` or `chain`
 - Any payment, x402 call, chain transfer, escrow lock, release, or refund MUST call route_payment_intent first
 - After routing, use only the returned allowedTools; if the router returns needs_clarification, ask the user before paying
-- Agent-facing ledger access is through dynamically loaded `ledger` MCP tools: route_payment_intent, agent_wallet_get_ledger_state, agent_wallet_credit_balance, agent_wallet_create_escrow, agent_wallet_release_escrow, agent_wallet_refund_escrow
+- Agent-facing ledger access is through dynamically loaded `ledger` MCP tools: route_payment_intent, agent_wallet_get_ledger_state, agent_wallet_get_or_create, agent_wallet_create_escrow, agent_wallet_release_escrow, agent_wallet_refund_escrow
 - Matched A2A task settlement should use `ledger` escrow flows; x402 is for immediate paid HTTP/API calls
 - Never call x402 or perform paid actions without checking wealth status first
 - Circle test wallets are not practically deletable; for Agent Wallet testing, always check for and reuse an existing test wallet before creating a new one

@@ -100,7 +100,6 @@ docker compose --env-file "$(dirname "$(git rev-parse --git-common-dir)")/.env" 
   - `route_payment_intent`（任何付款、x402、转账或 Escrow 动作前先选择支付方式）
   - `agent_wallet_get_ledger_state`
   - `agent_wallet_get_or_create`
-  - `agent_wallet_credit_balance`
   - `agent_wallet_create_onramp_session`
   - `agent_wallet_create_escrow`
   - `agent_wallet_release_escrow`

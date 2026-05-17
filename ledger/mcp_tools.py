@@ -61,32 +61,6 @@ async def agent_wallet_get_ledger_state_tool() -> dict[str, Any]:
     return ledger_store().load().model_dump()
 
 
-async def agent_wallet_credit_balance_tool(
-    agentId: str,
-    amountAtomic: str,
-    reason: Optional[str] = None,
-) -> dict[str, Any]:
-    account, entry = ledger_store().credit(
-        agent_id=agentId,
-        amount_atomic=amountAtomic,
-        reason=reason,
-        metadata={},
-    )
-    from main import record_ledger_chain_event
-
-    chain_record = await record_ledger_chain_event(
-        event_type="credit",
-        escrow=None,
-        entries=[entry],
-        extra={"agentId": agentId, "amountAtomic": amountAtomic},
-    )
-    return {
-        "account": account.model_dump(),
-        "entry": entry.model_dump(),
-        "chainRecord": chain_record.model_dump() if chain_record is not None else None,
-    }
-
-
 async def agent_wallet_get_or_create_tool(
     agentName: str,
     agentId: str,
@@ -380,7 +354,6 @@ def build_mcp_app(store_factory: Callable[[], Any]) -> Any:
     mcp.tool(name="route_payment_intent")(route_payment_intent_tool)
     mcp.tool(name="agent_wallet_get_ledger_state")(agent_wallet_get_ledger_state_tool)
     mcp.tool(name="agent_wallet_get_or_create")(agent_wallet_get_or_create_tool)
-    mcp.tool(name="agent_wallet_credit_balance")(agent_wallet_credit_balance_tool)
     mcp.tool(name="agent_wallet_create_onramp_session")(
         agent_wallet_create_onramp_session_tool
     )
