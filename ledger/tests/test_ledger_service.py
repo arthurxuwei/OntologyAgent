@@ -139,6 +139,121 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertIn("/onramp/sessions", html)
         self.assertIn("/ledger/escrows", html)
 
+    def test_admin_serves_ledger_management_page(self) -> None:
+        response = self.client.get("/admin")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Chief Ledger", response.text)
+        self.assertIn('id="ledger-state"', response.text)
+
+    def test_dashboard_serves_user_dashboard_page(self) -> None:
+        response = self.client.get("/dashboard")
+
+        self.assertEqual(response.status_code, 200)
+        html = response.text
+        self.assertIn("Agent Wallet · MVP Dashboard", html)
+        self.assertIn("if (!registered) return <window.RegistrationScreen />", html)
+        self.assertIn("if (!claimed)    return <window.ClaimScreen />", html)
+        self.assertIn("const [mockState, setMockStateState]   = React.useState('day1');", html)
+        self.assertNotIn("<window.MockStateToggle />", html)
+        self.assertIn("fetch(`/dashboard/data${emailQuery}`)", html)
+        self.assertIn("fetch(`/dashboard/claimable-agents?", html)
+        self.assertNotIn("claimAgent('agentA')", html)
+
+    def test_dashboard_data_returns_email_scoped_ledger_accounts(self) -> None:
+        store = main.get_store()
+        store.bind_account_wallet(
+            agent_id="agent_alpha",
+            agent_name="Alpha Research",
+            email="Owner@Example.com",
+            wallet_address="0x1111111111111111111111111111111111111111",
+            circle_wallet_id="circle-alpha",
+        )
+        store.bind_account_wallet(
+            agent_id="agent_beta",
+            agent_name="Beta Research",
+            email="other@example.com",
+            wallet_address="0x2222222222222222222222222222222222222222",
+            circle_wallet_id="circle-beta",
+        )
+        store.credit(
+            agent_id="agent_alpha",
+            amount_atomic="2500000",
+            reason="operator funding",
+            metadata={},
+        )
+        store.create_escrow(
+            buyer_agent_id="agent_alpha",
+            seller_agent_id="agent_beta",
+            amount_atomic="500000",
+            task_id="task_123",
+            description="Research task",
+            metadata={},
+        )
+
+        response = self.client.get("/dashboard/data?email=owner@example.com")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["source"], "ledger")
+        self.assertEqual(payload["defaultAgentId"], "agent_alpha")
+        self.assertEqual(set(payload["agents"].keys()), {"agent_alpha"})
+        alpha = payload["agents"]["agent_alpha"]
+        self.assertEqual(alpha["agent"]["name"], "Alpha Research")
+        self.assertEqual(alpha["agent"]["ownerEmail"], "owner@example.com")
+        self.assertEqual(alpha["balance"]["available"], 2.0)
+        self.assertEqual(alpha["balance"]["locked"], 0.5)
+        self.assertEqual(alpha["balance"]["lifetimeIn"], 2.5)
+        self.assertEqual(alpha["balance"]["lifetimeOut"], 0.5)
+        self.assertEqual(alpha["transactions"][0]["counterparty"], "agent_beta")
+        self.assertEqual(alpha["transactions"][0]["status"], "locked")
+
+    def test_dashboard_claimable_agents_come_from_unclaimed_email_accounts(self) -> None:
+        store = main.get_store()
+        store.bind_account_wallet(
+            agent_id="agent_alpha",
+            agent_name="Alpha Research",
+            email="owner@example.com",
+            wallet_address="0x1111111111111111111111111111111111111111",
+            circle_wallet_id="circle-alpha",
+        )
+        store.bind_account_wallet(
+            agent_id="agent_beta",
+            agent_name="Beta Research",
+            email="owner@example.com",
+            wallet_address="0x2222222222222222222222222222222222222222",
+            circle_wallet_id="circle-beta",
+        )
+        store.bind_account_wallet(
+            agent_id="agent_other",
+            agent_name="Other Research",
+            email="other@example.com",
+            wallet_address="0x3333333333333333333333333333333333333333",
+            circle_wallet_id="circle-other",
+        )
+        store.credit(
+            agent_id="agent_beta",
+            amount_atomic="1250000",
+            reason="operator funding",
+            metadata={},
+        )
+
+        response = self.client.get(
+            "/dashboard/claimable-agents?email=OWNER@example.com&claimed=agent_alpha"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["email"], "owner@example.com")
+        self.assertEqual(payload["source"], "ledger-accounts")
+        self.assertEqual(len(payload["agents"]), 1)
+        candidate = payload["agents"][0]
+        self.assertEqual(candidate["agentId"], "agent_beta")
+        self.assertEqual(candidate["agentName"], "Beta Research")
+        self.assertEqual(candidate["ownerEmail"], "owner@example.com")
+        self.assertEqual(candidate["claimStatus"], "unclaimed")
+        self.assertEqual(candidate["dashboard"]["balance"]["available"], 1.25)
+
     def test_management_page_helpers_render_and_call_ledger_api(self) -> None:
         if shutil.which("node") is None:
             self.skipTest("node is required to execute ledger page helpers")

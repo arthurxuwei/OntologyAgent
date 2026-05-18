@@ -45,6 +45,12 @@ DEFAULT_SETTLEMENT_MCP_URL = "http://circle-mcp:8093/mcp/"
 DEFAULT_WALLET_MCP_URL = "http://circle-mcp:8093/mcp/"
 DEFAULT_CHAIN_RECORDER_ADDRESS = "0x000000000000000000000000000000000000dEaD"
 LEDGER_CONSOLE_PATH = Path(__file__).resolve().parent / "web" / "index.html"
+LEDGER_DASHBOARD_PATH = Path(__file__).resolve().parent / "web" / "dashboard.html"
+NO_CACHE_HEADERS = {
+    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+    "Pragma": "no-cache",
+    "Expires": "0",
+}
 
 app = FastAPI(title="Chief offchain ledger")
 
@@ -313,6 +319,250 @@ def add_atomic(left: str, delta: int) -> str:
     if result < 0:
         raise ValueError("ledger balance cannot become negative")
     return str(result)
+
+
+def atomic_decimal(value: Any) -> Decimal:
+    try:
+        return Decimal(str(value or "0"))
+    except (InvalidOperation, ValueError):
+        return Decimal("0")
+
+
+def atomic_to_usdc(value: Any) -> float:
+    return float(atomic_decimal(value) / Decimal("1000000"))
+
+
+def short_address(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return "ledger-account"
+    if len(text) <= 18:
+        return text
+    return f"{text[:10]}...{text[-6:]}"
+
+
+def dashboard_counterparty(
+    entry: dict[str, Any],
+    escrow_by_id: dict[str, dict[str, Any]],
+) -> str:
+    escrow_id = entry.get("escrowId")
+    if isinstance(escrow_id, str) and escrow_id in escrow_by_id:
+        escrow = escrow_by_id[escrow_id]
+        agent_id = entry.get("agentId")
+        buyer_id = escrow.get("buyerAgentId")
+        seller_id = escrow.get("sellerAgentId")
+        if agent_id == buyer_id and seller_id:
+            return str(seller_id)
+        if agent_id == seller_id and buyer_id:
+            return str(buyer_id)
+        return str(escrow.get("description") or escrow_id)
+    entry_type = str(entry.get("entryType") or "")
+    reason = str(entry.get("reason") or "").strip()
+    if "onramp" in entry_type or "onramp" in reason.lower():
+        return "Coinbase Onramp"
+    return reason or "Ledger"
+
+
+def dashboard_transaction(
+    entry: dict[str, Any],
+    escrow_by_id: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    entry_type = str(entry.get("entryType") or "ledger")
+    available_delta = atomic_decimal(entry.get("availableDeltaAtomic"))
+    locked_delta = atomic_decimal(entry.get("lockedDeltaAtomic"))
+    escrow = escrow_by_id.get(str(entry.get("escrowId") or ""))
+    amount_atomic = (
+        atomic_decimal(escrow.get("amountAtomic"))
+        if escrow
+        else max(abs(available_delta), abs(locked_delta))
+    )
+    agent_id = entry.get("agentId")
+    direction = "out" if available_delta < 0 or locked_delta > 0 else "in"
+    if entry_type == "escrow_release" and escrow and agent_id == escrow.get("buyerAgentId"):
+        direction = "out"
+    status = "released"
+    if entry_type == "escrow_lock":
+        status = "locked"
+    elif entry_type == "escrow_refund":
+        status = "refunded"
+    elif "onramp" in entry_type or entry_type == "credit":
+        status = "onramp"
+    role = "payer" if direction == "out" else "payee"
+    if status == "onramp":
+        role = "deposit"
+    elif status == "refunded":
+        role = "refund"
+    return {
+        "id": entry.get("entryId") or entry.get("escrowId") or "ledger_entry",
+        "counterparty": dashboard_counterparty(entry, escrow_by_id),
+        "amount": atomic_to_usdc(amount_atomic),
+        "direction": direction,
+        "role": role,
+        "status": status,
+        "timestamp": entry.get("createdAt") or "ledger",
+    }
+
+
+def empty_dashboard_agent(account: dict[str, Any]) -> dict[str, Any]:
+    agent_id = str(account.get("agentId") or "").strip()
+    wallet_address = (
+        account.get("walletAddress")
+        or account.get("circleWalletId")
+        or agent_id
+    )
+    return {
+        "agent": {
+            "id": agent_id,
+            "name": str(account.get("agentName") or agent_id),
+            "role": "Agent Wallet Account",
+            "walletAddress": short_address(wallet_address),
+            "claimedDaysAgo": 0,
+            "ownerEmail": normalize_email(account.get("email")),
+        },
+        "balance": {
+            "available": 0.0,
+            "locked": 0.0,
+            "lifetimeIn": 0.0,
+            "lifetimeOut": 0.0,
+        },
+        "transactions": [],
+        "settings": {"limits": {"perTradeCap": 0.01}},
+    }
+
+
+def build_dashboard_data(
+    ledger_state: dict[str, Any],
+    owner_email: Optional[str] = None,
+) -> dict[str, Any]:
+    accounts = [
+        account
+        for account in ledger_state.get("accounts", [])
+        if isinstance(account, dict)
+    ]
+    entries = [
+        entry
+        for entry in ledger_state.get("entries", [])
+        if isinstance(entry, dict)
+    ]
+    escrows = [
+        escrow
+        for escrow in ledger_state.get("escrows", [])
+        if isinstance(escrow, dict)
+    ]
+    escrow_by_id = {
+        str(escrow.get("escrowId")): escrow
+        for escrow in escrows
+        if escrow.get("escrowId")
+    }
+    normalized_owner_email = normalize_email(owner_email)
+    entries_by_agent: dict[str, list[dict[str, Any]]] = {}
+    for entry in sorted(entries, key=lambda item: str(item.get("createdAt") or ""), reverse=True):
+        agent_id = str(entry.get("agentId") or "").strip()
+        if not agent_id:
+            continue
+        entries_by_agent.setdefault(agent_id, []).append(entry)
+
+    agents: dict[str, Any] = {}
+    for account in accounts:
+        agent_id = str(account.get("agentId") or "").strip()
+        if not agent_id:
+            continue
+        if normalized_owner_email and normalize_email(account.get("email")) != normalized_owner_email:
+            continue
+        agent_entries = entries_by_agent.get(agent_id, [])
+        lifetime_in = sum(
+            atomic_to_usdc(entry.get("availableDeltaAtomic"))
+            for entry in agent_entries
+            if atomic_decimal(entry.get("availableDeltaAtomic")) > 0
+        )
+        lifetime_out = sum(
+            atomic_to_usdc(abs(atomic_decimal(entry.get("availableDeltaAtomic"))))
+            for entry in agent_entries
+            if atomic_decimal(entry.get("availableDeltaAtomic")) < 0
+        )
+        wallet_address = (
+            account.get("walletAddress")
+            or account.get("circleWalletAddress")
+            or account.get("circleWalletId")
+            or agent_id
+        )
+        agents[agent_id] = {
+            "agent": {
+                "id": agent_id,
+                "name": str(account.get("agentName") or agent_id),
+                "role": "Agent Wallet Account",
+                "walletAddress": short_address(wallet_address),
+                "claimedDaysAgo": 0,
+                "ownerEmail": normalize_email(account.get("email")),
+            },
+            "balance": {
+                "available": atomic_to_usdc(account.get("availableAtomic")),
+                "locked": atomic_to_usdc(account.get("lockedAtomic")),
+                "lifetimeIn": round(lifetime_in, 6),
+                "lifetimeOut": round(lifetime_out, 6),
+            },
+            "transactions": [
+                dashboard_transaction(entry, escrow_by_id)
+                for entry in agent_entries
+            ],
+            "settings": {"limits": {"perTradeCap": 0.01}},
+        }
+
+    return {
+        "agents": agents,
+        "defaultAgentId": next(iter(agents), None),
+        "source": "ledger",
+    }
+
+
+def build_claimable_agents(
+    *,
+    email: str,
+    ledger_state: dict[str, Any],
+    claimed_agent_ids: list[str],
+) -> dict[str, Any]:
+    normalized_email = normalize_email(email)
+    if normalized_email is None:
+        raise HTTPException(status_code=400, detail="email is required")
+    claimed = {str(agent_id).strip() for agent_id in claimed_agent_ids if str(agent_id).strip()}
+    dashboard_state = build_dashboard_data(ledger_state)
+    candidates: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    accounts = [
+        account
+        for account in ledger_state.get("accounts", [])
+        if isinstance(account, dict)
+    ]
+    for account in sorted(accounts, key=lambda item: str(item.get("updatedAt") or ""), reverse=True):
+        agent_id = str(account.get("agentId") or "").strip()
+        if not agent_id or agent_id in seen or agent_id in claimed:
+            continue
+        if normalize_email(account.get("email")) != normalized_email:
+            continue
+        seen.add(agent_id)
+        wallet_address = (
+            account.get("walletAddress")
+            or account.get("circleWalletId")
+            or agent_id
+        )
+        dashboard_agent = dashboard_state["agents"].get(agent_id) or empty_dashboard_agent(account)
+        candidates.append(
+            {
+                "agentId": agent_id,
+                "agentName": str(account.get("agentName") or agent_id),
+                "ownerEmail": normalized_email,
+                "walletAddress": str(wallet_address),
+                "displayWalletAddress": short_address(wallet_address),
+                "circleWalletId": account.get("circleWalletId"),
+                "claimStatus": "unclaimed",
+                "dashboard": dashboard_agent,
+            }
+        )
+    return {
+        "email": normalized_email,
+        "agents": candidates,
+        "source": "ledger-accounts",
+    }
 
 
 class CoinbaseAuth:
@@ -1696,12 +1946,53 @@ def health() -> dict[str, Any]:
 
 @app.get("/")
 def ledger_console() -> FileResponse:
-    return FileResponse(LEDGER_CONSOLE_PATH, media_type="text/html")
+    return FileResponse(
+        LEDGER_CONSOLE_PATH,
+        media_type="text/html",
+        headers=NO_CACHE_HEADERS,
+    )
+
+
+@app.get("/admin")
+def ledger_admin() -> FileResponse:
+    return FileResponse(
+        LEDGER_CONSOLE_PATH,
+        media_type="text/html",
+        headers=NO_CACHE_HEADERS,
+    )
+
+
+@app.get("/dashboard")
+def ledger_dashboard() -> FileResponse:
+    return FileResponse(
+        LEDGER_DASHBOARD_PATH,
+        media_type="text/html",
+        headers=NO_CACHE_HEADERS,
+    )
 
 
 @app.get("/ledger/state")
 async def get_ledger_state() -> dict[str, Any]:
     return await ledger_state_with_circle_balances()
+
+
+@app.get("/dashboard/data")
+def dashboard_data(email: str = "") -> dict[str, Any]:
+    return build_dashboard_data(get_store().load().model_dump(), owner_email=email)
+
+
+@app.get("/dashboard/claimable-agents")
+def dashboard_claimable_agents(email: str, claimed: str = "") -> dict[str, Any]:
+    claimed_agent_ids = [
+        item.strip()
+        for item in claimed.split(",")
+        if item.strip()
+    ]
+    return build_claimable_agents(
+        email=email,
+        ledger_state=get_store().load().model_dump(),
+        claimed_agent_ids=claimed_agent_ids,
+    )
 
 
 async def ledger_state_with_circle_balances() -> dict[str, Any]:
