@@ -123,6 +123,9 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         html = response.text
         self.assertIn("Chief Ledger", html)
+        self.assertIn('rel="icon"', html)
+        self.assertIn('class="brand-mark"', html)
+        self.assertIn("Chief Ledger logo", html)
         self.assertIn('id="ledger-state"', html)
         self.assertIn('id="wallet-form"', html)
         self.assertNotIn('id="credit-form"', html)
