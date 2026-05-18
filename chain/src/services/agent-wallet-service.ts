@@ -1,6 +1,7 @@
 import type { AppConfig } from "../config.js";
 import { AppError } from "../domain/errors.js";
 import type {
+  AgentWalletBinding,
   AgentWalletCallX402ServiceCommand,
   AgentWalletCallX402ServiceResult,
   AgentWalletFaucetCommand,
@@ -82,6 +83,27 @@ export class AgentWalletService {
         reused: true,
         ...(binding ? { binding } : {}),
       };
+    }
+
+    if (hasNonEmptyValue(command.agentId)) {
+      const existingBinding = await this.stateStore.findBindingByAgentId(command.agentId);
+      if (existingBinding) {
+        const binding = await this.stateStore.saveBinding({
+          agentName,
+          agentId: command.agentId,
+          email: command.email ?? existingBinding.email ?? undefined,
+          circleWalletId: existingBinding.circleWalletId,
+          circleWalletSetId: existingBinding.circleWalletSetId,
+          blockchain: existingBinding.blockchain,
+          walletAddress: existingBinding.walletAddress,
+          mode: existingBinding.mode,
+        });
+        return {
+          ...statusFromBinding(existingBinding),
+          reused: true,
+          ...(binding ? { binding } : {}),
+        };
+      }
     }
 
     const localWallet = await this.stateStore.findByAgentName(agentName);
@@ -393,6 +415,18 @@ function normalizeAgentName(agentName: string): string {
 
 function firstNonEmpty(...values: Array<string | null | undefined>): string | undefined {
   return values.find((value): value is string => hasNonEmptyValue(value ?? undefined))?.trim();
+}
+
+function statusFromBinding(binding: AgentWalletBinding): AgentWalletStatusResult {
+  return {
+    circleWalletId: binding.circleWalletId,
+    circleWalletSetId: binding.circleWalletSetId,
+    blockchain: binding.blockchain,
+    walletAddress: normalizeRequestAddress(binding.walletAddress, "walletAddress"),
+    status: "available",
+    balances: {},
+    mode: binding.mode,
+  };
 }
 
 function normalizePositiveDecimal(value: string | undefined, fieldName: string): string {

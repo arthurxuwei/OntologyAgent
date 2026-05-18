@@ -475,8 +475,8 @@
           `<div class="ledger-state">`,
           `<div class="metric-grid">`,
           `<div class="metric"><span>Accounts</span><strong>${accounts.length}</strong></div>`,
-          `<div class="metric"><span>Available</span><strong>${formatAtomic(sumAtomic(accounts, "availableAtomic"))}</strong></div>`,
-          `<div class="metric"><span>Locked</span><strong>${formatAtomic(sumAtomic(accounts, "lockedAtomic"))}</strong></div>`,
+          `<div class="metric"><span>Ledger Available</span><strong>${formatAtomic(sumAtomic(accounts, "availableAtomic"))}</strong></div>`,
+          `<div class="metric"><span>Ledger Locked</span><strong>${formatAtomic(sumAtomic(accounts, "lockedAtomic"))}</strong></div>`,
           `<div class="metric"><span>Escrows / Onramps</span><strong>${escrows.length} / ${onrampSessions.length}</strong></div>`,
           `</div>`,
           renderStateSection(
@@ -484,8 +484,8 @@
             [
               { label: "Agent ID", render: (account) => `<span class="mono">${shortValue(account.agentId)}</span>` },
               { label: "Wallet Address", render: (account) => `<span class="mono">${shortValue(account.walletAddress || account.circleWalletId)}</span>` },
-              { label: "Available", render: (account) => formatAtomic(account.availableAtomic) },
-              { label: "Locked", render: (account) => formatAtomic(account.lockedAtomic) },
+              { label: "Ledger Available", render: (account) => formatAtomic(account.availableAtomic) },
+              { label: "Ledger Locked", render: (account) => formatAtomic(account.lockedAtomic) },
               { label: "Updated", render: (account) => formatDate(account.updatedAt || account.createdAt) },
             ],
             accounts,

@@ -423,6 +423,98 @@ test("AgentWalletService imports and assigns an unused Circle wallet before crea
   );
 });
 
+test("AgentWalletService reuses an existing binding by agent id before importing unused wallets", async () => {
+  await withTempStateFile(
+    {
+      wallets: [
+        {
+          agentName: "Original Agent Name",
+          circleWalletId: "bound-circle-wallet",
+          circleWalletSetId: "circle-wallet-set",
+          blockchain: "BASE-SEPOLIA",
+          walletAddress: "0x1111111111111111111111111111111111111111",
+          mode: "circle",
+        },
+        {
+          agentName: "Imported Spare",
+          circleWalletId: "unused-circle-wallet",
+          circleWalletSetId: "circle-wallet-set",
+          blockchain: "BASE-SEPOLIA",
+          walletAddress: "0x2222222222222222222222222222222222222222",
+          mode: "circle",
+        },
+      ],
+      agentWalletBindings: [
+        {
+          agentName: "Original Agent Name",
+          agentId: "agent_existing",
+          email: "existing@example.com",
+          walletAddress: "0x1111111111111111111111111111111111111111",
+          circleWalletId: "bound-circle-wallet",
+          circleWalletSetId: "circle-wallet-set",
+          blockchain: "BASE-SEPOLIA",
+          mode: "circle",
+          updatedAt: "2026-05-13T00:00:00.000Z",
+        },
+      ],
+    },
+    async (statePath) => {
+      const config = liveCircleConfig({
+        AGENT_WALLET_STATE_PATH: statePath,
+      });
+      let listCalls = 0;
+      let createCalls = 0;
+      const circleWalletService = {
+        listWallets: async () => {
+          listCalls += 1;
+          return [];
+        },
+        createWallet: async () => {
+          createCalls += 1;
+          throw new Error("createWallet should not be called");
+        },
+      } as unknown as CircleWalletService;
+      const service = new AgentWalletService(
+        config,
+        fakeX402FetchService(baseX402Result()),
+        circleWalletService,
+      );
+
+      const result = await service.getOrCreate({
+        agentName: "Changed Agent Name",
+        agentId: "agent_existing",
+        email: "updated@example.com",
+      });
+
+      assert.equal(listCalls, 0);
+      assert.equal(createCalls, 0);
+      assert.equal(result.reused, true);
+      assert.equal(result.circleWalletId, "bound-circle-wallet");
+      assert.equal(result.walletAddress, "0x1111111111111111111111111111111111111111");
+      assert.equal(result.binding?.agentName, "Changed Agent Name");
+      assert.equal(result.binding?.agentId, "agent_existing");
+      assert.equal(result.binding?.circleWalletId, "bound-circle-wallet");
+
+      const state = JSON.parse(await readFile(statePath, "utf-8")) as {
+        agentWalletBindings: Array<{ agentName: string; circleWalletId: string }>;
+      };
+      assert.deepEqual(state.agentWalletBindings, [
+        {
+          agentName: "Changed Agent Name",
+          agentId: "agent_existing",
+          email: "updated@example.com",
+          walletAddress: "0x1111111111111111111111111111111111111111",
+          circleWalletId: "bound-circle-wallet",
+          circleWalletSetId: "circle-wallet-set",
+          blockchain: "BASE-SEPOLIA",
+          mode: "circle",
+          updatedAt: result.binding?.updatedAt,
+        },
+      ]);
+    },
+  );
+});
+
 test("AgentWalletService normalizes x402 service registration", async () => {
   const config = loadConfig({ CHAIN_MOCK: "true" });
   const service = new AgentWalletService(config, fakeX402FetchService(baseX402Result()));
