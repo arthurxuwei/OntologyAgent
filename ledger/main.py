@@ -28,6 +28,7 @@ from mcp_tools import (
     agent_wallet_get_ledger_state_tool,
     agent_wallet_refund_escrow_tool,
     agent_wallet_release_escrow_tool,
+    agent_wallet_transfer_tool,
     build_mcp_app,
     route_payment_intent_tool,
 )
@@ -69,7 +70,13 @@ class LedgerEntry(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     entryId: str
-    entryType: Literal["credit", "escrow_lock", "escrow_release", "escrow_refund"]
+    entryType: Literal[
+        "credit",
+        "escrow_lock",
+        "escrow_release",
+        "escrow_refund",
+        "agent_transfer",
+    ]
     agentId: str
     asset: str = DEFAULT_ASSET
     availableDeltaAtomic: str = "0"
@@ -84,7 +91,13 @@ class LedgerChainRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     recordId: str
-    eventType: Literal["credit", "escrow_lock", "escrow_release", "escrow_refund"]
+    eventType: Literal[
+        "credit",
+        "escrow_lock",
+        "escrow_release",
+        "escrow_refund",
+        "agent_transfer",
+    ]
     status: Literal["submitted", "failed"]
     chainTool: str = "chain_submit_execution"
     chainMcpUrl: str
@@ -104,11 +117,12 @@ class LedgerSettlementRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     recordId: str
-    eventType: Literal["escrow_release"]
+    eventType: Literal["escrow_release", "agent_transfer"]
     status: Literal["submitted", "failed"]
     settlementTool: str = "agent_wallet_settle_ledger_transfer"
     chainMcpUrl: str
-    escrowId: str
+    escrowId: Optional[str] = None
+    transferId: Optional[str] = None
     fromAgentId: str
     toAgentId: str
     asset: str = DEFAULT_ASSET
@@ -229,6 +243,16 @@ class CreateEscrowRequest(BaseModel):
     amountAtomic: str
     taskId: Optional[str] = None
     description: Optional[str] = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentTransferRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    fromAgentId: str = Field(min_length=1)
+    toAgentId: str = Field(min_length=1)
+    amountAtomic: str = Field(min_length=1)
+    reason: Optional[str] = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -449,7 +473,13 @@ class LedgerChainRecorder:
     async def submit(
         self,
         *,
-        event_type: Literal["credit", "escrow_lock", "escrow_release", "escrow_refund"],
+        event_type: Literal[
+            "credit",
+            "escrow_lock",
+            "escrow_release",
+            "escrow_refund",
+            "agent_transfer",
+        ],
         escrow: Optional[EscrowRecord],
         entries: list[LedgerEntry],
         payload: dict[str, Any],
@@ -585,7 +615,12 @@ class LedgerSettlementClient:
             "updatedAt": current,
         }
         try:
-            result = await self._call_settlement_tool(escrow)
+            result = await self._call_transfer_tool(
+                from_agent_id=escrow.buyerAgentId,
+                to_agent_id=escrow.sellerAgentId,
+                amount_atomic=escrow.amountAtomic,
+                ref_id=f"{escrow.escrowId}:release",
+            )
             transfer = self._extract_tool_content(result)
             if transfer.get("error") is not None:
                 raise RuntimeError(json.dumps(transfer["error"], sort_keys=True))
@@ -614,7 +649,77 @@ class LedgerSettlementClient:
                 raise LedgerSettlementError(record) from error
             return record
 
-    async def _call_settlement_tool(self, escrow: EscrowRecord) -> dict[str, Any]:
+    async def submit_agent_transfer(
+        self,
+        *,
+        from_agent_id: str,
+        to_agent_id: str,
+        amount_atomic: str,
+        ref_id: str,
+    ) -> LedgerSettlementRecord:
+        current = now_iso()
+        base_record = {
+            "recordId": f"settle_{uuid.uuid4().hex}",
+            "eventType": "agent_transfer",
+            "chainMcpUrl": self.settlement_mcp_url,
+            "transferId": ref_id,
+            "fromAgentId": from_agent_id,
+            "toAgentId": to_agent_id,
+            "asset": DEFAULT_ASSET,
+            "amountAtomic": amount_atomic,
+            "createdAt": current,
+            "updatedAt": current,
+        }
+        if not self.enabled:
+            record = LedgerSettlementRecord(
+                **base_record,
+                status="failed",
+                error="Circle settlement is required for direct agent transfers",
+            )
+            raise LedgerSettlementError(record)
+        try:
+            result = await self._call_transfer_tool(
+                from_agent_id=from_agent_id,
+                to_agent_id=to_agent_id,
+                amount_atomic=amount_atomic,
+                ref_id=ref_id,
+            )
+            transfer = self._extract_tool_content(result)
+            if transfer.get("error") is not None:
+                raise RuntimeError(json.dumps(transfer["error"], sort_keys=True))
+            return LedgerSettlementRecord(
+                **base_record,
+                status="submitted",
+                transactionId=transfer.get("transactionId")
+                if isinstance(transfer.get("transactionId"), str)
+                else None,
+                transactionHash=transfer.get("transactionHash")
+                if isinstance(transfer.get("transactionHash"), str)
+                else None,
+                transactionState=transfer.get("state")
+                if isinstance(transfer.get("state"), str)
+                else None,
+                mode=transfer.get("mode") if isinstance(transfer.get("mode"), str) else None,
+                toolResult=result,
+            )
+        except LedgerSettlementError:
+            raise
+        except Exception as error:
+            record = LedgerSettlementRecord(
+                **base_record,
+                status="failed",
+                error=str(error),
+            )
+            raise LedgerSettlementError(record) from error
+
+    async def _call_transfer_tool(
+        self,
+        *,
+        from_agent_id: str,
+        to_agent_id: str,
+        amount_atomic: str,
+        ref_id: str,
+    ) -> dict[str, Any]:
         request = {
             "jsonrpc": "2.0",
             "id": 1,
@@ -622,10 +727,10 @@ class LedgerSettlementClient:
             "params": {
                 "name": "agent_wallet_settle_ledger_transfer",
                 "arguments": {
-                    "fromAgentId": escrow.buyerAgentId,
-                    "toAgentId": escrow.sellerAgentId,
-                    "amountAtomic": escrow.amountAtomic,
-                    "refId": f"{escrow.escrowId}:release",
+                    "fromAgentId": from_agent_id,
+                    "toAgentId": to_agent_id,
+                    "amountAtomic": amount_atomic,
+                    "refId": ref_id,
                 },
             },
         }
@@ -853,6 +958,91 @@ class OffchainLedgerStore:
             )
             state.entries.append(entry)
             return updated, entry
+
+        return self._mutate(mutate)
+
+    def validate_agent_transfer(
+        self,
+        *,
+        from_agent_id: str,
+        to_agent_id: str,
+        amount_atomic: str,
+    ) -> None:
+        amount = parse_positive_atomic(amount_atomic)
+        state = self.load()
+        sender = self._find_account(state, from_agent_id)
+        receiver = self._find_account(state, to_agent_id)
+        if sender is None:
+            raise ValueError("sender account not found")
+        if receiver is None:
+            raise ValueError("receiver account not found")
+        if int(sender.availableAtomic) < amount:
+            raise ValueError("insufficient available balance")
+        self._require_circle_wallet(sender, "sender")
+        self._require_circle_wallet(receiver, "receiver")
+
+    def transfer_between_agents(
+        self,
+        *,
+        from_agent_id: str,
+        to_agent_id: str,
+        amount_atomic: str,
+        reason: Optional[str],
+        metadata: dict[str, Any],
+        transfer_id: str,
+        settlement_record_id: Optional[str],
+    ) -> tuple[LedgerAccount, LedgerAccount, list[LedgerEntry]]:
+        amount = parse_positive_atomic(amount_atomic)
+
+        def mutate(state: LedgerState) -> tuple[LedgerAccount, LedgerAccount, list[LedgerEntry]]:
+            sender, sender_index = self._account_for_update(
+                state, from_agent_id, create=False
+            )
+            receiver, receiver_index = self._account_for_update(
+                state, to_agent_id, create=False
+            )
+            if int(sender.availableAtomic) < amount:
+                raise ValueError("insufficient available balance")
+            self._require_circle_wallet(sender, "sender")
+            self._require_circle_wallet(receiver, "receiver")
+
+            current = now_iso()
+            updated_sender = sender.model_copy(
+                update={
+                    "availableAtomic": add_atomic(sender.availableAtomic, -amount),
+                    "updatedAt": current,
+                }
+            )
+            updated_receiver = receiver.model_copy(
+                update={
+                    "availableAtomic": add_atomic(receiver.availableAtomic, amount),
+                    "updatedAt": current,
+                }
+            )
+            entry_metadata = {
+                **metadata,
+                "transferId": transfer_id,
+            }
+            if settlement_record_id is not None:
+                entry_metadata["settlementRecordId"] = settlement_record_id
+            sender_entry = self._entry(
+                entry_type="agent_transfer",
+                agent_id=from_agent_id,
+                available_delta=-amount,
+                reason=reason or "agent transfer sent",
+                metadata={**entry_metadata, "counterpartyAgentId": to_agent_id},
+            )
+            receiver_entry = self._entry(
+                entry_type="agent_transfer",
+                agent_id=to_agent_id,
+                available_delta=amount,
+                reason=reason or "agent transfer received",
+                metadata={**entry_metadata, "counterpartyAgentId": from_agent_id},
+            )
+            state.accounts[sender_index] = updated_sender
+            state.accounts[receiver_index] = updated_receiver
+            state.entries.extend([sender_entry, receiver_entry])
+            return updated_sender, updated_receiver, [sender_entry, receiver_entry]
 
         return self._mutate(mutate)
 
@@ -1193,6 +1383,18 @@ class OffchainLedgerStore:
         state.accounts.append(account)
         return account, len(state.accounts) - 1
 
+    @staticmethod
+    def _find_account(state: LedgerState, agent_id: str) -> Optional[LedgerAccount]:
+        for account in state.accounts:
+            if account.agentId == agent_id and account.asset == DEFAULT_ASSET:
+                return account
+        return None
+
+    @staticmethod
+    def _require_circle_wallet(account: LedgerAccount, role: str) -> None:
+        if not account.circleWalletId and not account.walletAddress:
+            raise ValueError(f"{role} account is not bound to a Circle wallet")
+
     def _escrow_for_update(
         self, state: LedgerState, escrow_id: str
     ) -> tuple[EscrowRecord, int]:
@@ -1217,7 +1419,13 @@ class OffchainLedgerStore:
     @staticmethod
     def _entry(
         *,
-        entry_type: Literal["credit", "escrow_lock", "escrow_release", "escrow_refund"],
+        entry_type: Literal[
+            "credit",
+            "escrow_lock",
+            "escrow_release",
+            "escrow_refund",
+            "agent_transfer",
+        ],
         agent_id: str,
         available_delta: int = 0,
         locked_delta: int = 0,
@@ -1296,7 +1504,13 @@ def get_ledger_wallet_client() -> LedgerWalletClient:
 
 def ledger_chain_payload(
     *,
-    event_type: Literal["credit", "escrow_lock", "escrow_release", "escrow_refund"],
+    event_type: Literal[
+        "credit",
+        "escrow_lock",
+        "escrow_release",
+        "escrow_refund",
+        "agent_transfer",
+    ],
     escrow: Optional[EscrowRecord],
     entries: list[LedgerEntry],
     extra: Optional[dict[str, Any]] = None,
@@ -1343,7 +1557,13 @@ def ledger_chain_payload(
 
 async def record_ledger_chain_event(
     *,
-    event_type: Literal["credit", "escrow_lock", "escrow_release", "escrow_refund"],
+    event_type: Literal[
+        "credit",
+        "escrow_lock",
+        "escrow_release",
+        "escrow_refund",
+        "agent_transfer",
+    ],
     escrow: Optional[EscrowRecord],
     entries: list[LedgerEntry],
     extra: Optional[dict[str, Any]] = None,
@@ -1369,6 +1589,22 @@ async def settle_escrow_release(escrow: EscrowRecord) -> Optional[LedgerSettleme
     record = await get_ledger_settlement_client().submit_release(escrow)
     if record is None:
         return None
+    return get_store().add_settlement_record(record)
+
+
+async def settle_agent_transfer(
+    *,
+    from_agent_id: str,
+    to_agent_id: str,
+    amount_atomic: str,
+    ref_id: str,
+) -> LedgerSettlementRecord:
+    record = await get_ledger_settlement_client().submit_agent_transfer(
+        from_agent_id=from_agent_id,
+        to_agent_id=to_agent_id,
+        amount_atomic=amount_atomic,
+        ref_id=ref_id,
+    )
     return get_store().add_settlement_record(record)
 
 
@@ -1596,6 +1832,54 @@ async def create_escrow(request: CreateEscrowRequest) -> dict[str, Any]:
     return {
         "escrow": escrow.model_dump(),
         "entry": entry.model_dump(),
+        "chainRecord": chain_record.model_dump() if chain_record is not None else None,
+    }
+
+
+@app.post("/ledger/transfers")
+async def transfer_between_agents(request: AgentTransferRequest) -> dict[str, Any]:
+    transfer_id = f"transfer_{uuid.uuid4().hex}"
+    try:
+        get_store().validate_agent_transfer(
+            from_agent_id=request.fromAgentId,
+            to_agent_id=request.toAgentId,
+            amount_atomic=request.amountAtomic,
+        )
+        settlement_record = await settle_agent_transfer(
+            from_agent_id=request.fromAgentId,
+            to_agent_id=request.toAgentId,
+            amount_atomic=request.amountAtomic,
+            ref_id=transfer_id,
+        )
+        sender, receiver, entries = get_store().transfer_between_agents(
+            from_agent_id=request.fromAgentId,
+            to_agent_id=request.toAgentId,
+            amount_atomic=request.amountAtomic,
+            reason=request.reason,
+            metadata=request.metadata,
+            transfer_id=transfer_id,
+            settlement_record_id=settlement_record.recordId,
+        )
+        chain_record = await record_ledger_chain_event(
+            event_type="agent_transfer",
+            escrow=None,
+            entries=entries,
+            extra={
+                "transferId": transfer_id,
+                "fromAgentId": request.fromAgentId,
+                "toAgentId": request.toAgentId,
+                "amountAtomic": request.amountAtomic,
+                "settlementRecordId": settlement_record.recordId,
+            },
+        )
+    except (LookupError, ValueError, LedgerChainRecordError, LedgerSettlementError) as error:
+        raise http_error(error) from error
+    return {
+        "transferId": transfer_id,
+        "fromAccount": sender.model_dump(),
+        "toAccount": receiver.model_dump(),
+        "entries": [entry.model_dump() for entry in entries],
+        "settlementRecord": settlement_record.model_dump(),
         "chainRecord": chain_record.model_dump() if chain_record is not None else None,
     }
 

@@ -7,12 +7,20 @@ from pydantic import BaseModel, ConfigDict, HttpUrl
 
 PaymentMethod = Literal[
     "ledger_escrow",
+    "ledger_transfer",
     "x402",
     "chain_transfer",
     "onramp",
     "needs_clarification",
 ]
-DeliveryMode = Literal["funding", "async_task", "immediate_api", "withdrawal", "unknown"]
+DeliveryMode = Literal[
+    "funding",
+    "agent_transfer",
+    "async_task",
+    "immediate_api",
+    "withdrawal",
+    "unknown",
+]
 
 
 class PaymentIntent(BaseModel):
@@ -40,6 +48,22 @@ def route_payment_intent(intent: PaymentIntent) -> PaymentRouteDecision:
                 "Ledger balance is credited only after confirmed settlement."
             ),
             "allowedTools": ["agent_wallet_create_onramp_session"],
+        }
+
+    if intent.deliveryMode == "agent_transfer":
+        if intent.externalService:
+            return {
+                "method": "needs_clarification",
+                "reason": "Direct Agent Wallet transfers only apply to internal agent recipients.",
+                "allowedTools": [],
+            }
+        return {
+            "method": "ledger_transfer",
+            "reason": (
+                "Direct Agent-to-Agent payments require a real Circle USDC transfer "
+                "and then a matching ledger available balance update."
+            ),
+            "allowedTools": ["agent_wallet_transfer"],
         }
 
     if intent.deliveryMode == "withdrawal":

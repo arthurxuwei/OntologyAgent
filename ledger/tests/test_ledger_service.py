@@ -718,6 +718,178 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertEqual(len(state["settlementRecords"]), 1)
         self.assertEqual(state["settlementRecords"][0]["status"], "submitted")
 
+    def test_agent_transfer_calls_circle_then_moves_available_balance(self) -> None:
+        class FakeSettlementClient:
+            def __init__(self) -> None:
+                self.calls = []
+
+            async def submit_agent_transfer(
+                self,
+                *,
+                from_agent_id,
+                to_agent_id,
+                amount_atomic,
+                ref_id,
+            ):
+                self.calls.append(
+                    {
+                        "fromAgentId": from_agent_id,
+                        "toAgentId": to_agent_id,
+                        "amountAtomic": amount_atomic,
+                        "refId": ref_id,
+                    }
+                )
+                current = main.now_iso()
+                return main.LedgerSettlementRecord(
+                    recordId="settle_direct",
+                    eventType="agent_transfer",
+                    status="submitted",
+                    chainMcpUrl="http://circle.test/mcp/",
+                    transferId=ref_id,
+                    fromAgentId=from_agent_id,
+                    toAgentId=to_agent_id,
+                    amountAtomic=amount_atomic,
+                    transactionId="circle-transfer-1",
+                    transactionHash="0xagenttransfer",
+                    transactionState="INITIATED",
+                    mode="circle",
+                    toolResult={"transactionHash": "0xagenttransfer"},
+                    createdAt=current,
+                    updatedAt=current,
+                )
+
+        self.client.post(
+            "/ledger/accounts/agent_sender/credit",
+            json={"amountAtomic": "5000000", "reason": "demo funding"},
+        )
+        main.get_store().bind_account_wallet(
+            agent_id="agent_sender",
+            wallet_address="0x1111111111111111111111111111111111111111",
+            circle_wallet_id="circle_sender",
+        )
+        main.get_store().bind_account_wallet(
+            agent_id="agent_receiver",
+            wallet_address="0x2222222222222222222222222222222222222222",
+            circle_wallet_id="circle_receiver",
+        )
+        fake_settlement = FakeSettlementClient()
+
+        with patch.object(
+            main, "get_ledger_settlement_client", return_value=fake_settlement
+        ):
+            response = self.client.post(
+                "/ledger/transfers",
+                json={
+                    "fromAgentId": "agent_sender",
+                    "toAgentId": "agent_receiver",
+                    "amountAtomic": "1250000",
+                    "reason": "direct payment",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["settlementRecord"]["transactionHash"], "0xagenttransfer")
+        self.assertEqual(fake_settlement.calls[0]["fromAgentId"], "agent_sender")
+        self.assertEqual(fake_settlement.calls[0]["toAgentId"], "agent_receiver")
+        accounts = {
+            item.agentId: item for item in main.get_store().load().accounts
+        }
+        self.assertEqual(accounts["agent_sender"].availableAtomic, "3750000")
+        self.assertEqual(accounts["agent_sender"].lockedAtomic, "0")
+        self.assertEqual(accounts["agent_receiver"].availableAtomic, "1250000")
+        self.assertEqual(accounts["agent_receiver"].lockedAtomic, "0")
+        self.assertEqual([entry["entryType"] for entry in payload["entries"]], ["agent_transfer", "agent_transfer"])
+
+    def test_agent_transfer_failure_does_not_mutate_ledger_balance(self) -> None:
+        class FakeSettlementClient:
+            async def submit_agent_transfer(self, **_kwargs):
+                current = main.now_iso()
+                record = main.LedgerSettlementRecord(
+                    recordId="settle_failed_direct",
+                    eventType="agent_transfer",
+                    status="failed",
+                    chainMcpUrl="http://circle.test/mcp/",
+                    transferId="transfer_failed",
+                    fromAgentId="agent_sender",
+                    toAgentId="agent_receiver",
+                    amountAtomic="1250000",
+                    error="Circle transfer failed",
+                    createdAt=current,
+                    updatedAt=current,
+                )
+                raise main.LedgerSettlementError(record)
+
+        self.client.post(
+            "/ledger/accounts/agent_sender/credit",
+            json={"amountAtomic": "5000000", "reason": "demo funding"},
+        )
+        main.get_store().bind_account_wallet(
+            agent_id="agent_sender",
+            wallet_address="0x1111111111111111111111111111111111111111",
+            circle_wallet_id="circle_sender",
+        )
+        main.get_store().bind_account_wallet(
+            agent_id="agent_receiver",
+            wallet_address="0x2222222222222222222222222222222222222222",
+            circle_wallet_id="circle_receiver",
+        )
+
+        with patch.object(
+            main, "get_ledger_settlement_client", return_value=FakeSettlementClient()
+        ):
+            response = self.client.post(
+                "/ledger/transfers",
+                json={
+                    "fromAgentId": "agent_sender",
+                    "toAgentId": "agent_receiver",
+                    "amountAtomic": "1250000",
+                },
+            )
+
+        self.assertEqual(response.status_code, 502)
+        accounts = {
+            item.agentId: item for item in main.get_store().load().accounts
+        }
+        self.assertEqual(accounts["agent_sender"].availableAtomic, "5000000")
+        self.assertEqual(accounts["agent_receiver"].availableAtomic, "0")
+
+    def test_agent_transfer_requires_real_circle_settlement_enabled(self) -> None:
+        self.client.post(
+            "/ledger/accounts/agent_sender/credit",
+            json={"amountAtomic": "5000000", "reason": "demo funding"},
+        )
+        main.get_store().bind_account_wallet(
+            agent_id="agent_sender",
+            wallet_address="0x1111111111111111111111111111111111111111",
+            circle_wallet_id="circle_sender",
+        )
+        main.get_store().bind_account_wallet(
+            agent_id="agent_receiver",
+            wallet_address="0x2222222222222222222222222222222222222222",
+            circle_wallet_id="circle_receiver",
+        )
+
+        response = self.client.post(
+            "/ledger/transfers",
+            json={
+                "fromAgentId": "agent_sender",
+                "toAgentId": "agent_receiver",
+                "amountAtomic": "1250000",
+            },
+        )
+
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(
+            response.json()["detail"]["message"],
+            "Circle settlement is required for direct agent transfers",
+        )
+        accounts = {
+            item.agentId: item for item in main.get_store().load().accounts
+        }
+        self.assertEqual(accounts["agent_sender"].availableAtomic, "5000000")
+        self.assertEqual(accounts["agent_receiver"].availableAtomic, "0")
+
     def test_settlement_client_uses_dedicated_circle_mcp_url(self) -> None:
         os.environ["LEDGER_SETTLEMENT_ENABLED"] = "true"
         os.environ["LEDGER_SETTLEMENT_MCP_URL"] = "http://circle.test/mcp/"
@@ -886,13 +1058,31 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertEqual(result["method"], "onramp")
         self.assertEqual(result["allowedTools"], ["agent_wallet_create_onramp_session"])
 
+    def test_route_payment_intent_supports_direct_agent_transfer(self) -> None:
+        tool = getattr(main, "route_payment_intent_tool", None)
+        self.assertIsNotNone(tool)
+
+        result = asyncio.run(
+            tool(
+                purpose="pay another agent now",
+                deliveryMode="agent_transfer",
+                requiresAcceptance=False,
+                externalService=False,
+            )
+        )
+
+        self.assertEqual(result["method"], "ledger_transfer")
+        self.assertEqual(result["allowedTools"], ["agent_wallet_transfer"])
+
     def test_ledger_mcp_tools_operate_on_local_store(self) -> None:
         state_tool = getattr(main, "agent_wallet_get_ledger_state_tool", None)
+        transfer_tool = getattr(main, "agent_wallet_transfer_tool", None)
         create_tool = getattr(main, "agent_wallet_create_escrow_tool", None)
         release_tool = getattr(main, "agent_wallet_release_escrow_tool", None)
         refund_tool = getattr(main, "agent_wallet_refund_escrow_tool", None)
         self.assertFalse(hasattr(main, "agent_wallet_credit_balance_tool"))
         self.assertIsNotNone(state_tool)
+        self.assertIsNotNone(transfer_tool)
         self.assertIsNotNone(create_tool)
         self.assertIsNotNone(release_tool)
         self.assertIsNotNone(refund_tool)

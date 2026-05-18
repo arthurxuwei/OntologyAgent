@@ -37,6 +37,7 @@ async def route_payment_intent_tool(
     purpose: str,
     deliveryMode: Literal[
         "funding",
+        "agent_transfer",
         "async_task",
         "immediate_api",
         "withdrawal",
@@ -293,6 +294,24 @@ async def agent_wallet_create_escrow_tool(
     }
 
 
+async def agent_wallet_transfer_tool(
+    fromAgentId: str,
+    toAgentId: str,
+    amountAtomic: str,
+    reason: Optional[str] = None,
+) -> dict[str, Any]:
+    from main import AgentTransferRequest, transfer_between_agents
+
+    return await transfer_between_agents(
+        AgentTransferRequest(
+            fromAgentId=fromAgentId,
+            toAgentId=toAgentId,
+            amountAtomic=amountAtomic,
+            reason=reason,
+        )
+    )
+
+
 async def agent_wallet_release_escrow_tool(escrowId: str) -> dict[str, Any]:
     from main import settle_escrow_release
 
@@ -357,6 +376,7 @@ def build_mcp_app(store_factory: Callable[[], Any]) -> Any:
     mcp.tool(name="agent_wallet_create_onramp_session")(
         agent_wallet_create_onramp_session_tool
     )
+    mcp.tool(name="agent_wallet_transfer")(agent_wallet_transfer_tool)
     mcp.tool(name="agent_wallet_create_escrow")(agent_wallet_create_escrow_tool)
     mcp.tool(name="agent_wallet_release_escrow")(agent_wallet_release_escrow_tool)
     mcp.tool(name="agent_wallet_refund_escrow")(agent_wallet_refund_escrow_tool)
