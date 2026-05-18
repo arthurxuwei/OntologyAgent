@@ -347,12 +347,16 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertEqual(payload["wallet"]["circleWalletId"], "circle-wallet-1")
         self.assertEqual(payload["wallet"]["binding"]["agentId"], "agent_research")
         self.assertEqual(payload["account"]["agentId"], "agent_research")
+        self.assertEqual(payload["account"]["agentName"], "Research Agent")
+        self.assertEqual(payload["account"]["email"], "agent@example.com")
         self.assertEqual(payload["account"]["availableAtomic"], "0")
         self.assertEqual(payload["account"]["lockedAtomic"], "0")
 
         state = self.client.get("/ledger/state").json()
         self.assertEqual(len(state["accounts"]), 1)
         self.assertEqual(state["accounts"][0]["agentId"], "agent_research")
+        self.assertEqual(state["accounts"][0]["agentName"], "Research Agent")
+        self.assertEqual(state["accounts"][0]["email"], "agent@example.com")
         self.assertEqual(
             state["accounts"][0]["walletAddress"],
             "0x1111111111111111111111111111111111111111",
@@ -764,11 +768,15 @@ class LedgerServiceTests(unittest.TestCase):
         )
         main.get_store().bind_account_wallet(
             agent_id="agent_sender",
+            agent_name="Sender",
+            email="sender@example.com",
             wallet_address="0x1111111111111111111111111111111111111111",
             circle_wallet_id="circle_sender",
         )
         main.get_store().bind_account_wallet(
             agent_id="agent_receiver",
+            agent_name="Receiver",
+            email="receiver@example.com",
             wallet_address="0x2222222222222222222222222222222222222222",
             circle_wallet_id="circle_receiver",
         )
@@ -780,8 +788,8 @@ class LedgerServiceTests(unittest.TestCase):
             response = self.client.post(
                 "/ledger/transfers",
                 json={
-                    "fromAgentId": "agent_sender",
-                    "toAgentId": "agent_receiver",
+                    "fromEmail": "sender@example.com",
+                    "toEmail": "receiver@example.com",
                     "amountAtomic": "1250000",
                     "reason": "direct payment",
                 },
@@ -826,11 +834,15 @@ class LedgerServiceTests(unittest.TestCase):
         )
         main.get_store().bind_account_wallet(
             agent_id="agent_sender",
+            agent_name="Sender",
+            email="sender@example.com",
             wallet_address="0x1111111111111111111111111111111111111111",
             circle_wallet_id="circle_sender",
         )
         main.get_store().bind_account_wallet(
             agent_id="agent_receiver",
+            agent_name="Receiver",
+            email="receiver@example.com",
             wallet_address="0x2222222222222222222222222222222222222222",
             circle_wallet_id="circle_receiver",
         )
@@ -841,8 +853,8 @@ class LedgerServiceTests(unittest.TestCase):
             response = self.client.post(
                 "/ledger/transfers",
                 json={
-                    "fromAgentId": "agent_sender",
-                    "toAgentId": "agent_receiver",
+                    "fromEmail": "sender@example.com",
+                    "toEmail": "receiver@example.com",
                     "amountAtomic": "1250000",
                 },
             )
@@ -861,11 +873,15 @@ class LedgerServiceTests(unittest.TestCase):
         )
         main.get_store().bind_account_wallet(
             agent_id="agent_sender",
+            agent_name="Sender",
+            email="sender@example.com",
             wallet_address="0x1111111111111111111111111111111111111111",
             circle_wallet_id="circle_sender",
         )
         main.get_store().bind_account_wallet(
             agent_id="agent_receiver",
+            agent_name="Receiver",
+            email="receiver@example.com",
             wallet_address="0x2222222222222222222222222222222222222222",
             circle_wallet_id="circle_receiver",
         )
@@ -873,8 +889,8 @@ class LedgerServiceTests(unittest.TestCase):
         response = self.client.post(
             "/ledger/transfers",
             json={
-                "fromAgentId": "agent_sender",
-                "toAgentId": "agent_receiver",
+                "fromEmail": "sender@example.com",
+                "toEmail": "receiver@example.com",
                 "amountAtomic": "1250000",
             },
         )

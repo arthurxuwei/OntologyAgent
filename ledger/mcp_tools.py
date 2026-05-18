@@ -295,8 +295,8 @@ async def agent_wallet_create_escrow_tool(
 
 
 async def agent_wallet_transfer_tool(
-    fromAgentId: str,
-    toAgentId: str,
+    fromEmail: str,
+    toEmail: str,
     amountAtomic: str,
     reason: Optional[str] = None,
 ) -> dict[str, Any]:
@@ -304,8 +304,8 @@ async def agent_wallet_transfer_tool(
 
     return await transfer_between_agents(
         AgentTransferRequest(
-            fromAgentId=fromAgentId,
-            toAgentId=toAgentId,
+            fromEmail=fromEmail,
+            toEmail=toEmail,
             amountAtomic=amountAtomic,
             reason=reason,
         )

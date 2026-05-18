@@ -57,6 +57,8 @@ class LedgerAccount(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     agentId: str
+    agentName: Optional[str] = None
+    email: Optional[str] = None
     walletAddress: Optional[str] = None
     circleWalletId: Optional[str] = None
     asset: str = DEFAULT_ASSET
@@ -249,8 +251,8 @@ class CreateEscrowRequest(BaseModel):
 class AgentTransferRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    fromAgentId: str = Field(min_length=1)
-    toAgentId: str = Field(min_length=1)
+    fromEmail: str = Field(min_length=1)
+    toEmail: str = Field(min_length=1)
     amountAtomic: str = Field(min_length=1)
     reason: Optional[str] = None
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -297,6 +299,13 @@ def parse_positive_atomic(value: str) -> int:
     if not value.isdigit() or int(value) <= 0:
         raise ValueError("amountAtomic must be a positive integer string")
     return int(value)
+
+
+def normalize_email(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    normalized = value.strip().lower()
+    return normalized or None
 
 
 def add_atomic(left: str, delta: int) -> str:
@@ -911,6 +920,8 @@ class OffchainLedgerStore:
         self,
         *,
         agent_id: str,
+        agent_name: Optional[str] = None,
+        email: Optional[str] = None,
         wallet_address: Optional[str],
         circle_wallet_id: Optional[str],
     ) -> LedgerAccount:
@@ -919,6 +930,10 @@ class OffchainLedgerStore:
                 state, agent_id, create=True
             )
             updates: dict[str, Any] = {"updatedAt": now_iso()}
+            if agent_name is not None:
+                updates["agentName"] = agent_name
+            if email is not None:
+                updates["email"] = email
             if wallet_address is not None:
                 updates["walletAddress"] = wallet_address
             if circle_wallet_id is not None:
@@ -980,6 +995,16 @@ class OffchainLedgerStore:
             raise ValueError("insufficient available balance")
         self._require_circle_wallet(sender, "sender")
         self._require_circle_wallet(receiver, "receiver")
+
+    def account_by_email(self, email: str) -> LedgerAccount:
+        normalized = normalize_email(email)
+        if normalized is None:
+            raise ValueError("email must not be empty")
+        state = self.load()
+        for account in state.accounts:
+            if normalize_email(account.email) == normalized:
+                return account
+        raise LookupError(f"ledger account email not found: {normalized}")
 
     def transfer_between_agents(
         self,
@@ -1629,6 +1654,8 @@ async def get_or_create_agent_wallet(request: AgentWalletRequest) -> dict[str, A
     if wallet_address is not None or circle_wallet_id is not None:
         account = get_store().bind_account_wallet(
             agent_id=request.agentId,
+            agent_name=request.agentName,
+            email=request.email,
             wallet_address=wallet_address,
             circle_wallet_id=circle_wallet_id,
         )
@@ -1840,23 +1867,30 @@ async def create_escrow(request: CreateEscrowRequest) -> dict[str, Any]:
 async def transfer_between_agents(request: AgentTransferRequest) -> dict[str, Any]:
     transfer_id = f"transfer_{uuid.uuid4().hex}"
     try:
+        sender_account = get_store().account_by_email(request.fromEmail)
+        receiver_account = get_store().account_by_email(request.toEmail)
         get_store().validate_agent_transfer(
-            from_agent_id=request.fromAgentId,
-            to_agent_id=request.toAgentId,
+            from_agent_id=sender_account.agentId,
+            to_agent_id=receiver_account.agentId,
             amount_atomic=request.amountAtomic,
         )
         settlement_record = await settle_agent_transfer(
-            from_agent_id=request.fromAgentId,
-            to_agent_id=request.toAgentId,
+            from_agent_id=sender_account.agentId,
+            to_agent_id=receiver_account.agentId,
             amount_atomic=request.amountAtomic,
             ref_id=transfer_id,
         )
+        transfer_metadata = {
+            **request.metadata,
+            "fromEmail": normalize_email(request.fromEmail),
+            "toEmail": normalize_email(request.toEmail),
+        }
         sender, receiver, entries = get_store().transfer_between_agents(
-            from_agent_id=request.fromAgentId,
-            to_agent_id=request.toAgentId,
+            from_agent_id=sender_account.agentId,
+            to_agent_id=receiver_account.agentId,
             amount_atomic=request.amountAtomic,
             reason=request.reason,
-            metadata=request.metadata,
+            metadata=transfer_metadata,
             transfer_id=transfer_id,
             settlement_record_id=settlement_record.recordId,
         )
@@ -1866,8 +1900,10 @@ async def transfer_between_agents(request: AgentTransferRequest) -> dict[str, An
             entries=entries,
             extra={
                 "transferId": transfer_id,
-                "fromAgentId": request.fromAgentId,
-                "toAgentId": request.toAgentId,
+                "fromAgentId": sender_account.agentId,
+                "toAgentId": receiver_account.agentId,
+                "fromEmail": normalize_email(request.fromEmail),
+                "toEmail": normalize_email(request.toEmail),
                 "amountAtomic": request.amountAtomic,
                 "settlementRecordId": settlement_record.recordId,
             },
