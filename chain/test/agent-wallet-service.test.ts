@@ -320,6 +320,7 @@ test("AgentWalletService reuses a matching wallet from local Agent Wallet state"
           createCalls += 1;
           throw new Error("createWallet should not be called");
         },
+        getWalletBalances: async () => ({}),
       } as unknown as CircleWalletService;
       const service = new AgentWalletService(
         config,
@@ -335,6 +336,47 @@ test("AgentWalletService reuses a matching wallet from local Agent Wallet state"
       assert.equal(result.circleWalletSetId, "circle-wallet-set");
       assert.equal(result.walletAddress, "0x3333333333333333333333333333333333333333");
       assert.equal(result.mode, "circle");
+    },
+  );
+});
+
+test("AgentWalletService includes live Circle balances when reusing a local wallet", async () => {
+  await withTempStateFile(
+    {
+      wallets: [
+        {
+          agentName: "Research Summary",
+          circleWalletId: "circle-wallet-1",
+          circleWalletSetId: "circle-wallet-set",
+          blockchain: "BASE-SEPOLIA",
+          walletAddress: "0x3333333333333333333333333333333333333333",
+          mode: "circle",
+        },
+      ],
+    },
+    async (statePath) => {
+      const config = liveCircleConfig({
+        AGENT_WALLET_STATE_PATH: statePath,
+      });
+      const circleWalletService = {
+        getWalletBalances: async (circleWalletId: string) => {
+          assert.equal(circleWalletId, "circle-wallet-1");
+          return { USDC: "1.98" };
+        },
+        createWallet: async () => {
+          throw new Error("createWallet should not be called");
+        },
+      } as unknown as CircleWalletService;
+      const service = new AgentWalletService(
+        config,
+        fakeX402FetchService(baseX402Result()),
+        circleWalletService,
+      );
+
+      const result = await service.getOrCreate({ agentName: " Research Summary " });
+
+      assert.equal(result.reused, true);
+      assert.deepEqual(result.balances, { USDC: "1.98" });
     },
   );
 });
@@ -389,6 +431,7 @@ test("AgentWalletService imports and assigns an unused Circle wallet before crea
           createCalls += 1;
           throw new Error("createWallet should not be called");
         },
+        getWalletBalances: async () => ({}),
       } as unknown as CircleWalletService;
       const service = new AgentWalletService(
         config,
@@ -473,6 +516,7 @@ test("AgentWalletService reuses an existing binding by agent id before importing
           createCalls += 1;
           throw new Error("createWallet should not be called");
         },
+        getWalletBalances: async () => ({}),
       } as unknown as CircleWalletService;
       const service = new AgentWalletService(
         config,
@@ -1071,4 +1115,49 @@ test("CircleWalletService lists existing Circle wallets for a wallet set", async
       mode: "circle",
     },
   ]);
+});
+
+test("CircleWalletService returns token balances for a Circle wallet", async () => {
+  const service = new CircleWalletService(liveCircleConfig(), {
+    fetchImpl: async (input, init) => {
+      assert.equal(input, "https://circle.test/v1/w3s/wallets/circle-wallet-1/balances");
+      assert.equal(init?.method, "GET");
+      assert.equal(
+        (init?.headers as Record<string, string>).Authorization,
+        "Bearer circle-api-key",
+      );
+
+      return new Response(
+        JSON.stringify({
+          data: {
+            tokenBalances: [
+              {
+                token: {
+                  symbol: "USDC",
+                },
+                amount: "1.98",
+              },
+              {
+                token: {
+                  symbol: "ETH-SEPOLIA",
+                },
+                amount: "0.000998913465464524",
+              },
+            ],
+          },
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    },
+  });
+
+  const result = await service.getWalletBalances("circle-wallet-1");
+
+  assert.deepEqual(result, {
+    USDC: "1.98",
+    "ETH-SEPOLIA": "0.000998913465464524",
+  });
 });

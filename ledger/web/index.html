@@ -486,6 +486,7 @@
               { label: "Wallet Address", render: (account) => `<span class="mono">${shortValue(account.walletAddress || account.circleWalletId)}</span>` },
               { label: "Ledger Available", render: (account) => formatAtomic(account.availableAtomic) },
               { label: "Ledger Locked", render: (account) => formatAtomic(account.lockedAtomic) },
+              { label: "Circle USDC Balance", render: (account) => shortValue(account.circleUsdcBalance) },
               { label: "Updated", render: (account) => formatDate(account.updatedAt || account.createdAt) },
             ],
             accounts,

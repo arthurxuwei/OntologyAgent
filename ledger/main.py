@@ -700,6 +700,24 @@ class LedgerWalletClient:
             raise RuntimeError("wallet MCP response did not include wallet content")
         return wallet
 
+    async def status(
+        self,
+        *,
+        wallet_address: Optional[str],
+        circle_wallet_id: Optional[str],
+    ) -> dict[str, Any]:
+        payload = await self._call_wallet_tool(
+            "agent_wallet_status",
+            {
+                "walletAddress": wallet_address,
+                "circleWalletId": circle_wallet_id,
+            },
+        )
+        wallet = self._extract_tool_content(payload)
+        if not wallet:
+            raise RuntimeError("wallet MCP response did not include wallet status content")
+        return wallet
+
     async def _call_wallet_tool(self, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         request = {
             "jsonrpc": "2.0",
@@ -1419,8 +1437,38 @@ def ledger_console() -> FileResponse:
 
 
 @app.get("/ledger/state")
-def get_ledger_state() -> dict[str, Any]:
-    return get_store().load().model_dump()
+async def get_ledger_state() -> dict[str, Any]:
+    return await ledger_state_with_circle_balances()
+
+
+async def ledger_state_with_circle_balances() -> dict[str, Any]:
+    state = get_store().load().model_dump()
+    accounts = state.get("accounts")
+    if not isinstance(accounts, list):
+        return state
+
+    wallet_client = get_ledger_wallet_client()
+    for account in accounts:
+        if not isinstance(account, dict):
+            continue
+        wallet_address = account.get("walletAddress")
+        circle_wallet_id = account.get("circleWalletId")
+        if not isinstance(wallet_address, str) and not isinstance(circle_wallet_id, str):
+            continue
+        try:
+            status = await wallet_client.status(
+                wallet_address=wallet_address if isinstance(wallet_address, str) else None,
+                circle_wallet_id=circle_wallet_id if isinstance(circle_wallet_id, str) else None,
+            )
+        except Exception as error:
+            account["circleBalanceError"] = str(error)
+            continue
+        balances = status.get("balances")
+        if isinstance(balances, dict):
+            usdc_balance = balances.get(DEFAULT_ASSET)
+            if isinstance(usdc_balance, str):
+                account["circleUsdcBalance"] = usdc_balance
+    return state
 
 
 @app.post("/onramp/sessions")

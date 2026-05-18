@@ -79,7 +79,7 @@ export class AgentWalletService {
         mode: status.mode,
       });
       return {
-        ...status,
+        ...(await this.withLiveBalances(status)),
         reused: true,
         ...(binding ? { binding } : {}),
       };
@@ -99,7 +99,7 @@ export class AgentWalletService {
           mode: existingBinding.mode,
         });
         return {
-          ...statusFromBinding(existingBinding),
+          ...(await this.withLiveBalances(statusFromBinding(existingBinding))),
           reused: true,
           ...(binding ? { binding } : {}),
         };
@@ -119,7 +119,7 @@ export class AgentWalletService {
         mode: localWallet.mode,
       });
       return {
-        ...localWallet,
+        ...(await this.withLiveBalances(localWallet)),
         reused: true,
         ...(binding ? { binding } : {}),
       };
@@ -201,7 +201,7 @@ export class AgentWalletService {
       circleWalletId: command.circleWalletId,
     });
     if (localWallet) {
-      return localWallet;
+      return this.withLiveBalances(localWallet);
     }
 
     return {
@@ -402,6 +402,18 @@ export class AgentWalletService {
     }
 
     return null;
+  }
+
+  private async withLiveBalances(
+    status: AgentWalletStatusResult,
+  ): Promise<AgentWalletStatusResult> {
+    if (this.config.network.mockChain || status.mode !== "circle" || !status.circleWalletId) {
+      return status;
+    }
+    return {
+      ...status,
+      balances: await this.circleWalletService.getWalletBalances(status.circleWalletId),
+    };
   }
 }
 

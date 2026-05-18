@@ -30,6 +30,11 @@ type CircleWalletResponseWallet = {
   refId?: unknown;
 };
 
+type CircleWalletTokenBalance = {
+  token?: unknown;
+  amount?: unknown;
+};
+
 export type CircleEntitySecretCiphertextFactory = (
   entitySecret: string,
 ) => string | Promise<string>;
@@ -205,6 +210,42 @@ export class CircleWalletService {
     return extractWallets(payload).map((wallet) => normalizeCircleWalletRecord(wallet, payload));
   }
 
+  async getWalletBalances(circleWalletId: string): Promise<Record<string, string>> {
+    if (this.config.network.mockChain) {
+      return {
+        USDC: this.config.network.mockUsdcBalanceAtomic.toString(),
+      };
+    }
+
+    const apiKey = this.config.circle.apiKey;
+    if (!apiKey) {
+      throw new AppError("CONFIG_ERROR", "CIRCLE_API_KEY is required", 500);
+    }
+
+    const response = await this.fetchImpl(
+      `${this.config.circle.baseUrl}/wallets/${encodeURIComponent(circleWalletId)}/balances`,
+      {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+      },
+    );
+    const payload = await parseJsonPayload(response);
+
+    if (!response.ok) {
+      throw new AppError(
+        "UPSTREAM_REQUEST_FAILED",
+        `Circle wallet balance lookup failed with HTTP ${response.status}`,
+        response.status,
+        payload,
+      );
+    }
+
+    return extractTokenBalances(payload);
+  }
+
   async createTransfer(command: {
     walletId: string;
     destinationAddress: string;
@@ -372,6 +413,31 @@ function extractWallets(payload: unknown): CircleWalletResponseWallet[] {
   }
 
   return data.wallets.filter(isRecord);
+}
+
+function extractTokenBalances(payload: unknown): Record<string, string> {
+  if (!isRecord(payload) || !isRecord(payload.data)) {
+    return {};
+  }
+  const tokenBalances = payload.data.tokenBalances;
+  if (!Array.isArray(tokenBalances)) {
+    return {};
+  }
+  const balances: Record<string, string> = {};
+  for (const balance of tokenBalances.filter(isTokenBalance)) {
+    if (!isRecord(balance.token)) {
+      continue;
+    }
+    const symbol = balance.token.symbol;
+    if (typeof symbol === "string" && symbol.trim() && typeof balance.amount === "string") {
+      balances[symbol.trim()] = balance.amount;
+    }
+  }
+  return balances;
+}
+
+function isTokenBalance(value: unknown): value is CircleWalletTokenBalance {
+  return isRecord(value);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
