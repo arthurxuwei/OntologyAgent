@@ -20,7 +20,7 @@ import httpx
 import jwt
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from mcp_tools import (
     agent_wallet_create_escrow_tool,
     agent_wallet_create_onramp_session_tool,
@@ -1945,12 +1945,8 @@ def health() -> dict[str, Any]:
 
 
 @app.get("/")
-def ledger_console() -> FileResponse:
-    return FileResponse(
-        LEDGER_CONSOLE_PATH,
-        media_type="text/html",
-        headers=NO_CACHE_HEADERS,
-    )
+def ledger_home() -> RedirectResponse:
+    return RedirectResponse("/dashboard", status_code=307)
 
 
 @app.get("/admin")

@@ -522,6 +522,7 @@
             "Accounts",
             [
               { label: "Agent ID", render: (account) => `<span class="mono">${shortValue(account.agentId)}</span>` },
+              { label: "Email", render: (account) => shortValue(account.email) },
               { label: "Wallet Address", render: (account) => `<span class="mono">${shortValue(account.walletAddress || account.circleWalletId)}</span>` },
               { label: "Ledger Available", render: (account) => formatAtomic(account.availableAtomic) },
               { label: "Ledger Locked", render: (account) => formatAtomic(account.lockedAtomic) },

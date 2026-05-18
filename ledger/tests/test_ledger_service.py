@@ -117,8 +117,14 @@ class LedgerServiceTests(unittest.TestCase):
 
         self.assertNotEqual(response.status_code, 500)
 
-    def test_root_serves_ledger_management_page(self) -> None:
-        response = self.client.get("/")
+    def test_root_redirects_to_dashboard(self) -> None:
+        response = self.client.get("/", follow_redirects=False)
+
+        self.assertEqual(response.status_code, 307)
+        self.assertEqual(response.headers["location"], "/dashboard")
+
+    def test_admin_serves_ledger_management_page(self) -> None:
+        response = self.client.get("/admin")
 
         self.assertEqual(response.status_code, 200)
         html = response.text
@@ -138,13 +144,7 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertIn("/ledger/state", html)
         self.assertIn("/onramp/sessions", html)
         self.assertIn("/ledger/escrows", html)
-
-    def test_admin_serves_ledger_management_page(self) -> None:
-        response = self.client.get("/admin")
-
-        self.assertEqual(response.status_code, 200)
-        self.assertIn("Chief Ledger", response.text)
-        self.assertIn('id="ledger-state"', response.text)
+        self.assertIn('{ label: "Email"', html)
 
     def test_dashboard_serves_user_dashboard_page(self) -> None:
         response = self.client.get("/dashboard")
@@ -258,7 +258,7 @@ class LedgerServiceTests(unittest.TestCase):
         if shutil.which("node") is None:
             self.skipTest("node is required to execute ledger page helpers")
 
-        response = self.client.get("/")
+        response = self.client.get("/admin")
 
         self.assertEqual(response.status_code, 200)
         script = response.text.split("<script>", 1)[1].split("</script>", 1)[0]
@@ -290,7 +290,7 @@ class LedgerServiceTests(unittest.TestCase):
                 "global.fetch = async (url, options = {}) => {"
                 "fetchCalls.push({ url, method: options.method || 'GET', body: options.body || null });"
                 "if (url === '/ledger/state') return { ok: true, json: async () => ({"
-                "accounts: [{ agentId: 'agent_buyer', walletAddress: '0x1111111111111111111111111111111111111111', circleUsdcBalance: '1.98', availableAtomic: '5000000', lockedAtomic: '3000000' }],"
+                "accounts: [{ agentId: 'agent_buyer', email: 'buyer@example.com', walletAddress: '0x1111111111111111111111111111111111111111', circleUsdcBalance: '1.98', availableAtomic: '5000000', lockedAtomic: '3000000' }],"
                 "entries: [{ entryId: 'entry_1', entryType: 'credit', agentId: 'agent_buyer' }],"
                 "escrows: [{ escrowId: 'escrow_1', buyerAgentId: 'agent_buyer', sellerAgentId: 'agent_seller', amountAtomic: '3000000', status: 'locked' }],"
                 "onrampSessions: [{ sessionId: 'onramp_1', agentId: 'agentA', paymentAmount: '10.00', status: 'created', onrampUrl: 'https://pay.coinbase.com/buy/select-asset?sessionToken=abc' }]"
@@ -362,6 +362,8 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertIn("Circle USDC Balance", output["stateHtml"])
         self.assertIn("1.98", output["stateHtml"])
         self.assertIn("agent_buyer", output["stateHtml"])
+        self.assertIn("Email", output["stateHtml"])
+        self.assertIn("buyer@example.com", output["stateHtml"])
         self.assertIn("0x1111111111111111111111111111111111111111", output["stateHtml"])
         self.assertIn("agent_seller", output["stateHtml"])
         self.assertIn("escrow_1", output["stateHtml"])
