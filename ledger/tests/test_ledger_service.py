@@ -136,14 +136,17 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertIn('id="wallet-form"', html)
         self.assertNotIn('id="credit-form"', html)
         self.assertNotIn("Credit Account", html)
-        self.assertIn('id="onramp-form"', html)
-        self.assertIn('id="onramp-confirm-form"', html)
+        self.assertNotIn('id="onramp-form"', html)
+        self.assertNotIn('id="onramp-confirm-form"', html)
+        self.assertNotIn("Coinbase Onramp", html)
+        self.assertNotIn("Confirm Onramp", html)
         self.assertNotIn('id="escrow-form"', html)
         self.assertNotIn("Create Escrow", html)
         self.assertIn('id="settlement-form"', html)
         self.assertIn("/ledger/state", html)
-        self.assertIn("/onramp/sessions", html)
+        self.assertNotIn("/onramp/sessions", html)
         self.assertIn("/ledger/escrows", html)
+        self.assertIn("Onramp Sessions", html)
         self.assertIn('{ label: "Email"', html)
 
     def test_dashboard_serves_user_dashboard_page(self) -> None:
@@ -158,6 +161,8 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertNotIn("<window.MockStateToggle />", html)
         self.assertIn("fetch(`/dashboard/data${emailQuery}`)", html)
         self.assertIn("fetch(`/dashboard/claimable-agents?", html)
+        self.assertIn("fetch('/onramp/sessions'", html)
+        self.assertIn("fullWalletAddress", html)
         self.assertNotIn("claimAgent('agentA')", html)
 
     def test_dashboard_data_returns_email_scoped_ledger_accounts(self) -> None:
@@ -201,6 +206,10 @@ class LedgerServiceTests(unittest.TestCase):
         alpha = payload["agents"]["agent_alpha"]
         self.assertEqual(alpha["agent"]["name"], "Alpha Research")
         self.assertEqual(alpha["agent"]["ownerEmail"], "owner@example.com")
+        self.assertEqual(
+            alpha["agent"]["fullWalletAddress"],
+            "0x1111111111111111111111111111111111111111",
+        )
         self.assertEqual(alpha["balance"]["available"], 2.0)
         self.assertEqual(alpha["balance"]["locked"], 0.5)
         self.assertEqual(alpha["balance"]["lifetimeIn"], 2.5)
@@ -299,12 +308,6 @@ class LedgerServiceTests(unittest.TestCase):
                 "wallet: { walletAddress: '0x1111111111111111111111111111111111111111', circleWalletId: 'circle-wallet-1' },"
                 "account: { agentId: 'agent_research', availableAtomic: '0', lockedAtomic: '0' }"
                 "}) };"
-                "if (url === '/onramp/sessions') return { ok: true, json: async () => ({"
-                "sessionId: 'onramp_2', agentId: 'agentA', paymentAmount: '10.00', status: 'created', onrampUrl: 'https://pay.coinbase.com/buy/select-asset?sessionToken=def'"
-                "}) };"
-                "if (url === '/onramp/sessions/onramp_1/confirm') return { ok: true, json: async () => ({"
-                "sessionId: 'onramp_1', agentId: 'agentA', paymentAmount: '10.00', creditedAmountAtomic: '10000000', status: 'credited'"
-                "}) };"
                 "return { ok: true, json: async () => ({ ok: true }) };"
                 "};"
                 "(async () => {"
@@ -316,31 +319,15 @@ class LedgerServiceTests(unittest.TestCase):
                 "elements.get('wallet-circle-wallet-id').value = 'circle-wallet-1';"
                 "elements.get('wallet-address').value = '0x1111111111111111111111111111111111111111';"
                 "await getOrCreateWallet({ preventDefault() {} });"
-                "elements.get('onramp-agent-id').value = 'agentA';"
-                "elements.get('onramp-destination-address').value = '0x742d35Cc6634C0532925a3b844Bc454e4438f44e';"
-                "elements.get('onramp-payment-amount').value = '10.00';"
-                "elements.get('onramp-idempotency-key').value = 'fund-agentA-10';"
-                "await createOnrampSession({ preventDefault() {} });"
-                "elements.get('onramp-session-select').value = 'onramp_1';"
-                "elements.get('onramp-provider-order-id').value = 'coinbase_order_123';"
-                "elements.get('onramp-confirm-amount').value = '10000000';"
-                "elements.get('onramp-confirm-tx-hash').value = '0xabc123';"
-                "await confirmOnrampSession({ preventDefault() {} });"
                 "process.stdout.write(JSON.stringify({"
                 "stateHtml: elements.get('ledger-state').innerHTML,"
                 "stateText: elements.get('ledger-state').textContent,"
                 "escrowSelection: selectedEscrowId(),"
-                "onrampSelection: selectedOnrampSessionId(),"
                 "walletListener: listeners.get('wallet-form:submit'),"
-                "onrampListener: listeners.get('onramp-form:submit'),"
-                "onrampConfirmListener: listeners.get('onramp-confirm-form:submit'),"
                 "settlementListener: listeners.get('settlement-form:submit'),"
                 "walletCall: fetchCalls.find((call) => call.url === '/ledger/wallets/get-or-create'),"
-                "onrampCall: fetchCalls.find((call) => call.url === '/onramp/sessions'),"
-                "confirmCall: fetchCalls.find((call) => call.url === '/onramp/sessions/onramp_1/confirm'),"
-                "openCall: window.openCalls[0],"
-                "walletOutput: elements.get('wallet-output').textContent,"
-                "onrampOutput: elements.get('onramp-output').textContent"
+                "openCall: window.openCalls[0] || null,"
+                "walletOutput: elements.get('wallet-output').textContent"
                 "}));"
                 "})().catch((error) => { console.error(error); process.exit(1); });",
             ],
@@ -372,10 +359,7 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertNotIn("{", output["stateHtml"])
         self.assertNotIn('"accounts"', output["stateHtml"])
         self.assertEqual(output["escrowSelection"], "escrow_1")
-        self.assertEqual(output["onrampSelection"], "onramp_1")
         self.assertEqual(output["walletListener"], "getOrCreateWallet")
-        self.assertEqual(output["onrampListener"], "createOnrampSession")
-        self.assertEqual(output["onrampConfirmListener"], "confirmOnrampSession")
         self.assertEqual(output["settlementListener"], "preventSettlementSubmit")
         self.assertEqual(output["walletCall"]["method"], "POST")
         self.assertEqual(
@@ -388,29 +372,8 @@ class LedgerServiceTests(unittest.TestCase):
                 "walletAddress": "0x1111111111111111111111111111111111111111",
             },
         )
-        self.assertEqual(output["onrampCall"]["method"], "POST")
-        self.assertEqual(
-            json.loads(output["onrampCall"]["body"]),
-            {
-                "agentId": "agentA",
-                "destinationAddress": "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
-                "paymentAmount": "10.00",
-                "idempotencyKey": "fund-agentA-10",
-            },
-        )
-        self.assertEqual(output["confirmCall"]["method"], "POST")
-        self.assertEqual(
-            json.loads(output["confirmCall"]["body"]),
-            {
-                "providerOrderId": "coinbase_order_123",
-                "amountAtomic": "10000000",
-                "txHash": "0xabc123",
-            },
-        )
-        self.assertEqual(output["openCall"]["target"], "_blank")
-        self.assertIn("https://pay.coinbase.com/buy/select-asset", output["openCall"]["url"])
+        self.assertIsNone(output["openCall"])
         self.assertIn("agent_research", output["walletOutput"])
-        self.assertIn("onramp_1", output["onrampOutput"])
 
     def test_credit_creates_account_and_entry(self) -> None:
         response = self.client.post(

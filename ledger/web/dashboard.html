@@ -3677,13 +3677,15 @@ window.AddAgentModal = AddAgentModal;
     'mvp.dash.onramp.method_bank_meta':     { en: '1-3 days',                 zh: '1-3 个工作日' },
     'mvp.dash.onramp.network_label':        { en: 'Network',                  zh: '链' },
     'mvp.dash.onramp.pay_button':           { en: 'Pay ${amount}',            zh: '支付 ${amount}' },
-    'mvp.dash.onramp.processing_title':     { en: 'Confirming payment…',      zh: '正在确认支付…' },
-    'mvp.dash.onramp.processing_body':      { en: 'This usually takes a few seconds.', zh: '通常几秒内完成。' },
-    'mvp.dash.onramp.success_title':        { en: 'Purchase complete',        zh: '购买完成' },
+    'mvp.dash.onramp.processing_title':     { en: 'Opening Coinbase…',        zh: '正在打开 Coinbase…' },
+    'mvp.dash.onramp.processing_body':      { en: 'Creating a hosted onramp session for this agent wallet.', zh: '正在为这个 Agent 钱包创建托管充值会话。' },
+    'mvp.dash.onramp.success_title':        { en: 'Coinbase onramp opened',   zh: 'Coinbase 充值已打开' },
     'mvp.dash.onramp.success_body':         {
-      en: '{usdc} USDC has been sent to your agent wallet on Base.',
-      zh: '{usdc} USDC 已发到你在 Base 上的 agent 钱包。',
+      en: 'Complete payment in Coinbase. The ledger will show the funding session while settlement completes.',
+      zh: '请在 Coinbase 完成支付。结算期间，ledger 会显示这笔充值会话。',
     },
+    'mvp.dash.onramp.error_title':          { en: 'Unable to open onramp',     zh: '无法打开充值' },
+    'mvp.dash.onramp.error_body':           { en: 'Check that this agent has a full Base wallet address, then try again.', zh: '请确认这个 Agent 已有完整 Base 钱包地址，然后重试。' },
     'mvp.dash.funding.transfer_title':             { en: 'Transfer from exchange', zh: '从交易所转入' },
     'mvp.dash.funding.copy':       { en: 'COPY',     zh: '复制' },
     'mvp.dash.funding.copied':     { en: '✓ COPIED', zh: '✓ 已复制' },
@@ -4200,10 +4202,11 @@ window.AddAgentModal = AddAgentModal;
 // can credit the local balance + prepend a transaction row.
 
 (function () {
-  function CoinbaseOnrampModal({ open, onClose, onComplete, t }) {
+  function CoinbaseOnrampModal({ open, onClose, agentId, destinationAddress, t }) {
     const [amount, setAmount] = React.useState('25');
     const [method, setMethod] = React.useState('apple_pay');
-    const [stage, setStage]   = React.useState('form'); // form | processing | success
+    const [stage, setStage]   = React.useState('form'); // form | processing | success | error
+    const [errorMessage, setErrorMessage] = React.useState('');
 
     // Reset state when reopening so a previous run doesn't bleed in.
     React.useEffect(() => {
@@ -4211,6 +4214,7 @@ window.AddAgentModal = AddAgentModal;
         setAmount('25');
         setMethod('apple_pay');
         setStage('form');
+        setErrorMessage('');
       }
     }, [open]);
 
@@ -4224,16 +4228,52 @@ window.AddAgentModal = AddAgentModal;
     const usdcReceive = Math.max(0, amountNum - fee);
     const validAmount = amountNum >= 5 && amountNum <= 1000;
 
-    const handlePay = () => {
+    const handlePay = async () => {
       if (!validAmount) return;
+      if (!agentId || !/^0x[0-9a-fA-F]{40}$/.test(String(destinationAddress || '').trim())) {
+        setErrorMessage(t('mvp.dash.onramp.error_body'));
+        setStage('error');
+        return;
+      }
       setStage('processing');
-      setTimeout(() => {
+      setErrorMessage('');
+      let coinbaseWindow = null;
+      try {
+        coinbaseWindow = window.open('about:blank', '_blank');
+      } catch {
+        coinbaseWindow = null;
+      }
+      try {
+        const response = await fetch('/onramp/sessions', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            agentId,
+            destinationAddress,
+            paymentAmount: amountNum.toFixed(2),
+            idempotencyKey: `dashboard-${agentId}-${Date.now()}`,
+          }),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(payload?.detail || `HTTP ${response.status}`);
+        }
+        if (!payload?.onrampUrl) {
+          throw new Error('Coinbase session did not include an onramp URL');
+        }
+        if (coinbaseWindow) {
+          coinbaseWindow.location.href = payload.onrampUrl;
+        } else {
+          window.open(payload.onrampUrl, '_blank', 'noopener,noreferrer');
+        }
         setStage('success');
-        setTimeout(() => {
-          onComplete && onComplete(usdcReceive, 'Coinbase Onramp');
-          onClose && onClose();
-        }, 1200);
-      }, 1400);
+      } catch (error) {
+        if (coinbaseWindow) {
+          coinbaseWindow.close();
+        }
+        setErrorMessage(error?.message || t('mvp.dash.onramp.error_body'));
+        setStage('error');
+      }
     };
 
     return (
@@ -4273,7 +4313,7 @@ window.AddAgentModal = AddAgentModal;
             }}
           >
             <CoinbaseWordmark />
-            {stage === 'form' && (
+            {stage !== 'processing' && (
               <button
                 type="button"
                 onClick={onClose}
@@ -4318,11 +4358,15 @@ window.AddAgentModal = AddAgentModal;
             {stage === 'success' && (
               <CenteredMessage
                 title={`✓ ${t('mvp.dash.onramp.success_title')}`}
-                subtitle={
-                  t('mvp.dash.onramp.success_body')
-                    .replace('{usdc}', usdcReceive.toFixed(2))
-                }
+                subtitle={t('mvp.dash.onramp.success_body')}
                 accent="#0E8345"
+              />
+            )}
+            {stage === 'error' && (
+              <CenteredMessage
+                title={t('mvp.dash.onramp.error_title')}
+                subtitle={errorMessage || t('mvp.dash.onramp.error_body')}
+                accent="#7A2620"
               />
             )}
           </div>
@@ -4593,7 +4637,7 @@ window.AddAgentModal = AddAgentModal;
       setAmount('');
     }, [data]);
 
-    const receiveAddress = data.agent.walletAddress;
+    const receiveAddress = data.agent.fullWalletAddress || data.agent.walletAddress;
     const MIN_WITHDRAW = 5;
 
     const destValid   = /^0x[0-9a-fA-F]{4,}/.test(dest.trim());
@@ -4862,27 +4906,13 @@ window.AddAgentModal = AddAgentModal;
           )}
         </Section>
 
-        {/* Simulated Coinbase Onramp modal. Reuses the same localBalance /
-            localTxs state so a successful onramp prepends a new transaction
-            row identical in shape to a real deposit. */}
+        {/* Real Coinbase hosted onramp session. Settlement and final credit
+            remain backend-driven; the modal only creates and opens the session. */}
         <window.MvpCoinbaseOnrampModal
           open={onrampOpen}
           onClose={() => setOnrampOpen(false)}
-          onComplete={(usdcAmt, sourceLabel) => {
-            setLocalBalance((b) => b + usdcAmt);
-            setLocalTxs((prev) => [
-              {
-                id: `cb_${Date.now().toString(36).slice(-5)}`,
-                counterparty: sourceLabel,
-                amount: usdcAmt,
-                direction: 'in',
-                role: 'deposit',
-                status: 'onramp',
-                timestamp: t('mvp.ui.just_now'),
-              },
-              ...prev,
-            ]);
-          }}
+          agentId={data.agent.id}
+          destinationAddress={receiveAddress}
           t={t}
         />
       </div>
