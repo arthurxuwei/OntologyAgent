@@ -164,12 +164,18 @@ jobs:
           IMAGE_PREFIX: ${{ needs.build-and-push.outputs.image-prefix }}
           IMAGE_TAG: ${{ needs.build-and-push.outputs.image-tag }}
           CLOUDFLARE_TUNNEL_TOKEN: ${{ secrets.CLOUDFLARE_TUNNEL_TOKEN }}
+          COINBASE_ONRAMP_BEARER_TOKEN: ${{ secrets.COINBASE_ONRAMP_BEARER_TOKEN }}
+          COINBASE_API_KEY_ID: ${{ secrets.COINBASE_API_KEY_ID }}
+          COINBASE_API_PRIVATE_KEY: ${{ secrets.COINBASE_API_PRIVATE_KEY }}
         run: |
           remote="${LIGHTHOUSE_USER}@${LIGHTHOUSE_HOST}"
-          printf 'GHCR_IMAGE_PREFIX=%s\nIMAGE_TAG=%s\nCHIEF_DATA_ROOT=/opt/chief/data\nCLOUDFLARE_TUNNEL_TOKEN=%s\n' \
+          printf 'GHCR_IMAGE_PREFIX=%s\nIMAGE_TAG=%s\nCHIEF_DATA_ROOT=/opt/chief/data\nCLOUDFLARE_TUNNEL_TOKEN=%s\nCOINBASE_ONRAMP_BEARER_TOKEN=%s\nCOINBASE_API_KEY_ID=%s\nCOINBASE_API_PRIVATE_KEY=%s\n' \
             "${IMAGE_PREFIX}" \
             "${IMAGE_TAG}" \
             "${CLOUDFLARE_TUNNEL_TOKEN}" \
+            "${COINBASE_ONRAMP_BEARER_TOKEN}" \
+            "${COINBASE_API_KEY_ID}" \
+            "${COINBASE_API_PRIVATE_KEY}" \
             | ssh -i ~/.ssh/lighthouse_key "${remote}" 'cat > /opt/chief/.env.deploy'
 
       - name: Pull and restart services

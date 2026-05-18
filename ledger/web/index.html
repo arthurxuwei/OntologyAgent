@@ -288,23 +288,6 @@
           <div class="summary" id="wallet-output">No wallet binding yet.</div>
         </form>
 
-        <form class="card" id="credit-form">
-          <h2>Credit Account</h2>
-          <label>
-            Agent ID
-            <input id="credit-agent-id" value="agent_buyer" autocomplete="off" required />
-          </label>
-          <label>
-            Amount Atomic
-            <input id="credit-amount" value="5000000" autocomplete="off" required />
-          </label>
-          <label>
-            Reason
-            <input id="credit-reason" value="demo funding" autocomplete="off" />
-          </label>
-          <button class="primary" type="submit">Credit</button>
-        </form>
-
         <form class="card" id="onramp-form">
           <h2>Coinbase Onramp</h2>
           <label>
@@ -348,31 +331,6 @@
           <button class="primary" type="submit">Confirm Credit</button>
         </form>
 
-        <form class="card" id="escrow-form">
-          <h2>Create Escrow</h2>
-          <label>
-            Buyer Agent ID
-            <input id="escrow-buyer-agent-id" value="agent_buyer" autocomplete="off" required />
-          </label>
-          <label>
-            Seller Agent ID
-            <input id="escrow-seller-agent-id" value="agent_seller" autocomplete="off" required />
-          </label>
-          <label>
-            Amount Atomic
-            <input id="escrow-amount" value="3000000" autocomplete="off" required />
-          </label>
-          <label>
-            Task ID
-            <input id="escrow-task-id" value="task_demo" autocomplete="off" />
-          </label>
-          <label>
-            Description
-            <input id="escrow-description" value="Research task" autocomplete="off" />
-          </label>
-          <button class="primary" type="submit">Create Escrow</button>
-        </form>
-
         <form class="card" id="settlement-form">
           <h2>Settle Escrow</h2>
           <label>
@@ -391,10 +349,8 @@
       const ledgerStateEl = document.getElementById("ledger-state");
       const refreshButtonEl = document.getElementById("refresh-button");
       const walletFormEl = document.getElementById("wallet-form");
-      const creditFormEl = document.getElementById("credit-form");
       const onrampFormEl = document.getElementById("onramp-form");
       const onrampConfirmFormEl = document.getElementById("onramp-confirm-form");
-      const escrowFormEl = document.getElementById("escrow-form");
       const settlementFormEl = document.getElementById("settlement-form");
       const walletAgentNameEl = document.getElementById("wallet-agent-name");
       const walletAgentIdEl = document.getElementById("wallet-agent-id");
@@ -402,9 +358,6 @@
       const walletCircleWalletIdEl = document.getElementById("wallet-circle-wallet-id");
       const walletAddressEl = document.getElementById("wallet-address");
       const walletOutputEl = document.getElementById("wallet-output");
-      const creditAgentIdEl = document.getElementById("credit-agent-id");
-      const creditAmountEl = document.getElementById("credit-amount");
-      const creditReasonEl = document.getElementById("credit-reason");
       const onrampAgentIdEl = document.getElementById("onramp-agent-id");
       const onrampDestinationAddressEl = document.getElementById("onramp-destination-address");
       const onrampPaymentAmountEl = document.getElementById("onramp-payment-amount");
@@ -414,11 +367,6 @@
       const onrampConfirmAmountEl = document.getElementById("onramp-confirm-amount");
       const onrampConfirmTxHashEl = document.getElementById("onramp-confirm-tx-hash");
       const onrampOutputEl = document.getElementById("onramp-output");
-      const escrowBuyerAgentIdEl = document.getElementById("escrow-buyer-agent-id");
-      const escrowSellerAgentIdEl = document.getElementById("escrow-seller-agent-id");
-      const escrowAmountEl = document.getElementById("escrow-amount");
-      const escrowTaskIdEl = document.getElementById("escrow-task-id");
-      const escrowDescriptionEl = document.getElementById("escrow-description");
       const escrowSelectEl = document.getElementById("escrow-select");
       const releaseButtonEl = document.getElementById("release-button");
       const refundButtonEl = document.getElementById("refund-button");
@@ -649,19 +597,6 @@
         await refreshLedgerState();
       }
 
-      async function creditAccount(event) {
-        event.preventDefault();
-        const reason = creditReasonEl.value.trim();
-        await requestJson(`/ledger/accounts/${creditAgentIdEl.value.trim()}/credit`, {
-          method: "POST",
-          body: JSON.stringify({
-            amountAtomic: creditAmountEl.value.trim(),
-            reason: reason || null,
-          }),
-        });
-        await refreshLedgerState();
-      }
-
       async function createOnrampSession(event) {
         event.preventDefault();
         const payload = await requestJson("/onramp/sessions", {
@@ -707,23 +642,6 @@
         await refreshLedgerState();
       }
 
-      async function createEscrow(event) {
-        event.preventDefault();
-        const taskId = escrowTaskIdEl.value.trim();
-        const description = escrowDescriptionEl.value.trim();
-        await requestJson("/ledger/escrows", {
-          method: "POST",
-          body: JSON.stringify({
-            buyerAgentId: escrowBuyerAgentIdEl.value.trim(),
-            sellerAgentId: escrowSellerAgentIdEl.value.trim(),
-            amountAtomic: escrowAmountEl.value.trim(),
-            taskId: taskId || null,
-            description: description || null,
-          }),
-        });
-        await refreshLedgerState();
-      }
-
       function preventSettlementSubmit(event) {
         event.preventDefault();
       }
@@ -739,10 +657,8 @@
 
       refreshButtonEl.addEventListener("click", refreshLedgerState);
       walletFormEl.addEventListener("submit", getOrCreateWallet);
-      creditFormEl.addEventListener("submit", creditAccount);
       onrampFormEl.addEventListener("submit", createOnrampSession);
       onrampConfirmFormEl.addEventListener("submit", confirmOnrampSession);
-      escrowFormEl.addEventListener("submit", createEscrow);
       settlementFormEl.addEventListener("submit", preventSettlementSubmit);
       releaseButtonEl.addEventListener("click", () => settleEscrow("release"));
       refundButtonEl.addEventListener("click", () => settleEscrow("refund"));

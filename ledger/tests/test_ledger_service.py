@@ -125,14 +125,15 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertIn("Chief Ledger", html)
         self.assertIn('id="ledger-state"', html)
         self.assertIn('id="wallet-form"', html)
-        self.assertIn('id="credit-form"', html)
+        self.assertNotIn('id="credit-form"', html)
+        self.assertNotIn("Credit Account", html)
         self.assertIn('id="onramp-form"', html)
         self.assertIn('id="onramp-confirm-form"', html)
-        self.assertIn('id="escrow-form"', html)
+        self.assertNotIn('id="escrow-form"', html)
+        self.assertNotIn("Create Escrow", html)
         self.assertIn('id="settlement-form"', html)
         self.assertIn("/ledger/state", html)
         self.assertIn("/onramp/sessions", html)
-        self.assertIn("/ledger/accounts/", html)
         self.assertIn("/ledger/escrows", html)
 
     def test_management_page_helpers_render_and_call_ledger_api(self) -> None:
@@ -197,10 +198,6 @@ class LedgerServiceTests(unittest.TestCase):
                 "elements.get('wallet-circle-wallet-id').value = 'circle-wallet-1';"
                 "elements.get('wallet-address').value = '0x1111111111111111111111111111111111111111';"
                 "await getOrCreateWallet({ preventDefault() {} });"
-                "elements.get('credit-agent-id').value = 'agent_buyer';"
-                "elements.get('credit-amount').value = '5000000';"
-                "elements.get('credit-reason').value = 'demo funding';"
-                "await creditAccount({ preventDefault() {} });"
                 "elements.get('onramp-agent-id').value = 'agentA';"
                 "elements.get('onramp-destination-address').value = '0x742d35Cc6634C0532925a3b844Bc454e4438f44e';"
                 "elements.get('onramp-payment-amount').value = '10.00';"
@@ -216,14 +213,11 @@ class LedgerServiceTests(unittest.TestCase):
                 "stateText: elements.get('ledger-state').textContent,"
                 "escrowSelection: selectedEscrowId(),"
                 "onrampSelection: selectedOnrampSessionId(),"
-                "creditListener: listeners.get('credit-form:submit'),"
                 "walletListener: listeners.get('wallet-form:submit'),"
                 "onrampListener: listeners.get('onramp-form:submit'),"
                 "onrampConfirmListener: listeners.get('onramp-confirm-form:submit'),"
-                "escrowListener: listeners.get('escrow-form:submit'),"
                 "settlementListener: listeners.get('settlement-form:submit'),"
                 "walletCall: fetchCalls.find((call) => call.url === '/ledger/wallets/get-or-create'),"
-                "creditCall: fetchCalls.find((call) => call.url === '/ledger/accounts/agent_buyer/credit'),"
                 "onrampCall: fetchCalls.find((call) => call.url === '/onramp/sessions'),"
                 "confirmCall: fetchCalls.find((call) => call.url === '/onramp/sessions/onramp_1/confirm'),"
                 "openCall: window.openCalls[0],"
@@ -258,10 +252,8 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertEqual(output["escrowSelection"], "escrow_1")
         self.assertEqual(output["onrampSelection"], "onramp_1")
         self.assertEqual(output["walletListener"], "getOrCreateWallet")
-        self.assertEqual(output["creditListener"], "creditAccount")
         self.assertEqual(output["onrampListener"], "createOnrampSession")
         self.assertEqual(output["onrampConfirmListener"], "confirmOnrampSession")
-        self.assertEqual(output["escrowListener"], "createEscrow")
         self.assertEqual(output["settlementListener"], "preventSettlementSubmit")
         self.assertEqual(output["walletCall"]["method"], "POST")
         self.assertEqual(
@@ -273,11 +265,6 @@ class LedgerServiceTests(unittest.TestCase):
                 "circleWalletId": "circle-wallet-1",
                 "walletAddress": "0x1111111111111111111111111111111111111111",
             },
-        )
-        self.assertEqual(output["creditCall"]["method"], "POST")
-        self.assertEqual(
-            json.loads(output["creditCall"]["body"]),
-            {"amountAtomic": "5000000", "reason": "demo funding"},
         )
         self.assertEqual(output["onrampCall"]["method"], "POST")
         self.assertEqual(
