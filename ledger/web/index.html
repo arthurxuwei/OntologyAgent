@@ -387,6 +387,21 @@
         }, 0n);
       }
 
+      function formatDecimal(value) {
+        const parsed = Number(value);
+        if (!Number.isFinite(parsed)) {
+          return shortValue(value, "0");
+        }
+        return parsed.toLocaleString("en-US", { maximumFractionDigits: 6 });
+      }
+
+      function sumDecimal(records, field) {
+        return records.reduce((total, record) => {
+          const parsed = Number(record?.[field]);
+          return Number.isFinite(parsed) ? total + parsed : total;
+        }, 0);
+      }
+
       function statusBadge(status) {
         const safeStatus = escapeHtml(status || "unknown");
         const statusClass = String(status || "unknown").toLowerCase().replace(/[^a-z0-9_-]/g, "-");
@@ -456,7 +471,7 @@
           `<div class="ledger-state">`,
           `<div class="metric-grid">`,
           `<div class="metric"><span>Accounts</span><strong>${accounts.length}</strong></div>`,
-          `<div class="metric"><span>Ledger Available</span><strong>${formatAtomic(sumAtomic(accounts, "availableAtomic"))}</strong></div>`,
+          `<div class="metric"><span>Circle USDC Available</span><strong>${formatDecimal(sumDecimal(accounts, "circleUsdcBalance"))}</strong></div>`,
           `<div class="metric"><span>Ledger Locked</span><strong>${formatAtomic(sumAtomic(accounts, "lockedAtomic"))}</strong></div>`,
           `<div class="metric"><span>Escrows / Onramps</span><strong>${escrows.length} / ${onrampSessions.length}</strong></div>`,
           `</div>`,
@@ -466,9 +481,8 @@
               { label: "Agent ID", render: (account) => `<span class="mono">${shortValue(account.agentId)}</span>` },
               { label: "Email", render: (account) => shortValue(account.email) },
               { label: "Wallet Address", render: (account) => `<span class="mono">${shortValue(account.walletAddress || account.circleWalletId)}</span>` },
-              { label: "Ledger Available", render: (account) => formatAtomic(account.availableAtomic) },
+              { label: "Circle USDC Available", render: (account) => formatDecimal(account.circleUsdcBalance) },
               { label: "Ledger Locked", render: (account) => formatAtomic(account.lockedAtomic) },
-              { label: "Circle USDC Balance", render: (account) => shortValue(account.circleUsdcBalance) },
               { label: "Updated", render: (account) => formatDate(account.updatedAt || account.createdAt) },
             ],
             accounts,

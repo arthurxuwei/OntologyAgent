@@ -342,12 +342,10 @@ class LedgerServiceTests(unittest.TestCase):
         output = json.loads(node_result.stdout)
         self.assertIn("Accounts", output["stateHtml"])
         self.assertIn("1", output["stateHtml"])
-        self.assertIn("Ledger Available", output["stateHtml"])
-        self.assertIn("5,000,000", output["stateHtml"])
+        self.assertIn("Circle USDC Available", output["stateHtml"])
+        self.assertIn("1.98", output["stateHtml"])
         self.assertIn("Ledger Locked", output["stateHtml"])
         self.assertIn("3,000,000", output["stateHtml"])
-        self.assertIn("Circle USDC Balance", output["stateHtml"])
-        self.assertIn("1.98", output["stateHtml"])
         self.assertIn("agent_buyer", output["stateHtml"])
         self.assertIn("Email", output["stateHtml"])
         self.assertIn("buyer@example.com", output["stateHtml"])
@@ -461,6 +459,53 @@ class LedgerServiceTests(unittest.TestCase):
             state = self.client.get("/ledger/state").json()
 
         self.assertEqual(state["accounts"][0]["circleUsdcBalance"], "1.98")
+
+    def test_ledger_state_reports_circle_balance_without_mutating_available(self) -> None:
+        class FakeWalletClient:
+            async def status(self, *, wallet_address=None, circle_wallet_id=None):
+                assert circle_wallet_id == "circle-wallet-1"
+                return {"balances": {"USDC": "1.98"}}
+
+        store = main.get_store()
+        store.bind_account_wallet(
+            agent_id="agent_research",
+            wallet_address="0x1111111111111111111111111111111111111111",
+            circle_wallet_id="circle-wallet-1",
+        )
+
+        with patch.object(main, "get_ledger_wallet_client", return_value=FakeWalletClient()):
+            state = self.client.get("/ledger/state").json()
+            state_after_second_read = self.client.get("/ledger/state").json()
+
+        account = state["accounts"][0]
+        self.assertEqual(account["circleUsdcBalance"], "1.98")
+        self.assertEqual(account["availableAtomic"], "0")
+        self.assertEqual(state["entries"], [])
+        self.assertEqual(state_after_second_read["entries"], [])
+
+    def test_dashboard_data_uses_circle_usdc_as_available_balance(self) -> None:
+        class FakeWalletClient:
+            async def status(self, *, wallet_address=None, circle_wallet_id=None):
+                assert circle_wallet_id == "circle-wallet-1"
+                return {"balances": {"USDC": "1.98"}}
+
+        store = main.get_store()
+        store.bind_account_wallet(
+            agent_id="agent_research",
+            agent_name="Research Agent",
+            email="agent@example.com",
+            wallet_address="0x1111111111111111111111111111111111111111",
+            circle_wallet_id="circle-wallet-1",
+        )
+
+        with patch.object(main, "get_ledger_wallet_client", return_value=FakeWalletClient()):
+            dashboard = self.client.get("/dashboard/data?email=agent@example.com").json()
+
+        self.assertEqual(
+            dashboard["agents"]["agent_research"]["balance"]["available"],
+            1.98,
+        )
+        self.assertEqual(main.get_store().load().accounts[0].availableAtomic, "0")
 
     def test_wallet_get_or_create_requires_circle_binding_agent_id_to_match_request(self) -> None:
         class FakeWalletClient:
@@ -802,7 +847,7 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertEqual(len(state["settlementRecords"]), 1)
         self.assertEqual(state["settlementRecords"][0]["status"], "submitted")
 
-    def test_agent_transfer_calls_circle_then_moves_available_balance(self) -> None:
+    def test_agent_transfer_calls_circle_then_records_ledger_entries(self) -> None:
         class FakeSettlementClient:
             def __init__(self) -> None:
                 self.calls = []
@@ -842,10 +887,6 @@ class LedgerServiceTests(unittest.TestCase):
                     updatedAt=current,
                 )
 
-        self.client.post(
-            "/ledger/accounts/agent_sender/credit",
-            json={"amountAtomic": "5000000", "reason": "demo funding"},
-        )
         main.get_store().bind_account_wallet(
             agent_id="agent_sender",
             agent_name="Sender",
@@ -883,9 +924,9 @@ class LedgerServiceTests(unittest.TestCase):
         accounts = {
             item.agentId: item for item in main.get_store().load().accounts
         }
-        self.assertEqual(accounts["agent_sender"].availableAtomic, "3750000")
+        self.assertEqual(accounts["agent_sender"].availableAtomic, "0")
         self.assertEqual(accounts["agent_sender"].lockedAtomic, "0")
-        self.assertEqual(accounts["agent_receiver"].availableAtomic, "1250000")
+        self.assertEqual(accounts["agent_receiver"].availableAtomic, "0")
         self.assertEqual(accounts["agent_receiver"].lockedAtomic, "0")
         self.assertEqual([entry["entryType"] for entry in payload["entries"]], ["agent_transfer", "agent_transfer"])
 

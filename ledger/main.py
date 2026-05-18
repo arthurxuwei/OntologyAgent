@@ -332,6 +332,13 @@ def atomic_to_usdc(value: Any) -> float:
     return float(atomic_decimal(value) / Decimal("1000000"))
 
 
+def decimal_usdc_to_float(value: Any, fallback: float = 0.0) -> float:
+    try:
+        return float(Decimal(str(value)))
+    except (InvalidOperation, ValueError):
+        return fallback
+
+
 def short_address(value: Any) -> str:
     text = str(value or "").strip()
     if not text:
@@ -498,7 +505,10 @@ def build_dashboard_data(
                 "ownerEmail": normalize_email(account.get("email")),
             },
             "balance": {
-                "available": atomic_to_usdc(account.get("availableAtomic")),
+                "available": decimal_usdc_to_float(
+                    account.get("circleUsdcBalance"),
+                    fallback=atomic_to_usdc(account.get("availableAtomic")),
+                ),
                 "locked": atomic_to_usdc(account.get("lockedAtomic")),
                 "lifetimeIn": round(lifetime_in, 6),
                 "lifetimeOut": round(lifetime_out, 6),
@@ -1235,7 +1245,7 @@ class OffchainLedgerStore:
         to_agent_id: str,
         amount_atomic: str,
     ) -> None:
-        amount = parse_positive_atomic(amount_atomic)
+        parse_positive_atomic(amount_atomic)
         state = self.load()
         sender = self._find_account(state, from_agent_id)
         receiver = self._find_account(state, to_agent_id)
@@ -1243,8 +1253,6 @@ class OffchainLedgerStore:
             raise ValueError("sender account not found")
         if receiver is None:
             raise ValueError("receiver account not found")
-        if int(sender.availableAtomic) < amount:
-            raise ValueError("insufficient available balance")
         self._require_circle_wallet(sender, "sender")
         self._require_circle_wallet(receiver, "receiver")
 
@@ -1272,30 +1280,15 @@ class OffchainLedgerStore:
         amount = parse_positive_atomic(amount_atomic)
 
         def mutate(state: LedgerState) -> tuple[LedgerAccount, LedgerAccount, list[LedgerEntry]]:
-            sender, sender_index = self._account_for_update(
+            sender, _sender_index = self._account_for_update(
                 state, from_agent_id, create=False
             )
-            receiver, receiver_index = self._account_for_update(
+            receiver, _receiver_index = self._account_for_update(
                 state, to_agent_id, create=False
             )
-            if int(sender.availableAtomic) < amount:
-                raise ValueError("insufficient available balance")
             self._require_circle_wallet(sender, "sender")
             self._require_circle_wallet(receiver, "receiver")
 
-            current = now_iso()
-            updated_sender = sender.model_copy(
-                update={
-                    "availableAtomic": add_atomic(sender.availableAtomic, -amount),
-                    "updatedAt": current,
-                }
-            )
-            updated_receiver = receiver.model_copy(
-                update={
-                    "availableAtomic": add_atomic(receiver.availableAtomic, amount),
-                    "updatedAt": current,
-                }
-            )
             entry_metadata = {
                 **metadata,
                 "transferId": transfer_id,
@@ -1316,10 +1309,8 @@ class OffchainLedgerStore:
                 reason=reason or "agent transfer received",
                 metadata={**entry_metadata, "counterpartyAgentId": from_agent_id},
             )
-            state.accounts[sender_index] = updated_sender
-            state.accounts[receiver_index] = updated_receiver
             state.entries.extend([sender_entry, receiver_entry])
-            return updated_sender, updated_receiver, [sender_entry, receiver_entry]
+            return sender, receiver, [sender_entry, receiver_entry]
 
         return self._mutate(mutate)
 
@@ -1975,12 +1966,15 @@ async def get_ledger_state() -> dict[str, Any]:
 
 
 @app.get("/dashboard/data")
-def dashboard_data(email: str = "") -> dict[str, Any]:
-    return build_dashboard_data(get_store().load().model_dump(), owner_email=email)
+async def dashboard_data(email: str = "") -> dict[str, Any]:
+    return build_dashboard_data(
+        await ledger_state_with_circle_balances(),
+        owner_email=email,
+    )
 
 
 @app.get("/dashboard/claimable-agents")
-def dashboard_claimable_agents(email: str, claimed: str = "") -> dict[str, Any]:
+async def dashboard_claimable_agents(email: str, claimed: str = "") -> dict[str, Any]:
     claimed_agent_ids = [
         item.strip()
         for item in claimed.split(",")
@@ -1988,7 +1982,7 @@ def dashboard_claimable_agents(email: str, claimed: str = "") -> dict[str, Any]:
     ]
     return build_claimable_agents(
         email=email,
-        ledger_state=get_store().load().model_dump(),
+        ledger_state=await ledger_state_with_circle_balances(),
         claimed_agent_ids=claimed_agent_ids,
     )
 
