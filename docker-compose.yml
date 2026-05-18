@@ -12,6 +12,7 @@ services:
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
       OPENAI_ENDPOINT: ${OPENAI_ENDPOINT:-}
       BRAIN_AGENT_MODEL: ${BRAIN_AGENT_MODEL:-gpt-4o-mini}
+      LEDGER_HTTP_URL: ${LEDGER_HTTP_URL:-http://ledger:8092}
     volumes:
       - ./agent/data:/app/data
       - ./agent/skills:/app/skills:ro
