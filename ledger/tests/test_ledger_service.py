@@ -1112,11 +1112,19 @@ class LedgerServiceTests(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 502)
+        detail = response.json()["detail"]
+        self.assertEqual(detail["message"], "Circle transfer failed")
+        self.assertEqual(detail["settlementRecord"]["status"], "failed")
+        self.assertEqual(detail["settlementRecord"]["error"], "Circle transfer failed")
         accounts = {
             item.agentId: item for item in main.get_store().load().accounts
         }
         self.assertEqual(accounts["agent_sender"].availableAtomic, "5000000")
         self.assertEqual(accounts["agent_receiver"].availableAtomic, "0")
+        settlement_records = main.get_store().load().settlementRecords
+        self.assertEqual(len(settlement_records), 1)
+        self.assertEqual(settlement_records[0].status, "failed")
+        self.assertEqual(settlement_records[0].error, "Circle transfer failed")
 
     def test_agent_transfer_requires_real_circle_settlement_enabled(self) -> None:
         self.client.post(

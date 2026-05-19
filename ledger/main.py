@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import secrets
 import tempfile
@@ -53,6 +54,7 @@ NO_CACHE_HEADERS = {
 }
 
 app = FastAPI(title="Chief offchain ledger")
+logger = logging.getLogger("chief.ledger")
 
 
 def now_iso() -> str:
@@ -1978,11 +1980,44 @@ async def settle_agent_transfer(
     amount_atomic: str,
     ref_id: str,
 ) -> LedgerSettlementRecord:
-    record = await get_ledger_settlement_client().submit_agent_transfer(
-        from_agent_id=from_agent_id,
-        to_agent_id=to_agent_id,
-        amount_atomic=amount_atomic,
-        ref_id=ref_id,
+    try:
+        record = await get_ledger_settlement_client().submit_agent_transfer(
+            from_agent_id=from_agent_id,
+            to_agent_id=to_agent_id,
+            amount_atomic=amount_atomic,
+            ref_id=ref_id,
+        )
+    except LedgerSettlementError as error:
+        get_store().add_settlement_record(error.record)
+        logger.error(
+            "agent_transfer_settlement_failed %s",
+            json.dumps(
+                {
+                    "transferId": ref_id,
+                    "fromAgentId": from_agent_id,
+                    "toAgentId": to_agent_id,
+                    "amountAtomic": amount_atomic,
+                    "settlementRecordId": error.record.recordId,
+                    "settlementError": error.record.error,
+                },
+                sort_keys=True,
+            ),
+        )
+        raise
+    logger.info(
+        "agent_transfer_settlement_submitted %s",
+        json.dumps(
+            {
+                "transferId": ref_id,
+                "fromAgentId": from_agent_id,
+                "toAgentId": to_agent_id,
+                "amountAtomic": amount_atomic,
+                "settlementRecordId": record.recordId,
+                "transactionId": record.transactionId,
+                "transactionState": record.transactionState,
+            },
+            sort_keys=True,
+        ),
     )
     return get_store().add_settlement_record(record)
 
