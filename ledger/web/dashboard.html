@@ -4948,12 +4948,14 @@ window.AddAgentModal = AddAgentModal;
   // mvp/dashboard.html). Renders as inline SVG so it scales crisp at any
   // size and stays self-contained for the standalone build.
   function QrPanel({ address, t }) {
+    const qrAddress = String(address || '').trim();
     const svgMarkup = React.useMemo(() => {
+      if (!qrAddress) return null;
       if (typeof window.qrcode !== 'function') return null;
       try {
         // typeNumber=0 → auto-fit; errorCorrection 'M' is the standard balance.
         const qr = window.qrcode(0, 'M');
-        qr.addData(address);
+        qr.addData(qrAddress);
         qr.make();
         // Fixed-size raster: cellSize=4 with margin=2 → ~120-140px square
         // for a typical 0x… address. Scalable mode (viewBox + width=100%)
@@ -4963,7 +4965,7 @@ window.AddAgentModal = AddAgentModal;
       } catch {
         return null;
       }
-    }, [address]);
+    }, [qrAddress]);
 
     if (!svgMarkup) {
       // Library not loaded — fall back to nothing so the address column
@@ -4972,7 +4974,11 @@ window.AddAgentModal = AddAgentModal;
     }
 
     return (
-      <div style={{ textAlign: 'center', minWidth: '136px' }}>
+      <div
+        key={qrAddress}
+        data-qr-address={qrAddress}
+        style={{ textAlign: 'center', minWidth: '136px' }}
+      >
         <div
           style={{
             display: 'inline-block',

@@ -364,6 +364,18 @@ def dashboard_counterparty(
     entry: dict[str, Any],
     escrow_by_id: dict[str, dict[str, Any]],
 ) -> str:
+    metadata = entry.get("metadata")
+    if isinstance(metadata, dict):
+        for key in (
+            "counterpartyAgentId",
+            "counterpartyAgentName",
+            "counterparty",
+            "counterpartyEmail",
+        ):
+            value = metadata.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+
     escrow_id = entry.get("escrowId")
     if isinstance(escrow_id, str) and escrow_id in escrow_by_id:
         escrow = escrow_by_id[escrow_id]

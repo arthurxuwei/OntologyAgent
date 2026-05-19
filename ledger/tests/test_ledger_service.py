@@ -164,6 +164,9 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertIn("fetch(`/dashboard/claimable-agents?", html)
         self.assertIn("fetch('/onramp/sessions'", html)
         self.assertIn("fullWalletAddress", html)
+        self.assertIn("const qrAddress = String(address || '').trim();", html)
+        self.assertIn("qr.addData(qrAddress);", html)
+        self.assertIn("data-qr-address={qrAddress}", html)
         self.assertNotIn("claimAgent('agentA')", html)
 
     def test_dashboard_data_returns_email_scoped_ledger_accounts(self) -> None:
@@ -196,6 +199,15 @@ class LedgerServiceTests(unittest.TestCase):
             description="Research task",
             metadata={},
         )
+        store.transfer_between_agents(
+            from_agent_id="agent_alpha",
+            to_agent_id="agent_beta",
+            amount_atomic="250000",
+            reason="remark should not render",
+            metadata={},
+            transfer_id="transfer_123",
+            settlement_record_id=None,
+        )
 
         response = self.client.get("/dashboard/data?email=owner@example.com")
 
@@ -214,9 +226,10 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertEqual(alpha["balance"]["available"], 2.0)
         self.assertEqual(alpha["balance"]["locked"], 0.5)
         self.assertEqual(alpha["balance"]["lifetimeIn"], 2.5)
-        self.assertEqual(alpha["balance"]["lifetimeOut"], 0.5)
+        self.assertEqual(alpha["balance"]["lifetimeOut"], 0.75)
         self.assertEqual(alpha["transactions"][0]["counterparty"], "agent_beta")
-        self.assertEqual(alpha["transactions"][0]["status"], "locked")
+        self.assertNotEqual(alpha["transactions"][0]["counterparty"], "remark should not render")
+        self.assertEqual(alpha["transactions"][0]["status"], "released")
 
     def test_dashboard_claimable_agents_come_from_unclaimed_email_accounts(self) -> None:
         store = main.get_store()
