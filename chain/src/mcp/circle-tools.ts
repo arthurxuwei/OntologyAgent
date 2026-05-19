@@ -129,12 +129,15 @@ export function createCircleMcpServer(runtime: CircleRuntime): McpServer {
       },
     },
     async (args) =>
-      runTool(() =>
-        runtime.agentWalletService.transfer({
+      runTool(() => {
+        if (args.toAddress && !args.toAgentId && !args.toAgentName) {
+          return runtime.agentWalletService.withdrawUsdc(args);
+        }
+        return runtime.agentWalletService.transfer({
           ...args,
           asset: "USDC",
-        }),
-      ),
+        });
+      }),
   );
 
   server.registerTool(

@@ -1241,6 +1241,7 @@ class LedgerSettlementClient:
         to_address: Optional[str] = None,
         amount_atomic: str,
         ref_id: str,
+        tool_name: str = "agent_wallet_settle_ledger_transfer",
     ) -> dict[str, Any]:
         arguments: dict[str, Any] = {
             "fromAgentId": from_agent_id,
@@ -1256,7 +1257,7 @@ class LedgerSettlementClient:
             "id": 1,
             "method": "tools/call",
             "params": {
-                "name": "agent_wallet_settle_ledger_transfer",
+                "name": tool_name,
                 "arguments": arguments,
             },
         }

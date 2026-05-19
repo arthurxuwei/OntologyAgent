@@ -3534,7 +3534,7 @@ window.AddAgentModal = AddAgentModal;
     },
     'mvp.s4.field_destination': { en: 'Destination address', zh: '目标地址' },
     'mvp.s4.field_amount':      { en: 'Amount (USDC)',       zh: '金额(USDC)' },
-    'mvp.s4.amount_min_hint':   { en: 'Min 5 USDC · Network: Base · Est. gas ~$0.01', zh: '最低 5 USDC · 链:Base · 预估 gas ~$0.01' },
+    'mvp.s4.amount_min_hint':   { en: 'Min 1 USDC · Network: Base · Est. gas ~$0.01', zh: '最低 1 USDC · 链:Base · 预估 gas ~$0.01' },
     'mvp.s4.button_max':        { en: 'max',                 zh: '最大' },
     'mvp.s4.button_confirm':    { en: 'Confirm withdrawal',  zh: '确认提款' },
     'mvp.s4.button_cancel':     { en: 'Cancel',              zh: '取消' },
@@ -3629,8 +3629,8 @@ window.AddAgentModal = AddAgentModal;
     },
     'mvp.s7.recap_3_label': { en: '03 · WITHDRAW', zh: '03 · 提' },
     'mvp.s7.recap_3_body': {
-      en: 'USDC out to an external wallet on Base. Min 5 USDC, gas a fraction of a cent — Coinbase offramp follows in phase 2.',
-      zh: 'USDC 提到 Base 上的外部钱包。最低 5 USDC,gas 几分钱;法币出金走 Coinbase,二阶段再上。',
+      en: 'USDC out to an external wallet on Base. Min 1 USDC, gas a fraction of a cent — Coinbase offramp follows in phase 2.',
+      zh: 'USDC 提到 Base 上的外部钱包。最低 1 USDC,gas 几分钱;法币出金走 Coinbase,二阶段再上。',
     },
     'mvp.s7.recap_4_label': { en: '04 · SETTLE',   zh: '04 · 清' },
     'mvp.s7.recap_4_body': {
@@ -3725,7 +3725,7 @@ window.AddAgentModal = AddAgentModal;
     'mvp.dash.funding.field_destination':           { en: 'Destination address', zh: '目标地址' },
     'mvp.dash.funding.field_amount':                { en: 'Amount (USDC)',       zh: '金额(USDC)' },
     'mvp.dash.funding.max':                         { en: 'MAX',                 zh: '最大' },
-    'mvp.dash.funding.min_hint':                    { en: 'Min 5 USDC · Network: Base · Est. gas ~$0.01', zh: '最低 5 USDC · 链:Base · 预估 gas ~$0.01' },
+    'mvp.dash.funding.min_hint':                    { en: 'Min 1 USDC · Network: Base · Est. gas ~$0.01', zh: '最低 1 USDC · 链:Base · 预估 gas ~$0.01' },
     'mvp.dash.funding.exceeds_balance':             { en: 'Amount exceeds available balance.',            zh: '金额超过可用余额。' },
     'mvp.dash.funding.confirm':                     { en: 'Confirm withdrawal',                           zh: '确认提款' },
     'mvp.dash.funding.pending':                     { en: 'Broadcasting…',                                zh: '广播中…' },
@@ -4657,7 +4657,7 @@ window.AddAgentModal = AddAgentModal;
     }, [data]);
 
     const receiveAddress = data.agent.fullWalletAddress || data.agent.walletAddress;
-    const MIN_WITHDRAW = 5;
+    const MIN_WITHDRAW = 1;
 
     const destValid   = /^0x[0-9a-fA-F]{40}$/.test(dest.trim());
     const amountClean = amount.trim();

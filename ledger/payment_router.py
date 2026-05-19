@@ -9,7 +9,7 @@ PaymentMethod = Literal[
     "ledger_escrow",
     "ledger_transfer",
     "gateway_nanopayment",
-    "gateway_withdrawal",
+    "circle_withdrawal",
     "x402",
     "chain_transfer",
     "onramp",
@@ -70,7 +70,7 @@ def route_payment_intent(intent: PaymentIntent) -> PaymentRouteDecision:
 
     if intent.deliveryMode == "withdrawal":
         return {
-            "method": "gateway_withdrawal",
+            "method": "circle_withdrawal",
             "reason": (
                 "Agent Wallet USDC withdrawals settle from the bound Circle wallet "
                 "to an external Base address, then the ledger records the outflow."

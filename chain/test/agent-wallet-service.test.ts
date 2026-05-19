@@ -812,6 +812,84 @@ test("AgentWalletService settles USDC transfer through Circle Gateway", async ()
   );
 });
 
+test("AgentWalletService withdraws USDC from Circle wallet without Gateway balance", async () => {
+  await withTempStateFile(
+    {
+      wallets: [],
+      agentWalletBindings: [
+        {
+          agentName: "ZeroClaw EigenFlux Peer",
+          agentId: "peer-agent",
+          email: "peer@example.com",
+          walletAddress: "0x2222222222222222222222222222222222222222",
+          circleWalletId: "circle-peer",
+          circleWalletSetId: "circle-wallet-set",
+          blockchain: "BASE-SEPOLIA",
+          mode: "circle",
+          updatedAt: "2026-05-13T00:00:00.000Z",
+        },
+      ],
+    },
+    async (statePath) => {
+      const config = loadConfig({
+        CHAIN_MOCK: "false",
+        AGENT_WALLET_STATE_PATH: statePath,
+        CIRCLE_API_KEY: "circle-api-key",
+        CIRCLE_ENTITY_SECRET: "entity-secret",
+        CIRCLE_WALLET_SET_ID: "circle-wallet-set",
+        CIRCLE_USDC_TOKEN_ID: "circle-usdc-token",
+      });
+      let createTransferCalls = 0;
+      const circleWalletService = {
+        createTransfer: async (input: unknown) => {
+          createTransferCalls += 1;
+          assert.deepEqual(input, {
+            walletId: "circle-peer",
+            destinationAddress: "0x1111111111111111111111111111111111111111",
+            amount: "5",
+            tokenId: "circle-usdc-token",
+            tokenAddress: "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+            refId: "withdrawal:test",
+          });
+          return {
+            transaction: {
+              id: "circle-withdrawal-1",
+              txHash: "0xwithdrawal",
+              state: "INITIATED",
+            },
+          };
+        },
+        getGatewayBalance: async () => {
+          throw new Error("withdrawal must not read Gateway balance");
+        },
+      } as unknown as CircleWalletService;
+      const service = new AgentWalletService(
+        config,
+        fakeX402FetchService(baseX402Result()),
+        circleWalletService,
+      );
+
+      const result = await service.withdrawUsdc({
+        fromAgentId: "peer-agent",
+        toAddress: "0x1111111111111111111111111111111111111111",
+        amountAtomic: "5000000",
+        refId: "withdrawal:test",
+      });
+
+      assert.equal(createTransferCalls, 1);
+      assert.equal(result.asset, "USDC");
+      assert.equal(result.amount, "5");
+      assert.equal(result.amountEth, null);
+      assert.equal(result.amountAtomic, "5000000");
+      assert.equal(result.tokenId, "circle-usdc-token");
+      assert.equal(result.transactionId, "circle-withdrawal-1");
+      assert.equal(result.transactionHash, "0xwithdrawal");
+      assert.equal(result.state, "INITIATED");
+      assert.equal(result.mode, "circle");
+    },
+  );
+});
+
 test("AgentWalletService rejects USDC transfer when Gateway balance is insufficient", async () => {
   await withTempStateFile(
     {

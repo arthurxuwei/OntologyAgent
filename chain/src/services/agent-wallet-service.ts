@@ -361,6 +361,64 @@ export class AgentWalletService {
     };
   }
 
+  async withdrawUsdc(command: AgentWalletTransferCommand): Promise<AgentWalletTransferResult> {
+    const source = await this.resolveBinding({
+      agentId: command.fromAgentId,
+      agentName: command.fromAgentName,
+    });
+    const fromCircleWalletId = firstNonEmpty(command.fromCircleWalletId, source?.circleWalletId);
+    if (!fromCircleWalletId) {
+      throw new AppError(
+        "VALIDATION_ERROR",
+        "fromAgentId/fromAgentName must resolve to a real Circle wallet id, or fromCircleWalletId must be provided",
+        400,
+      );
+    }
+
+    const toAddress = firstNonEmpty(command.toAddress);
+    if (!toAddress) {
+      throw new AppError("VALIDATION_ERROR", "toAddress is required", 400);
+    }
+
+    const amount = atomicUsdcToDecimal(command.amountAtomic);
+    const amountAtomic = parsePositiveBigInt(command.amountAtomic ?? "", "amountAtomic");
+    const tokenAddress = normalizeRequestAddress(
+      this.config.x402.usdcAssetAddress,
+      "X402_USDC_ASSET_ADDRESS",
+    );
+    const tokenId = this.config.circle.usdcTokenId ?? null;
+    const raw = await this.circleWalletService.createTransfer({
+      walletId: fromCircleWalletId,
+      destinationAddress: toAddress,
+      amount,
+      tokenId: tokenId ?? undefined,
+      tokenAddress,
+      refId: command.refId,
+    });
+    const transaction = extractTransaction(raw);
+    return {
+      fromAgentId: source?.agentId ?? command.fromAgentId ?? null,
+      fromAgentName: source?.agentName ?? command.fromAgentName ?? null,
+      fromCircleWalletId,
+      fromAddress: source?.walletAddress ?? "",
+      toAgentId: null,
+      toAgentName: null,
+      toAddress: normalizeRequestAddress(toAddress, "toAddress"),
+      asset: "USDC",
+      amount,
+      amountEth: null,
+      amountAtomic: amountAtomic.toString(),
+      tokenId,
+      tokenAddress,
+      blockchain: "BASE-SEPOLIA",
+      transactionId: transaction.id,
+      transactionHash: transaction.txHash,
+      state: transaction.state,
+      mode: "circle",
+      raw,
+    };
+  }
+
   async depositToGateway(
     command: AgentWalletGatewayDepositCommand,
   ): Promise<AgentWalletGatewayDepositResult> {

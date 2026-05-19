@@ -171,6 +171,8 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertIn("const amountAtomic = usdcToAtomic(amount);", html)
         self.assertIn("amountAtomic,", html)
         self.assertIn("ownerEmail", html)
+        self.assertIn("const MIN_WITHDRAW = 1;", html)
+        self.assertIn("Min 1 USDC", html)
         self.assertNotIn("claimAgent('agentA')", html)
 
     def test_dashboard_data_returns_email_scoped_ledger_accounts(self) -> None:
@@ -1258,7 +1260,7 @@ class LedgerServiceTests(unittest.TestCase):
             "0x2222222222222222222222222222222222222222",
         )
         self.assertTrue(payload["entry"]["metadata"]["counterparty"].startswith("External"))
-        self.assertEqual(payload["route"]["method"], "gateway_withdrawal")
+        self.assertEqual(payload["route"]["method"], "circle_withdrawal")
 
     def test_withdrawal_failure_does_not_mutate_ledger_balance(self) -> None:
         class FakeSettlementClient:
@@ -1551,7 +1553,7 @@ class LedgerServiceTests(unittest.TestCase):
             )
         )
 
-        self.assertEqual(result["method"], "gateway_withdrawal")
+        self.assertEqual(result["method"], "circle_withdrawal")
         self.assertEqual(result["allowedTools"], ["agent_wallet_settle_ledger_transfer"])
 
     def test_ledger_mcp_tools_operate_on_local_store(self) -> None:
