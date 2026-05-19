@@ -383,7 +383,9 @@ export class CircleWalletService {
 
     const response = await client.signTypedData({
       walletId: command.walletId,
-      data: typeof command.data === "string" ? command.data : stringifyJsonSafe(command.data),
+      data: typeof command.data === "string"
+        ? command.data
+        : stringifyJsonSafe(addEip712DomainType(command.data)),
       memo: command.memo,
     } as any);
     const signature = extractSignature(response);
@@ -719,6 +721,47 @@ function stringifyJsonSafe(value: unknown): string {
   return JSON.stringify(value, (_, nestedValue) =>
     typeof nestedValue === "bigint" ? nestedValue.toString() : nestedValue,
   );
+}
+
+function addEip712DomainType(value: unknown): unknown {
+  if (!isRecord(value) || !isRecord(value.domain) || !isRecord(value.types)) {
+    return value;
+  }
+  if (Array.isArray(value.types.EIP712Domain)) {
+    return value;
+  }
+
+  const eip712Domain = eip712DomainFields(value.domain);
+  if (eip712Domain.length === 0) {
+    return value;
+  }
+  return {
+    ...value,
+    types: {
+      ...value.types,
+      EIP712Domain: eip712Domain,
+    },
+  };
+}
+
+function eip712DomainFields(domain: Record<string, unknown>): Array<{ name: string; type: string }> {
+  const fields: Array<{ name: string; type: string }> = [];
+  if (domain.name !== undefined) {
+    fields.push({ name: "name", type: "string" });
+  }
+  if (domain.version !== undefined) {
+    fields.push({ name: "version", type: "string" });
+  }
+  if (domain.chainId !== undefined) {
+    fields.push({ name: "chainId", type: "uint256" });
+  }
+  if (domain.verifyingContract !== undefined) {
+    fields.push({ name: "verifyingContract", type: "address" });
+  }
+  if (domain.salt !== undefined) {
+    fields.push({ name: "salt", type: "bytes32" });
+  }
+  return fields;
 }
 
 async function parseJsonPayload(response: Response): Promise<unknown> {

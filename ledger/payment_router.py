@@ -9,6 +9,7 @@ PaymentMethod = Literal[
     "ledger_escrow",
     "ledger_transfer",
     "gateway_nanopayment",
+    "gateway_withdrawal",
     "x402",
     "chain_transfer",
     "onramp",
@@ -69,9 +70,12 @@ def route_payment_intent(intent: PaymentIntent) -> PaymentRouteDecision:
 
     if intent.deliveryMode == "withdrawal":
         return {
-            "method": "chain_transfer",
-            "reason": "Withdrawals or external wallet transfers require chain transfer tools.",
-            "allowedTools": ["chain_sign_transfer", "chain_submit_execution"],
+            "method": "gateway_withdrawal",
+            "reason": (
+                "Agent Wallet USDC withdrawals settle from the bound Circle wallet "
+                "to an external Base address, then the ledger records the outflow."
+            ),
+            "allowedTools": ["agent_wallet_settle_ledger_transfer"],
         }
 
     if intent.deliveryMode == "async_task" or intent.requiresAcceptance:

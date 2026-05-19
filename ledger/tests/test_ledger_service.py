@@ -167,6 +167,10 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertIn("const qrAddress = String(address || '').trim();", html)
         self.assertIn("qr.addData(qrAddress);", html)
         self.assertIn("data-qr-address={qrAddress}", html)
+        self.assertIn("fetch('/ledger/withdrawals'", html)
+        self.assertIn("const amountAtomic = usdcToAtomic(amount);", html)
+        self.assertIn("amountAtomic,", html)
+        self.assertIn("ownerEmail", html)
         self.assertNotIn("claimAgent('agentA')", html)
 
     def test_dashboard_data_returns_email_scoped_ledger_accounts(self) -> None:
@@ -204,7 +208,10 @@ class LedgerServiceTests(unittest.TestCase):
             to_agent_id="agent_beta",
             amount_atomic="250000",
             reason="remark should not render",
-            metadata={},
+            metadata={
+                "fromEmail": "owner@example.com",
+                "toEmail": "other@example.com",
+            },
             transfer_id="transfer_123",
             settlement_record_id=None,
         )
@@ -227,7 +234,8 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertEqual(alpha["balance"]["locked"], 0.5)
         self.assertEqual(alpha["balance"]["lifetimeIn"], 2.5)
         self.assertEqual(alpha["balance"]["lifetimeOut"], 0.75)
-        self.assertEqual(alpha["transactions"][0]["counterparty"], "agent_beta")
+        self.assertEqual(alpha["transactions"][0]["counterparty"], "other@example.com")
+        self.assertNotEqual(alpha["transactions"][0]["counterparty"], "agent_beta")
         self.assertNotEqual(alpha["transactions"][0]["counterparty"], "remark should not render")
         self.assertEqual(alpha["transactions"][0]["status"], "released")
 
@@ -1168,6 +1176,144 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertEqual(settlement_records[0].status, "failed")
         self.assertEqual(settlement_records[0].error, "Circle transfer failed")
 
+    def test_withdrawal_calls_circle_then_records_ledger_entry(self) -> None:
+        class FakeSettlementClient:
+            def __init__(self) -> None:
+                self.calls = []
+
+            async def submit_withdrawal(
+                self,
+                *,
+                from_agent_id,
+                to_address,
+                amount_atomic,
+                ref_id,
+            ):
+                self.calls.append(
+                    {
+                        "fromAgentId": from_agent_id,
+                        "toAddress": to_address,
+                        "amountAtomic": amount_atomic,
+                        "refId": ref_id,
+                    }
+                )
+                current = main.now_iso()
+                return main.LedgerSettlementRecord(
+                    recordId="settle_withdrawal",
+                    eventType="withdrawal",
+                    status="submitted",
+                    chainMcpUrl="http://circle.test/mcp/",
+                    transferId=ref_id,
+                    fromAgentId=from_agent_id,
+                    toAddress=to_address,
+                    amountAtomic=amount_atomic,
+                    transactionId="circle-withdrawal-1",
+                    transactionHash="0xwithdrawal",
+                    transactionState="INITIATED",
+                    mode="circle",
+                    toolResult={"transactionHash": "0xwithdrawal"},
+                    createdAt=current,
+                    updatedAt=current,
+                )
+
+        self.client.post(
+            "/ledger/accounts/agent_sender/credit",
+            json={"amountAtomic": "5000000", "reason": "demo funding"},
+        )
+        main.get_store().bind_account_wallet(
+            agent_id="agent_sender",
+            agent_name="Sender",
+            email="sender@example.com",
+            wallet_address="0x1111111111111111111111111111111111111111",
+            circle_wallet_id="circle_sender",
+        )
+        fake_settlement = FakeSettlementClient()
+
+        with patch.object(
+            main, "get_ledger_settlement_client", return_value=fake_settlement
+        ):
+            response = self.client.post(
+                "/ledger/withdrawals",
+                json={
+                    "agentId": "agent_sender",
+                    "ownerEmail": "sender@example.com",
+                    "destinationAddress": "0x2222222222222222222222222222222222222222",
+                    "amountAtomic": "1250000",
+                    "reason": "dashboard withdrawal",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["settlementRecord"]["transactionHash"], "0xwithdrawal")
+        self.assertEqual(fake_settlement.calls[0]["fromAgentId"], "agent_sender")
+        self.assertEqual(
+            fake_settlement.calls[0]["toAddress"],
+            "0x2222222222222222222222222222222222222222",
+        )
+        self.assertEqual(payload["account"]["availableAtomic"], "3750000")
+        self.assertEqual(payload["entry"]["entryType"], "withdrawal")
+        self.assertEqual(
+            payload["entry"]["metadata"]["destinationAddress"],
+            "0x2222222222222222222222222222222222222222",
+        )
+        self.assertTrue(payload["entry"]["metadata"]["counterparty"].startswith("External"))
+        self.assertEqual(payload["route"]["method"], "gateway_withdrawal")
+
+    def test_withdrawal_failure_does_not_mutate_ledger_balance(self) -> None:
+        class FakeSettlementClient:
+            async def submit_withdrawal(self, **_kwargs):
+                current = main.now_iso()
+                record = main.LedgerSettlementRecord(
+                    recordId="settle_failed_withdrawal",
+                    eventType="withdrawal",
+                    status="failed",
+                    chainMcpUrl="http://circle.test/mcp/",
+                    transferId="withdrawal_failed",
+                    fromAgentId="agent_sender",
+                    toAddress="0x2222222222222222222222222222222222222222",
+                    amountAtomic="1250000",
+                    error="Circle withdrawal failed",
+                    createdAt=current,
+                    updatedAt=current,
+                )
+                raise main.LedgerSettlementError(record)
+
+        self.client.post(
+            "/ledger/accounts/agent_sender/credit",
+            json={"amountAtomic": "5000000", "reason": "demo funding"},
+        )
+        main.get_store().bind_account_wallet(
+            agent_id="agent_sender",
+            agent_name="Sender",
+            email="sender@example.com",
+            wallet_address="0x1111111111111111111111111111111111111111",
+            circle_wallet_id="circle_sender",
+        )
+
+        with patch.object(
+            main, "get_ledger_settlement_client", return_value=FakeSettlementClient()
+        ):
+            response = self.client.post(
+                "/ledger/withdrawals",
+                json={
+                    "agentId": "agent_sender",
+                    "ownerEmail": "sender@example.com",
+                    "destinationAddress": "0x2222222222222222222222222222222222222222",
+                    "amountAtomic": "1250000",
+                },
+            )
+
+        self.assertEqual(response.status_code, 424)
+        detail = response.json()["detail"]
+        self.assertEqual(detail["message"], "Circle withdrawal failed")
+        self.assertEqual(detail["settlementRecord"]["status"], "failed")
+        account = main.get_store().load().accounts[0]
+        self.assertEqual(account.availableAtomic, "5000000")
+        settlement_records = main.get_store().load().settlementRecords
+        self.assertEqual(len(settlement_records), 1)
+        self.assertEqual(settlement_records[0].status, "failed")
+
     def test_agent_transfer_requires_real_circle_settlement_enabled(self) -> None:
         self.client.post(
             "/ledger/accounts/agent_sender/credit",
@@ -1391,6 +1537,22 @@ class LedgerServiceTests(unittest.TestCase):
 
         self.assertEqual(result["method"], "gateway_nanopayment")
         self.assertEqual(result["allowedTools"], ["agent_wallet_transfer"])
+
+    def test_route_payment_intent_supports_withdrawal(self) -> None:
+        tool = getattr(main, "route_payment_intent_tool", None)
+        self.assertIsNotNone(tool)
+
+        result = asyncio.run(
+            tool(
+                purpose="withdraw USDC to an external wallet",
+                deliveryMode="withdrawal",
+                requiresAcceptance=False,
+                externalService=True,
+            )
+        )
+
+        self.assertEqual(result["method"], "gateway_withdrawal")
+        self.assertEqual(result["allowedTools"], ["agent_wallet_settle_ledger_transfer"])
 
     def test_ledger_mcp_tools_operate_on_local_store(self) -> None:
         state_tool = getattr(main, "agent_wallet_get_ledger_state_tool", None)

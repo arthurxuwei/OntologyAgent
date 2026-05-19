@@ -1356,7 +1356,7 @@ test("CircleWalletService returns token balances for a Circle wallet", async () 
   });
 });
 
-test("CircleWalletService serializes bigint typed data for Circle signing", async () => {
+test("CircleWalletService serializes bigint typed data and adds EIP712Domain for Circle signing", async () => {
   let signedPayload: unknown;
   const service = new CircleWalletService(liveCircleConfig(), {
     client: {
@@ -1378,18 +1378,31 @@ test("CircleWalletService serializes bigint typed data for Circle signing", asyn
     walletId: "circle-wallet-1",
     memo: "gateway:test",
     data: {
-      domain: { name: "GatewayWalletBatched" },
+      domain: {
+        name: "GatewayWalletBatched",
+        version: "1",
+        chainId: 84532,
+        verifyingContract: "0x0077777d7EBA4688BDeF3E311b846F25870A19B9",
+      },
+      types: {
+        TransferWithAuthorization: [{ name: "value", type: "uint256" }],
+      },
+      primaryType: "TransferWithAuthorization",
       message: { value: 1000n },
     },
   });
 
   assert.equal(signature, `0x${"22".repeat(65)}`);
-  assert.deepEqual(signedPayload, {
-    walletId: "circle-wallet-1",
-    memo: "gateway:test",
-    data: JSON.stringify({
-      domain: { name: "GatewayWalletBatched" },
-      message: { value: "1000" },
-    }),
-  });
+  assert.ok(signedPayload && typeof signedPayload === "object");
+  const request = signedPayload as { walletId?: string; memo?: string; data?: unknown };
+  assert.equal(request.walletId, "circle-wallet-1");
+  assert.equal(request.memo, "gateway:test");
+  const signedData = JSON.parse(String(request.data));
+  assert.deepEqual(signedData.types.EIP712Domain, [
+    { name: "name", type: "string" },
+    { name: "version", type: "string" },
+    { name: "chainId", type: "uint256" },
+    { name: "verifyingContract", type: "address" },
+  ]);
+  assert.equal(signedData.message.value, "1000");
 });

@@ -86,6 +86,7 @@ class LedgerEntry(BaseModel):
         "escrow_release",
         "escrow_refund",
         "agent_transfer",
+        "withdrawal",
     ]
     agentId: str
     asset: str = DEFAULT_ASSET
@@ -107,6 +108,7 @@ class LedgerChainRecord(BaseModel):
         "escrow_release",
         "escrow_refund",
         "agent_transfer",
+        "withdrawal",
     ]
     status: Literal["submitted", "failed"]
     chainTool: str = "chain_submit_execution"
@@ -127,14 +129,15 @@ class LedgerSettlementRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     recordId: str
-    eventType: Literal["escrow_release", "agent_transfer"]
+    eventType: Literal["escrow_release", "agent_transfer", "withdrawal"]
     status: Literal["submitted", "failed"]
     settlementTool: str = "agent_wallet_settle_ledger_transfer"
     chainMcpUrl: str
     escrowId: Optional[str] = None
     transferId: Optional[str] = None
     fromAgentId: str
-    toAgentId: str
+    toAgentId: Optional[str] = None
+    toAddress: Optional[str] = None
     asset: str = DEFAULT_ASSET
     amountAtomic: str
     transactionId: Optional[str] = None
@@ -274,6 +277,22 @@ class AgentTransferRequest(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class WithdrawalRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    agentId: str = Field(min_length=1)
+    destinationAddress: str = Field(min_length=1)
+    amountAtomic: str = Field(min_length=1)
+    ownerEmail: Optional[str] = None
+    reason: Optional[str] = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("destinationAddress")
+    @classmethod
+    def validate_destination_address(cls, value: str) -> str:
+        return normalize_evm_address(value)
+
+
 class CreateOnrampSessionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
@@ -314,6 +333,12 @@ class ConfirmOnrampSessionRequest(BaseModel):
 def parse_positive_atomic(value: str) -> int:
     if not value.isdigit() or int(value) <= 0:
         raise ValueError("amountAtomic must be a positive integer string")
+    return int(value)
+
+
+def parse_nonnegative_atomic(value: str) -> int:
+    if not value.isdigit():
+        raise ValueError("amountAtomic must be an integer string")
     return int(value)
 
 
@@ -368,17 +393,43 @@ def short_address(value: Any) -> str:
     return f"{text[:10]}...{text[-6:]}"
 
 
+def normalize_evm_address(value: Any) -> str:
+    text = str(value or "").strip()
+    if len(text) != 42 or not text.startswith("0x"):
+        raise ValueError("destinationAddress must be a 0x-prefixed EVM address")
+    try:
+        int(text[2:], 16)
+    except ValueError as error:
+        raise ValueError("destinationAddress must be a 0x-prefixed EVM address") from error
+    return text
+
+
 def dashboard_counterparty(
     entry: dict[str, Any],
     escrow_by_id: dict[str, dict[str, Any]],
 ) -> str:
     metadata = entry.get("metadata")
     if isinstance(metadata, dict):
+        counterparty_email = metadata.get("counterpartyEmail")
+        if isinstance(counterparty_email, str) and counterparty_email.strip():
+            return counterparty_email.strip()
+
+        from_email = metadata.get("fromEmail")
+        to_email = metadata.get("toEmail")
+        if (
+            entry.get("entryType") == "agent_transfer"
+            and isinstance(from_email, str)
+            and from_email.strip()
+            and isinstance(to_email, str)
+            and to_email.strip()
+        ):
+            available_delta = atomic_decimal(entry.get("availableDeltaAtomic"))
+            return to_email.strip() if available_delta < 0 else from_email.strip()
+
         for key in (
             "counterpartyAgentId",
             "counterpartyAgentName",
             "counterparty",
-            "counterpartyEmail",
         ):
             value = metadata.get(key)
             if isinstance(value, str) and value.strip():
@@ -427,7 +478,9 @@ def dashboard_transaction(
     elif "onramp" in entry_type or entry_type == "credit":
         status = "onramp"
     role = "payer" if direction == "out" else "payee"
-    if status == "onramp":
+    if entry_type == "withdrawal":
+        role = "withdrawal"
+    elif status == "onramp":
         role = "deposit"
     elif status == "refunded":
         role = "refund"
@@ -1116,26 +1169,95 @@ class LedgerSettlementClient:
             )
             raise LedgerSettlementError(record) from error
 
+    async def submit_withdrawal(
+        self,
+        *,
+        from_agent_id: str,
+        to_address: str,
+        amount_atomic: str,
+        ref_id: str,
+    ) -> LedgerSettlementRecord:
+        current = now_iso()
+        destination = normalize_evm_address(to_address)
+        base_record = {
+            "recordId": f"settle_{uuid.uuid4().hex}",
+            "eventType": "withdrawal",
+            "chainMcpUrl": self.settlement_mcp_url,
+            "transferId": ref_id,
+            "fromAgentId": from_agent_id,
+            "toAddress": destination,
+            "asset": DEFAULT_ASSET,
+            "amountAtomic": amount_atomic,
+            "createdAt": current,
+            "updatedAt": current,
+        }
+        if not self.enabled:
+            record = LedgerSettlementRecord(
+                **base_record,
+                status="failed",
+                error="Circle settlement is required for withdrawals",
+            )
+            raise LedgerSettlementError(record)
+        try:
+            result = await self._call_transfer_tool(
+                from_agent_id=from_agent_id,
+                to_address=destination,
+                amount_atomic=amount_atomic,
+                ref_id=ref_id,
+            )
+            transfer = self._extract_tool_content(result)
+            if transfer.get("error") is not None:
+                raise RuntimeError(json.dumps(transfer["error"], sort_keys=True))
+            return LedgerSettlementRecord(
+                **base_record,
+                status="submitted",
+                transactionId=transfer.get("transactionId")
+                if isinstance(transfer.get("transactionId"), str)
+                else None,
+                transactionHash=transfer.get("transactionHash")
+                if isinstance(transfer.get("transactionHash"), str)
+                else None,
+                transactionState=transfer.get("state")
+                if isinstance(transfer.get("state"), str)
+                else None,
+                mode=transfer.get("mode") if isinstance(transfer.get("mode"), str) else None,
+                toolResult=result,
+            )
+        except LedgerSettlementError:
+            raise
+        except Exception as error:
+            record = LedgerSettlementRecord(
+                **base_record,
+                status="failed",
+                error=str(error),
+            )
+            raise LedgerSettlementError(record) from error
+
     async def _call_transfer_tool(
         self,
         *,
         from_agent_id: str,
-        to_agent_id: str,
+        to_agent_id: Optional[str] = None,
+        to_address: Optional[str] = None,
         amount_atomic: str,
         ref_id: str,
     ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {
+            "fromAgentId": from_agent_id,
+            "amountAtomic": amount_atomic,
+            "refId": ref_id,
+        }
+        if to_agent_id is not None:
+            arguments["toAgentId"] = to_agent_id
+        if to_address is not None:
+            arguments["toAddress"] = to_address
         request = {
             "jsonrpc": "2.0",
             "id": 1,
             "method": "tools/call",
             "params": {
                 "name": "agent_wallet_settle_ledger_transfer",
-                "arguments": {
-                    "fromAgentId": from_agent_id,
-                    "toAgentId": to_agent_id,
-                    "amountAtomic": amount_atomic,
-                    "refId": ref_id,
-                },
+                "arguments": arguments,
             },
         }
         async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
@@ -1403,6 +1525,32 @@ class OffchainLedgerStore:
         self._require_circle_wallet(sender, "sender")
         self._require_circle_wallet(receiver, "receiver")
 
+    def validate_withdrawal(
+        self,
+        *,
+        agent_id: str,
+        amount_atomic: str,
+        owner_email: Optional[str],
+        available_atomic: Optional[str] = None,
+    ) -> LedgerAccount:
+        amount = parse_positive_atomic(amount_atomic)
+        state = self.load()
+        account = self._find_account(state, agent_id)
+        if account is None:
+            raise ValueError("agent account not found")
+        self._require_circle_wallet(account, "source")
+        normalized_owner_email = normalize_email(owner_email)
+        if normalized_owner_email and normalize_email(account.email) != normalized_owner_email:
+            raise ValueError("ownerEmail does not match agent account")
+        balance_basis = (
+            parse_nonnegative_atomic(available_atomic)
+            if available_atomic is not None
+            else parse_nonnegative_atomic(account.availableAtomic)
+        )
+        if balance_basis < amount:
+            raise ValueError("amount exceeds available balance")
+        return account
+
     def account_by_email(self, email: str) -> LedgerAccount:
         normalized = normalize_email(email)
         if normalized is None:
@@ -1458,6 +1606,61 @@ class OffchainLedgerStore:
             )
             state.entries.extend([sender_entry, receiver_entry])
             return sender, receiver, [sender_entry, receiver_entry]
+
+        return self._mutate(mutate)
+
+    def withdraw(
+        self,
+        *,
+        agent_id: str,
+        destination_address: str,
+        amount_atomic: str,
+        reason: Optional[str],
+        metadata: dict[str, Any],
+        withdrawal_id: str,
+        settlement_record_id: Optional[str],
+        available_atomic: Optional[str] = None,
+    ) -> tuple[LedgerAccount, LedgerEntry]:
+        amount = parse_positive_atomic(amount_atomic)
+        destination = normalize_evm_address(destination_address)
+
+        def mutate(state: LedgerState) -> tuple[LedgerAccount, LedgerEntry]:
+            account, account_index = self._account_for_update(
+                state, agent_id, create=False
+            )
+            self._require_circle_wallet(account, "source")
+            balance_basis = (
+                parse_nonnegative_atomic(available_atomic)
+                if available_atomic is not None
+                else parse_nonnegative_atomic(account.availableAtomic)
+            )
+            if balance_basis < amount:
+                raise ValueError("amount exceeds available balance")
+            current = now_iso()
+            updated = account.model_copy(
+                update={
+                    "availableAtomic": str(balance_basis - amount),
+                    "updatedAt": current,
+                }
+            )
+            entry_metadata = {
+                **metadata,
+                "withdrawalId": withdrawal_id,
+                "destinationAddress": destination,
+                "counterparty": f"External · {short_address(destination)}",
+            }
+            if settlement_record_id is not None:
+                entry_metadata["settlementRecordId"] = settlement_record_id
+            entry = self._entry(
+                entry_type="withdrawal",
+                agent_id=agent_id,
+                available_delta=-amount,
+                reason=reason or "withdrawal",
+                metadata=entry_metadata,
+            )
+            state.accounts[account_index] = updated
+            state.entries.append(entry)
+            return updated, entry
 
         return self._mutate(mutate)
 
@@ -1925,6 +2128,7 @@ def ledger_chain_payload(
         "escrow_release",
         "escrow_refund",
         "agent_transfer",
+        "withdrawal",
     ],
     escrow: Optional[EscrowRecord],
     entries: list[LedgerEntry],
@@ -1978,6 +2182,7 @@ async def record_ledger_chain_event(
         "escrow_release",
         "escrow_refund",
         "agent_transfer",
+        "withdrawal",
     ],
     escrow: Optional[EscrowRecord],
     entries: list[LedgerEntry],
@@ -2045,6 +2250,55 @@ async def settle_agent_transfer(
                 "transferId": ref_id,
                 "fromAgentId": from_agent_id,
                 "toAgentId": to_agent_id,
+                "amountAtomic": amount_atomic,
+                "settlementRecordId": record.recordId,
+                "transactionId": record.transactionId,
+                "transactionState": record.transactionState,
+            },
+            sort_keys=True,
+        ),
+    )
+    return get_store().add_settlement_record(record)
+
+
+async def settle_withdrawal(
+    *,
+    from_agent_id: str,
+    to_address: str,
+    amount_atomic: str,
+    ref_id: str,
+) -> LedgerSettlementRecord:
+    try:
+        record = await get_ledger_settlement_client().submit_withdrawal(
+            from_agent_id=from_agent_id,
+            to_address=to_address,
+            amount_atomic=amount_atomic,
+            ref_id=ref_id,
+        )
+    except LedgerSettlementError as error:
+        get_store().add_settlement_record(error.record)
+        logger.error(
+            "withdrawal_settlement_failed %s",
+            json.dumps(
+                {
+                    "withdrawalId": ref_id,
+                    "fromAgentId": from_agent_id,
+                    "toAddress": to_address,
+                    "amountAtomic": amount_atomic,
+                    "settlementRecordId": error.record.recordId,
+                    "settlementError": error.record.error,
+                },
+                sort_keys=True,
+            ),
+        )
+        raise
+    logger.info(
+        "withdrawal_settlement_submitted %s",
+        json.dumps(
+            {
+                "withdrawalId": ref_id,
+                "fromAgentId": from_agent_id,
+                "toAddress": to_address,
                 "amountAtomic": amount_atomic,
                 "settlementRecordId": record.recordId,
                 "transactionId": record.transactionId,
@@ -2315,6 +2569,80 @@ async def deposit_agent_wallet_to_gateway(request: GatewayDepositRequest) -> dic
         return await get_ledger_wallet_client().gateway_deposit(request)
     except (ValueError, RuntimeError) as error:
         raise http_error(error) from error
+
+
+@app.post("/ledger/withdrawals")
+async def withdraw_agent_wallet(request: WithdrawalRequest) -> dict[str, Any]:
+    withdrawal_id = f"withdrawal_{uuid.uuid4().hex}"
+    try:
+        route = await route_payment_intent_tool(
+            purpose="withdraw Agent Wallet USDC to an external Base address",
+            deliveryMode="withdrawal",
+            externalService=True,
+        )
+        if "agent_wallet_settle_ledger_transfer" not in route.get("allowedTools", []):
+            raise ValueError("withdrawal route did not allow Circle settlement")
+
+        synced_state = await ledger_state_with_circle_balances()
+        synced_account = next(
+            (
+                account
+                for account in synced_state.get("accounts", [])
+                if isinstance(account, dict)
+                and str(account.get("agentId") or "").strip() == request.agentId
+            ),
+            None,
+        )
+        available_atomic = (
+            str(synced_account.get("availableAtomic"))
+            if isinstance(synced_account, dict)
+            and synced_account.get("availableAtomic") is not None
+            else None
+        )
+        get_store().validate_withdrawal(
+            agent_id=request.agentId,
+            amount_atomic=request.amountAtomic,
+            owner_email=request.ownerEmail,
+            available_atomic=available_atomic,
+        )
+        settlement_record = await settle_withdrawal(
+            from_agent_id=request.agentId,
+            to_address=request.destinationAddress,
+            amount_atomic=request.amountAtomic,
+            ref_id=withdrawal_id,
+        )
+        account, entry = get_store().withdraw(
+            agent_id=request.agentId,
+            destination_address=request.destinationAddress,
+            amount_atomic=request.amountAtomic,
+            reason=request.reason,
+            metadata=request.metadata,
+            withdrawal_id=withdrawal_id,
+            settlement_record_id=settlement_record.recordId,
+            available_atomic=available_atomic,
+        )
+        chain_record = await record_ledger_chain_event(
+            event_type="withdrawal",
+            escrow=None,
+            entries=[entry],
+            extra={
+                "withdrawalId": withdrawal_id,
+                "agentId": request.agentId,
+                "destinationAddress": request.destinationAddress,
+                "amountAtomic": request.amountAtomic,
+                "settlementRecordId": settlement_record.recordId,
+            },
+        )
+    except (LookupError, ValueError, LedgerChainRecordError, LedgerSettlementError) as error:
+        raise http_error(error) from error
+    return {
+        "withdrawalId": withdrawal_id,
+        "account": account.model_dump(),
+        "entry": entry.model_dump(),
+        "settlementRecord": settlement_record.model_dump(),
+        "chainRecord": chain_record.model_dump() if chain_record is not None else None,
+        "route": route,
+    }
 
 
 @app.post("/ledger/escrows")

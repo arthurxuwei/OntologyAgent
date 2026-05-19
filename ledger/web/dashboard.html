@@ -3730,6 +3730,7 @@ window.AddAgentModal = AddAgentModal;
     'mvp.dash.funding.confirm':                     { en: 'Confirm withdrawal',                           zh: '确认提款' },
     'mvp.dash.funding.pending':                     { en: 'Broadcasting…',                                zh: '广播中…' },
     'mvp.dash.funding.settled':                     { en: '✓ Settled on Base',                            zh: '✓ Base 上已到账' },
+    'mvp.dash.funding.withdraw_failed':             { en: 'Withdrawal failed. Try again.',                 zh: '提款失败,请重试。' },
     'mvp.dash.funding.another':                     { en: 'Withdraw another',                             zh: '再来一笔' },
     'mvp.dash.funding.new_row':                     { en: 'NEW LEDGER ROW',                               zh: '新增流水' },
 
@@ -4614,12 +4615,12 @@ window.AddAgentModal = AddAgentModal;
 //
 //   WITHDRAW   — inline form (not a modal). USDC chain address + amount +
 //                MAX + Confirm. Enforces:
-//                  • destination must look like 0x… (40 hex chars; loose check)
+//                  • destination must be a 0x… Base address (40 hex chars)
 //                  • amount ≥ 5 USDC (the network-fee min documented in Q1)
 //                  • amount ≤ available balance
-//                After Confirm: status flips pending → settled, balance
-//                decrements, a withdraw row gets unshifted into the local
-//                transaction list (no persistence — this is a demo).
+//                After Confirm: the backend settles through the ledger
+//                withdrawal endpoint, then returns the authoritative account
+//                balance and ledger row for the local view.
 //
 // Below: a "Currently USDC on Base only" small-print line plus the phase-2
 // Coinbase-offramp callout, both already part of the i18n contract.
@@ -4627,7 +4628,7 @@ window.AddAgentModal = AddAgentModal;
 (function () {
   function MvpFundingView({ data }) {
     const t = window.useT();
-    const { externalWallet } = window.useAppState();
+    const { externalWallet, ownerEmail } = window.useAppState();
     if (!data) return null;
 
     // Local view state — receive address visibility, withdraw form state.
@@ -4637,6 +4638,7 @@ window.AddAgentModal = AddAgentModal;
     const [dest, setDest]             = React.useState(externalWallet || '');
     const [amount, setAmount]         = React.useState('');
     const [stage, setStage]           = React.useState('idle');      // idle | pending | settled
+    const [withdrawError, setWithdrawError] = React.useState('');
     const [localBalance, setLocalBalance] = React.useState(data.balance.available);
     const [localTxs, setLocalTxs]     = React.useState(data.transactions || []);
     // ?onramp=1 opens the modal on mount (screenshot helper + deep link).
@@ -4651,17 +4653,34 @@ window.AddAgentModal = AddAgentModal;
       setLocalTxs(data.transactions || []);
       setStage('idle');
       setAmount('');
+      setWithdrawError('');
     }, [data]);
 
     const receiveAddress = data.agent.fullWalletAddress || data.agent.walletAddress;
     const MIN_WITHDRAW = 5;
 
-    const destValid   = /^0x[0-9a-fA-F]{4,}/.test(dest.trim());
-    const amountNum   = parseFloat(amount);
-    const amountValid = !Number.isNaN(amountNum) && amountNum >= MIN_WITHDRAW && amountNum <= localBalance;
+    const destValid   = /^0x[0-9a-fA-F]{40}$/.test(dest.trim());
+    const amountClean = amount.trim();
+    const amountShapeValid = /^\d+(?:\.\d{0,6})?$/.test(amountClean);
+    const amountNum   = amountShapeValid ? Number(amountClean) : NaN;
+    const amountValid = amountShapeValid && !Number.isNaN(amountNum) && amountNum >= MIN_WITHDRAW && amountNum <= localBalance;
     const canConfirm  = destValid && amountValid && stage === 'idle';
     const belowMin    = !Number.isNaN(amountNum) && amountNum > 0 && amountNum < MIN_WITHDRAW;
     const overBalance = !Number.isNaN(amountNum) && amountNum > localBalance;
+
+    const usdcToAtomic = (value) => {
+      const raw = String(value || '').trim();
+      const match = raw.match(/^(\d+)(?:\.(\d{0,6})?)?$/);
+      if (!match) return '0';
+      const whole = BigInt(match[1]);
+      const fractional = BigInt((match[2] || '').padEnd(6, '0'));
+      return String((whole * 1000000n) + fractional);
+    };
+
+    const atomicToUsdc = (value) => {
+      const parsed = Number(value || 0);
+      return Number.isFinite(parsed) ? parsed / 1000000 : 0;
+    };
 
     const handleCopyAddr = () => {
       // navigator.clipboard might be unavailable in some headless contexts;
@@ -4672,20 +4691,51 @@ window.AddAgentModal = AddAgentModal;
     };
 
     const handleMax = () => {
+      setWithdrawError('');
       setAmount(String(localBalance.toFixed(2)));
     };
 
-    const handleConfirm = () => {
+    const handleConfirm = async () => {
       if (!canConfirm) return;
+      const amountAtomic = usdcToAtomic(amount);
       setStage('pending');
-      setTimeout(() => {
+      setWithdrawError('');
+      try {
+        const response = await fetch('/ledger/withdrawals', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            agentId: data.agent.id,
+            ownerEmail,
+            destinationAddress: dest.trim(),
+            amountAtomic,
+            reason: 'dashboard withdrawal',
+            metadata: { source: 'dashboard' },
+          }),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          const message = payload && payload.detail && payload.detail.message
+            ? payload.detail.message
+            : t('mvp.dash.funding.withdraw_failed');
+          throw new Error(message);
+        }
+        const entry = payload.entry || {};
+        const entryMeta = entry.metadata || {};
+        const settledAmount = Math.abs(
+          atomicToUsdc(entry.availableDeltaAtomic || `-${amountAtomic}`)
+        ) || amountNum;
         setStage('settled');
-        setLocalBalance((b) => b - amountNum);
+        setLocalBalance(
+          payload.account && payload.account.availableAtomic !== undefined
+            ? atomicToUsdc(payload.account.availableAtomic)
+            : (b) => b - settledAmount
+        );
         setLocalTxs((prev) => [
           {
-            id: `wd_${Date.now().toString(36).slice(-5)}`,
-            counterparty: `External · ${dest.slice(0, 6)}…${dest.slice(-4)}`,
-            amount: amountNum,
+            id: entry.entryId || payload.withdrawalId || `wd_${Date.now().toString(36).slice(-5)}`,
+            counterparty: entryMeta.counterparty || `External · ${dest.slice(0, 6)}…${dest.slice(-4)}`,
+            amount: settledAmount,
             direction: 'out',
             role: 'withdrawal',
             status: 'released',
@@ -4693,7 +4743,10 @@ window.AddAgentModal = AddAgentModal;
           },
           ...prev,
         ]);
-      }, 1500);
+      } catch (error) {
+        setStage('idle');
+        setWithdrawError(error && error.message ? error.message : t('mvp.dash.funding.withdraw_failed'));
+      }
     };
 
     return (
@@ -4791,7 +4844,7 @@ window.AddAgentModal = AddAgentModal;
               <input
                 type="text"
                 value={dest}
-                onChange={(e) => setDest(e.target.value)}
+                onChange={(e) => { setWithdrawError(''); setDest(e.target.value); }}
                 placeholder="0x…"
                 disabled={stage !== 'idle'}
                 className="font-mono"
@@ -4812,7 +4865,7 @@ window.AddAgentModal = AddAgentModal;
                 <input
                   type="text"
                   value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
+                  onChange={(e) => { setWithdrawError(''); setAmount(e.target.value); }}
                   placeholder="0.00"
                   disabled={stage !== 'idle'}
                   className="font-mono"
@@ -4856,6 +4909,19 @@ window.AddAgentModal = AddAgentModal;
                   ? t('mvp.dash.funding.exceeds_balance')
                   : t('mvp.dash.funding.min_hint')}
               </div>
+              {withdrawError && (
+                <div
+                  className="font-mono"
+                  style={{
+                    marginTop: '10px',
+                    fontSize: '11px',
+                    color: 'var(--status-negative)',
+                    letterSpacing: '0.02em',
+                  }}
+                >
+                  {withdrawError}
+                </div>
+              )}
             </Field>
 
             <div className="flex" style={{ gap: '12px', marginTop: '24px' }}>
