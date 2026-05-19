@@ -1511,6 +1511,8 @@ const LANG_DICT = {
                                        zh: "认领" },
   'dash.claim.note':                 { en: "Once claimed, this binding is permanent for the demo. Use the Reset link on the dashboard to start over.",
                                        zh: "认领后，本次演示中的绑定不可撤销。可在仪表盘使用「重置」链接重新开始。" },
+  'dash.claim.return_to_registration': { en: "Clear state and return to registration",
+                                         zh: "清空状态并返回注册页" },
 
   // Top-right reset link — visible after claim, fixed cluster with LangSwitcher
   'dash.reset_link':                 { en: "RESET",
@@ -2893,7 +2895,7 @@ window.RegistrationScreen = RegistrationScreen;
 
 function ClaimScreen() {
   const t = window.useT();
-  const { claimAgent, claimToken, ownerEmail, agents: claimedAgents } = window.useAppState();
+  const { claimAgent, claimToken, ownerEmail, agents: claimedAgents, resetAll } = window.useAppState();
   const [claimableAgents, setClaimableAgents] = React.useState([]);
   const [status, setStatus] = React.useState('loading');
 
@@ -3008,6 +3010,28 @@ function ClaimScreen() {
         >
           {t('dash.claim.note')}
         </div>
+
+        <button
+          type="button"
+          onClick={resetAll}
+          className="font-mono"
+          style={{
+            marginTop: '18px',
+            background: 'transparent',
+            border: 'none',
+            padding: '4px 0',
+            cursor: 'pointer',
+            fontSize: '11px',
+            letterSpacing: 0,
+            color: 'var(--ink-tertiary)',
+            textDecoration: 'underline',
+            textDecorationColor: 'var(--stroke-rule)',
+            textUnderlineOffset: '4px',
+          }}
+          title={t('mvp.dash.reset_title')}
+        >
+          ↻ {t('dash.claim.return_to_registration')}
+        </button>
       </div>
     </div>
   );
