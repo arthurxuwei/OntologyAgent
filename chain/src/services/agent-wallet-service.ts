@@ -35,7 +35,7 @@ import type { X402FetchService } from "./x402-fetch-service.js";
 const MOCK_CIRCLE_WALLET_SET_ID = "mock-circle-wallet-set";
 const MOCK_WALLET_ADDRESS = "0x3333333333333333333333333333333333333333";
 const USDC_DECIMALS = 6n;
-const GATEWAY_AUTH_VALIDITY_SECONDS = 7 * 24 * 60 * 60;
+const GATEWAY_AUTH_VALIDITY_SECONDS = 7 * 24 * 60 * 60 + 10 * 60;
 
 export class AgentWalletService {
   constructor(
