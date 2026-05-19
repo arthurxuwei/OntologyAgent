@@ -2069,7 +2069,7 @@ def http_error(error: Exception) -> HTTPException:
         )
     if isinstance(error, LedgerSettlementError):
         return HTTPException(
-            status_code=502,
+            status_code=424,
             detail={
                 "message": str(error),
                 "settlementRecord": error.record.model_dump(),

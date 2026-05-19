@@ -1111,7 +1111,7 @@ class LedgerServiceTests(unittest.TestCase):
                 },
             )
 
-        self.assertEqual(response.status_code, 502)
+        self.assertEqual(response.status_code, 424)
         detail = response.json()["detail"]
         self.assertEqual(detail["message"], "Circle transfer failed")
         self.assertEqual(detail["settlementRecord"]["status"], "failed")
@@ -1155,7 +1155,7 @@ class LedgerServiceTests(unittest.TestCase):
             },
         )
 
-        self.assertEqual(response.status_code, 502)
+        self.assertEqual(response.status_code, 424)
         self.assertEqual(
             response.json()["detail"]["message"],
             "Circle settlement is required for direct agent transfers",
@@ -1216,7 +1216,7 @@ class LedgerServiceTests(unittest.TestCase):
         ):
             response = self.client.post(f"/ledger/escrows/{escrow['escrowId']}/release")
 
-        self.assertEqual(response.status_code, 502)
+        self.assertEqual(response.status_code, 424)
         state = self.client.get("/ledger/state?agentId=agent_buyer").json()
         escrow_state = state["escrows"][0]
         self.assertEqual(escrow_state["status"], "locked")
