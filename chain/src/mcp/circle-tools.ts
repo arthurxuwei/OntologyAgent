@@ -116,7 +116,7 @@ export function createCircleMcpServer(runtime: CircleRuntime): McpServer {
     "agent_wallet_settle_ledger_transfer",
     {
       description:
-        "Backend-only settlement for ledger escrow release: transfer real USDC between bound Agent Wallets.",
+        "Backend-only settlement for ledger transfers: settle USDC between bound Agent Wallets through Circle Gateway Nanopayments.",
       inputSchema: {
         fromAgentId: z.string().optional().describe("Source agent id bound to a Circle wallet"),
         fromAgentName: z.string().optional().describe("Source agent name bound to a Circle wallet"),

@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, HttpUrl
 PaymentMethod = Literal[
     "ledger_escrow",
     "ledger_transfer",
+    "gateway_nanopayment",
     "x402",
     "chain_transfer",
     "onramp",
@@ -58,10 +59,10 @@ def route_payment_intent(intent: PaymentIntent) -> PaymentRouteDecision:
                 "allowedTools": [],
             }
         return {
-            "method": "ledger_transfer",
+            "method": "gateway_nanopayment",
             "reason": (
-                "Direct Agent-to-Agent payments require a real Circle USDC transfer "
-                "before the ledger records the transfer."
+                "Direct Agent-to-Agent payments use Circle Gateway Nanopayments. "
+                "The ledger records the transfer only after Gateway settlement succeeds."
             ),
             "allowedTools": ["agent_wallet_transfer"],
         }

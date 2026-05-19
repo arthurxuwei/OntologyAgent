@@ -1,4 +1,10 @@
 import type { AppConfig } from "../config.js";
+import {
+  CIRCLE_BATCHING_NAME,
+  CIRCLE_BATCHING_VERSION,
+  type BatchEvmSigner,
+} from "@circle-fin/x402-batching";
+import { BatchEvmScheme, CHAIN_CONFIGS } from "@circle-fin/x402-batching/client";
 import { AppError } from "../domain/errors.js";
 import type {
   AgentWalletBinding,
@@ -27,6 +33,7 @@ import type { X402FetchService } from "./x402-fetch-service.js";
 const MOCK_CIRCLE_WALLET_SET_ID = "mock-circle-wallet-set";
 const MOCK_WALLET_ADDRESS = "0x3333333333333333333333333333333333333333";
 const USDC_DECIMALS = 6n;
+const GATEWAY_AUTH_VALIDITY_SECONDS = 7 * 24 * 60 * 60;
 
 export class AgentWalletService {
   constructor(
@@ -298,11 +305,28 @@ export class AgentWalletService {
       asset === "USDC"
         ? atomicUsdcToDecimal(command.amountAtomic)
         : normalizePositiveDecimal(command.amountEth, "amountEth");
-    const tokenAddress =
-      asset === "USDC"
-        ? normalizeRequestAddress(this.config.x402.usdcAssetAddress, "X402_USDC_ASSET_ADDRESS")
-        : "";
-    const tokenId = asset === "USDC" ? this.config.circle.usdcTokenId ?? null : null;
+    if (asset === "USDC") {
+      if (!source?.walletAddress) {
+        throw new AppError(
+          "VALIDATION_ERROR",
+          "fromAgentId/fromAgentName must resolve to a wallet address for Gateway payments",
+          400,
+        );
+      }
+      return this.gatewayUsdcTransfer({
+        command,
+        source,
+        destination,
+        fromCircleWalletId,
+        fromAddress: source.walletAddress,
+        toAddress,
+        amount,
+        amountAtomic: parsePositiveBigInt(command.amountAtomic ?? "", "amountAtomic"),
+      });
+    }
+
+    const tokenAddress = "";
+    const tokenId = null;
     const raw = await this.circleWalletService.createTransfer({
       walletId: fromCircleWalletId,
       destinationAddress: toAddress,
@@ -322,8 +346,8 @@ export class AgentWalletService {
       toAddress: normalizeRequestAddress(toAddress, "toAddress"),
       asset,
       amount,
-      amountEth: asset === "ETH" ? amount : null,
-      amountAtomic: asset === "USDC" ? command.amountAtomic ?? null : null,
+      amountEth: amount,
+      amountAtomic: null,
       tokenId,
       tokenAddress,
       blockchain: "BASE-SEPOLIA",
@@ -332,6 +356,124 @@ export class AgentWalletService {
       state: transaction.state,
       mode: "circle",
       raw,
+    };
+  }
+
+  private async gatewayUsdcTransfer(input: {
+    command: AgentWalletTransferCommand;
+    source: AgentWalletBinding;
+    destination: AgentWalletBinding | null;
+    fromCircleWalletId: string;
+    fromAddress: string;
+    toAddress: string;
+    amount: string;
+    amountAtomic: bigint;
+  }): Promise<AgentWalletTransferResult> {
+    const fromAddress = normalizeRequestAddress(input.fromAddress, "fromAddress") as `0x${string}`;
+    const toAddress = normalizeRequestAddress(input.toAddress, "toAddress") as `0x${string}`;
+    const tokenAddress = normalizeRequestAddress(
+      this.config.x402.usdcAssetAddress,
+      "X402_USDC_ASSET_ADDRESS",
+    ) as `0x${string}`;
+    const chainConfig = gatewayChainConfig(this.config.x402.network);
+    const verifyingContract = normalizeRequestAddress(
+      chainConfig.gatewayWallet,
+      "Gateway verifying contract",
+    ) as `0x${string}`;
+    const gatewayBalance = await this.circleWalletService.getGatewayBalance(
+      fromAddress,
+      chainConfig.domain,
+    );
+    if (gatewayBalance.available < input.amountAtomic) {
+      throw new AppError(
+        "INSUFFICIENT_GATEWAY_BALANCE",
+        `Gateway available balance is insufficient. Have ${gatewayBalance.formattedAvailable} USDC, need ${input.amount}. Deposit USDC to Circle Gateway before retrying.`,
+        424,
+        {
+          availableAtomic: gatewayBalance.available.toString(),
+          requiredAtomic: input.amountAtomic.toString(),
+          gatewayBalance: {
+            formattedAvailable: gatewayBalance.formattedAvailable,
+            formattedTotal: gatewayBalance.formattedTotal,
+            formattedWithdrawing: gatewayBalance.formattedWithdrawing,
+            formattedWithdrawable: gatewayBalance.formattedWithdrawable,
+          },
+        },
+      );
+    }
+
+    const paymentRequirements = {
+      scheme: "exact",
+      network: this.config.x402.network,
+      asset: tokenAddress,
+      amount: input.amountAtomic.toString(),
+      payTo: toAddress,
+      maxTimeoutSeconds: GATEWAY_AUTH_VALIDITY_SECONDS,
+      extra: {
+        name: CIRCLE_BATCHING_NAME,
+        version: CIRCLE_BATCHING_VERSION,
+        verifyingContract,
+      },
+    };
+    const signer: BatchEvmSigner = {
+      address: fromAddress,
+      signTypedData: (params) =>
+        this.circleWalletService.signTypedData({
+          walletId: input.fromCircleWalletId,
+          data: params,
+          memo: input.command.refId,
+        }),
+    };
+    const paymentPayload = await new BatchEvmScheme(signer).createPaymentPayload(
+      2,
+      paymentRequirements,
+    );
+    const gatewaySettlement = await this.circleWalletService.settleGatewayPayment({
+      paymentPayload,
+      paymentRequirements,
+    });
+    if (!gatewaySettlement.verify.isValid) {
+      throw new AppError(
+        "UPSTREAM_REQUEST_FAILED",
+        `Circle Gateway payment verification failed: ${gatewaySettlement.verify.invalidReason ?? "unknown reason"}`,
+        424,
+        gatewaySettlement,
+      );
+    }
+    if (!gatewaySettlement.settle.success) {
+      throw new AppError(
+        "UPSTREAM_REQUEST_FAILED",
+        `Circle Gateway settlement failed: ${gatewaySettlement.settle.errorReason ?? "unknown reason"}`,
+        424,
+        gatewaySettlement,
+      );
+    }
+
+    const transaction = gatewaySettlement.settle.transaction ?? null;
+    return {
+      fromAgentId: input.source.agentId ?? input.command.fromAgentId ?? null,
+      fromAgentName: input.source.agentName ?? input.command.fromAgentName ?? null,
+      fromCircleWalletId: input.fromCircleWalletId,
+      fromAddress,
+      toAgentId: input.destination?.agentId ?? input.command.toAgentId ?? null,
+      toAgentName: input.destination?.agentName ?? input.command.toAgentName ?? null,
+      toAddress,
+      asset: "USDC",
+      amount: input.amount,
+      amountEth: null,
+      amountAtomic: input.amountAtomic.toString(),
+      tokenId: null,
+      tokenAddress,
+      blockchain: "BASE-SEPOLIA",
+      transactionId: transaction,
+      transactionHash: transaction,
+      state: "SETTLED",
+      mode: "gateway",
+      raw: {
+        gatewaySettlement,
+        paymentRequirements,
+        paymentPayload,
+      },
     };
   }
 
@@ -517,4 +659,18 @@ function parsePositiveBigInt(value: string, fieldName: string): bigint {
   } catch {
     throw new AppError("VALIDATION_ERROR", `${fieldName} must be a positive integer`, 400);
   }
+}
+
+function gatewayChainConfig(network: string): {
+  domain: number;
+  gatewayWallet: string;
+} {
+  if (network === "eip155:84532") {
+    return CHAIN_CONFIGS.baseSepolia;
+  }
+  throw new AppError(
+    "NETWORK_MISMATCH",
+    `Circle Gateway agent transfers are only configured for eip155:84532, got ${network}`,
+    400,
+  );
 }

@@ -1347,7 +1347,7 @@ class LedgerServiceTests(unittest.TestCase):
             )
         )
 
-        self.assertEqual(result["method"], "ledger_transfer")
+        self.assertEqual(result["method"], "gateway_nanopayment")
         self.assertEqual(result["allowedTools"], ["agent_wallet_transfer"])
 
     def test_ledger_mcp_tools_operate_on_local_store(self) -> None:

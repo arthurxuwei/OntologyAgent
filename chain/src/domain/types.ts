@@ -240,7 +240,7 @@ export type AgentWalletTransferResult = {
   transactionId: string | null;
   transactionHash: string | null;
   state: string | null;
-  mode: "circle";
+  mode: "circle" | "gateway";
   raw: unknown;
 };
 

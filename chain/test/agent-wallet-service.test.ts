@@ -690,7 +690,7 @@ test("AgentWalletService creates Circle transfer between bound agents", async ()
   );
 });
 
-test("AgentWalletService creates Circle USDC transfer from atomic amount", async () => {
+test("AgentWalletService settles USDC transfer through Circle Gateway", async () => {
   await withTempStateFile(
     {
       wallets: [],
@@ -726,39 +726,62 @@ test("AgentWalletService creates Circle USDC transfer from atomic amount", async
         CIRCLE_API_KEY: "circle-api-key",
         CIRCLE_ENTITY_SECRET: "entity-secret",
         CIRCLE_WALLET_SET_ID: "circle-wallet-set",
+        X402_FACILITATOR_URL: "https://gateway-api-testnet.circle.com",
+        X402_NETWORK: "eip155:84532",
         X402_USDC_ASSET_ADDRESS: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
         CIRCLE_USDC_TOKEN_ID: "circle-usdc-token",
       });
-      const circleWalletService = new CircleWalletService(config, {
-        client: {
-          createTransaction: async (input: unknown) => {
-            assert.deepEqual(input, {
-              walletId: "circle-peer",
-              destinationAddress: "0x1111111111111111111111111111111111111111",
-              amount: ["1.25"],
-              tokenId: "circle-usdc-token",
-              refId: "escrow:test:release",
-              fee: {
-                type: "level",
-                config: {
-                  feeLevel: "MEDIUM",
-                },
-              },
-            });
-            return {
-              data: {
-                transaction: {
-                  id: "circle-usdc-tx-1",
-                  transactionHash: "0xdef",
-                  state: "INITIATED",
-                },
-              },
-            };
-          },
-          getTransaction: async () => ({ data: {} }),
-          requestTestnetTokens: async () => ({}) as never,
+      let signCalls = 0;
+      let settleCalls = 0;
+      const circleWalletService = {
+        getGatewayBalance: async (walletAddress: string) => {
+          assert.equal(walletAddress, "0x2222222222222222222222222222222222222222");
+          return {
+            total: 2_000_000n,
+            available: 2_000_000n,
+            withdrawing: 0n,
+            withdrawable: 2_000_000n,
+            formattedTotal: "2",
+            formattedAvailable: "2",
+            formattedWithdrawing: "0",
+            formattedWithdrawable: "2",
+          };
         },
-      });
+        signTypedData: async (input: { walletId: string; data: unknown; memo?: string }) => {
+          signCalls += 1;
+          assert.equal(input.walletId, "circle-peer");
+          assert.equal(input.memo, "escrow:test:release");
+          assert.equal((input.data as { domain: { name: string } }).domain.name, "GatewayWalletBatched");
+          assert.equal(
+            (input.data as { domain: { verifyingContract: string } }).domain.verifyingContract.toLowerCase(),
+            "0x0077777d7eba4688bdef3e311b846f25870a19b9",
+          );
+          return `0x${"11".repeat(65)}`;
+        },
+        settleGatewayPayment: async (input: {
+          paymentPayload: { x402Version: number; payload: unknown };
+          paymentRequirements: { amount: string; payTo: string; network: string; asset: string };
+        }) => {
+          settleCalls += 1;
+          assert.equal(input.paymentPayload.x402Version, 2);
+          assert.equal(input.paymentRequirements.amount, "1250000");
+          assert.equal(input.paymentRequirements.payTo, "0x1111111111111111111111111111111111111111");
+          assert.equal(input.paymentRequirements.network, "eip155:84532");
+          assert.equal(input.paymentRequirements.asset, "0x036cbd53842c5426634e7929541ec2318f3dcf7e");
+          return {
+            verify: {
+              isValid: true,
+              payer: "0x2222222222222222222222222222222222222222",
+            },
+            settle: {
+              success: true,
+              payer: "0x2222222222222222222222222222222222222222",
+              transaction: "0xgatewaysettlement",
+              network: "eip155:84532",
+            },
+          };
+        },
+      } as unknown as CircleWalletService;
       const service = new AgentWalletService(
         config,
         fakeX402FetchService(baseX402Result()),
@@ -777,10 +800,96 @@ test("AgentWalletService creates Circle USDC transfer from atomic amount", async
       assert.equal(result.amount, "1.25");
       assert.equal(result.amountEth, null);
       assert.equal(result.amountAtomic, "1250000");
-      assert.equal(result.tokenId, "circle-usdc-token");
+      assert.equal(result.tokenId, null);
       assert.equal(result.tokenAddress, "0x036cbd53842c5426634e7929541ec2318f3dcf7e");
-      assert.equal(result.transactionId, "circle-usdc-tx-1");
-      assert.equal(result.transactionHash, "0xdef");
+      assert.equal(result.transactionId, "0xgatewaysettlement");
+      assert.equal(result.transactionHash, "0xgatewaysettlement");
+      assert.equal(result.state, "SETTLED");
+      assert.equal(result.mode, "gateway");
+      assert.equal(signCalls, 1);
+      assert.equal(settleCalls, 1);
+    },
+  );
+});
+
+test("AgentWalletService rejects USDC transfer when Gateway balance is insufficient", async () => {
+  await withTempStateFile(
+    {
+      wallets: [],
+      agentWalletBindings: [
+        {
+          agentName: "ZeroClaw Chief Agent",
+          agentId: "main-agent",
+          email: "main@example.com",
+          walletAddress: "0x1111111111111111111111111111111111111111",
+          circleWalletId: "circle-main",
+          circleWalletSetId: "circle-wallet-set",
+          blockchain: "BASE-SEPOLIA",
+          mode: "circle",
+          updatedAt: "2026-05-13T00:00:00.000Z",
+        },
+        {
+          agentName: "ZeroClaw EigenFlux Peer",
+          agentId: "peer-agent",
+          email: "peer@example.com",
+          walletAddress: "0x2222222222222222222222222222222222222222",
+          circleWalletId: "circle-peer",
+          circleWalletSetId: "circle-wallet-set",
+          blockchain: "BASE-SEPOLIA",
+          mode: "circle",
+          updatedAt: "2026-05-13T00:00:00.000Z",
+        },
+      ],
+    },
+    async (statePath) => {
+      const config = liveCircleConfig({
+        AGENT_WALLET_STATE_PATH: statePath,
+        X402_FACILITATOR_URL: "https://gateway-api-testnet.circle.com",
+      });
+      let signCalls = 0;
+      let settleCalls = 0;
+      const circleWalletService = {
+        getGatewayBalance: async () => ({
+          total: 999n,
+          available: 999n,
+          withdrawing: 0n,
+          withdrawable: 999n,
+          formattedTotal: "0.000999",
+          formattedAvailable: "0.000999",
+          formattedWithdrawing: "0",
+          formattedWithdrawable: "0.000999",
+        }),
+        signTypedData: async () => {
+          signCalls += 1;
+          return `0x${"11".repeat(65)}`;
+        },
+        settleGatewayPayment: async () => {
+          settleCalls += 1;
+          return {};
+        },
+      } as unknown as CircleWalletService;
+      const service = new AgentWalletService(
+        config,
+        fakeX402FetchService(baseX402Result()),
+        circleWalletService,
+      );
+
+      await assertRejectsWithAppError(
+        () =>
+          service.transfer({
+            fromAgentId: "peer-agent",
+            toAgentId: "main-agent",
+            amountAtomic: "1000",
+            asset: "USDC",
+          }),
+        {
+          code: "INSUFFICIENT_GATEWAY_BALANCE",
+          statusCode: 424,
+          message: /Gateway available balance is insufficient/,
+        },
+      );
+      assert.equal(signCalls, 0);
+      assert.equal(settleCalls, 0);
     },
   );
 });
@@ -1159,5 +1268,43 @@ test("CircleWalletService returns token balances for a Circle wallet", async () 
   assert.deepEqual(result, {
     USDC: "1.98",
     "ETH-SEPOLIA": "0.000998913465464524",
+  });
+});
+
+test("CircleWalletService serializes bigint typed data for Circle signing", async () => {
+  let signedPayload: unknown;
+  const service = new CircleWalletService(liveCircleConfig(), {
+    client: {
+      createTransaction: async () => ({ data: {} }),
+      getTransaction: async () => ({ data: {} }),
+      requestTestnetTokens: async () => ({}) as never,
+      signTypedData: async (input: unknown) => {
+        signedPayload = input;
+        return {
+          data: {
+            signature: `0x${"22".repeat(65)}`,
+          },
+        };
+      },
+    },
+  });
+
+  const signature = await service.signTypedData({
+    walletId: "circle-wallet-1",
+    memo: "gateway:test",
+    data: {
+      domain: { name: "GatewayWalletBatched" },
+      message: { value: 1000n },
+    },
+  });
+
+  assert.equal(signature, `0x${"22".repeat(65)}`);
+  assert.deepEqual(signedPayload, {
+    walletId: "circle-wallet-1",
+    memo: "gateway:test",
+    data: JSON.stringify({
+      domain: { name: "GatewayWalletBatched" },
+      message: { value: "1000" },
+    }),
   });
 });

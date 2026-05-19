@@ -3,6 +3,8 @@ import {
   initiateDeveloperControlledWalletsClient,
   type CircleDeveloperControlledWalletsClient,
 } from "@circle-fin/developer-controlled-wallets";
+import { BatchFacilitatorClient } from "@circle-fin/x402-batching/server";
+import { formatUnits, parseUnits } from "ethers";
 
 import type { AppConfig } from "../config.js";
 import { AppError } from "../domain/errors.js";
@@ -35,33 +37,81 @@ type CircleWalletTokenBalance = {
   amount?: unknown;
 };
 
+export type CircleGatewayBalance = {
+  total: bigint;
+  available: bigint;
+  withdrawing: bigint;
+  withdrawable: bigint;
+  formattedTotal: string;
+  formattedAvailable: string;
+  formattedWithdrawing: string;
+  formattedWithdrawable: string;
+};
+
+type GatewayPaymentPayload = {
+  x402Version: number;
+  payload: unknown;
+};
+
+type GatewayPaymentRequirements = {
+  scheme: string;
+  network: string;
+  asset: string;
+  amount: string;
+  payTo: string;
+  maxTimeoutSeconds: number;
+  extra?: Record<string, unknown>;
+};
+
+type GatewayVerifyResponse = {
+  isValid: boolean;
+  invalidReason?: string;
+  payer?: string;
+};
+
+type GatewaySettleResponse = {
+  success: boolean;
+  errorReason?: string;
+  payer?: string;
+  transaction?: string;
+  network?: string;
+};
+
+export type CircleGatewaySettlementResult = {
+  verify: GatewayVerifyResponse;
+  settle: GatewaySettleResponse;
+};
+
 export type CircleEntitySecretCiphertextFactory = (
   entitySecret: string,
 ) => string | Promise<string>;
 
+type CircleWalletClient =
+  Pick<
+    CircleDeveloperControlledWalletsClient,
+    "createTransaction" | "getTransaction" | "requestTestnetTokens"
+  > &
+    Partial<Pick<CircleDeveloperControlledWalletsClient, "signTypedData">>;
+
 export type CircleWalletServiceOptions = {
   createEntitySecretCiphertext?: CircleEntitySecretCiphertextFactory;
   fetchImpl?: typeof fetch;
-  client?: Pick<
-    CircleDeveloperControlledWalletsClient,
-    "createTransaction" | "getTransaction" | "requestTestnetTokens"
-  > | {
+  client?: CircleWalletClient | {
     createTransaction(input: unknown): Promise<any>;
     getTransaction(input: unknown): Promise<any>;
     requestTestnetTokens(input: unknown): Promise<any>;
+    signTypedData?(input: unknown): Promise<any>;
   };
 };
 
 export class CircleWalletService {
   private readonly createEntitySecretCiphertext?: CircleEntitySecretCiphertextFactory;
   private readonly fetchImpl: typeof fetch;
-  private readonly client?: Pick<
-    CircleDeveloperControlledWalletsClient,
-    "createTransaction" | "getTransaction" | "requestTestnetTokens"
-  > | {
+  private readonly client?: CircleWalletClient | {
     createTransaction(input: unknown): Promise<any>;
     getTransaction(input: unknown): Promise<any>;
     requestTestnetTokens(input: unknown): Promise<any>;
+    signTypedData?(input: unknown): Promise<any>;
   };
 
   constructor(
@@ -308,6 +358,126 @@ export class CircleWalletService {
     });
   }
 
+  async signTypedData(command: {
+    walletId: string;
+    data: unknown;
+    memo?: string;
+  }): Promise<`0x${string}`> {
+    if (this.config.network.mockChain) {
+      return mockSignature(command.walletId, stringifyJsonSafe(command.data), command.memo ?? "");
+    }
+
+    const client = this.requireClient();
+    if (typeof client.signTypedData !== "function") {
+      throw new AppError(
+        "CONFIG_ERROR",
+        "Circle signTypedData client support is required for Gateway payments",
+        500,
+      );
+    }
+
+    const response = await client.signTypedData({
+      walletId: command.walletId,
+      data: typeof command.data === "string" ? command.data : stringifyJsonSafe(command.data),
+      memo: command.memo,
+    } as any);
+    const signature = extractSignature(response);
+    if (!signature) {
+      throw new AppError(
+        "UPSTREAM_REQUEST_FAILED",
+        "Circle signTypedData response did not include a signature",
+        502,
+        response,
+      );
+    }
+    return signature;
+  }
+
+  async getGatewayBalance(walletAddress: string, domain: number): Promise<CircleGatewayBalance> {
+    const normalizedAddress = normalizeAddress(walletAddress);
+    if (this.config.network.mockChain) {
+      const available = this.config.network.mockUsdcBalanceAtomic;
+      return formatGatewayBalance({
+        available,
+        withdrawing: 0n,
+        withdrawable: available,
+      });
+    }
+
+    const response = await this.fetchImpl(`${gatewayApiBaseUrl(this.config.x402.facilitatorUrl)}/balances`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        token: "USDC",
+        sources: [{ depositor: normalizedAddress, domain }],
+      }),
+    });
+    const payload = await parseJsonPayload(response);
+    if (!response.ok) {
+      throw new AppError(
+        "UPSTREAM_REQUEST_FAILED",
+        `Circle Gateway balance lookup failed with HTTP ${response.status}`,
+        response.status,
+        payload,
+      );
+    }
+
+    const balance = extractGatewayBalance(payload);
+    if (!balance) {
+      throw new AppError(
+        "UPSTREAM_REQUEST_FAILED",
+        "Circle Gateway balance response did not include a balance",
+        502,
+        payload,
+      );
+    }
+    return balance;
+  }
+
+  async settleGatewayPayment(command: {
+    paymentPayload: GatewayPaymentPayload;
+    paymentRequirements: GatewayPaymentRequirements;
+  }): Promise<CircleGatewaySettlementResult> {
+    if (this.config.network.mockChain) {
+      const transaction = mockTransactionHash(
+        command.paymentRequirements.payTo,
+        command.paymentRequirements.amount,
+        command.paymentRequirements.asset,
+      );
+      return {
+        verify: { isValid: true },
+        settle: {
+          success: true,
+          transaction,
+          network: command.paymentRequirements.network,
+        },
+      };
+    }
+
+    const facilitator = new BatchFacilitatorClient({
+      url: gatewayFacilitatorBaseUrl(this.config.x402.facilitatorUrl),
+    });
+    const verify = await facilitator.verify(
+      command.paymentPayload as any,
+      command.paymentRequirements as any,
+    );
+    if (!verify.isValid) {
+      return {
+        verify,
+        settle: {
+          success: false,
+          errorReason: verify.invalidReason ?? "Gateway payment verification failed",
+          network: command.paymentRequirements.network,
+        },
+      };
+    }
+    const settle = await facilitator.settle(
+      command.paymentPayload as any,
+      command.paymentRequirements as any,
+    );
+    return { verify, settle };
+  }
+
   async getTransaction(transactionId: string): Promise<unknown> {
     if (this.config.network.mockChain) {
       return {
@@ -336,13 +506,11 @@ export class CircleWalletService {
     });
   }
 
-  private requireClient(): Pick<
-    CircleDeveloperControlledWalletsClient,
-    "createTransaction" | "getTransaction" | "requestTestnetTokens"
-  > | {
+  private requireClient(): CircleWalletClient | {
     createTransaction(input: unknown): Promise<any>;
     getTransaction(input: unknown): Promise<any>;
     requestTestnetTokens(input: unknown): Promise<any>;
+    signTypedData?(input: unknown): Promise<any>;
   } {
     if (this.client) {
       return this.client;
@@ -370,6 +538,22 @@ function circleSdkBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/v1\/w3s\/?$/, "");
 }
 
+function gatewayFacilitatorBaseUrl(configuredUrl: string): string {
+  return gatewayRootBaseUrl(configuredUrl);
+}
+
+function gatewayApiBaseUrl(configuredUrl: string): string {
+  return `${gatewayRootBaseUrl(configuredUrl)}/v1`;
+}
+
+function gatewayRootBaseUrl(configuredUrl: string): string {
+  const trimmed = configuredUrl.trim().replace(/\/+$/, "");
+  if (!trimmed || trimmed.includes("x402.org")) {
+    return "https://gateway-api-testnet.circle.com";
+  }
+  return trimmed.replace(/\/v1(?:\/x402(?:\/[^/]+)?)?$/, "");
+}
+
 export function slug(value: string): string {
   const normalized = value
     .trim()
@@ -387,6 +571,17 @@ export function mockAddress(seed: string): `0x${string}` {
 
 function mockTransactionHash(...values: string[]): `0x${string}` {
   return `0x${createHash("sha256").update(values.join(":")).digest("hex")}`;
+}
+
+function mockSignature(...values: string[]): `0x${string}` {
+  const digest = createHash("sha512").update(values.join(":")).digest("hex");
+  return `0x${digest}${digest.slice(0, 2)}`;
+}
+
+function stringifyJsonSafe(value: unknown): string {
+  return JSON.stringify(value, (_, nestedValue) =>
+    typeof nestedValue === "bigint" ? nestedValue.toString() : nestedValue,
+  );
 }
 
 async function parseJsonPayload(response: Response): Promise<unknown> {
@@ -434,6 +629,68 @@ function extractTokenBalances(payload: unknown): Record<string, string> {
     }
   }
   return balances;
+}
+
+function extractGatewayBalance(payload: unknown): CircleGatewayBalance | null {
+  if (!isRecord(payload) || !Array.isArray(payload.balances) || payload.balances.length === 0) {
+    return null;
+  }
+  const [first] = payload.balances.filter(isRecord);
+  if (!first || typeof first.balance !== "string") {
+    return null;
+  }
+  const available = parseGatewayAmount(first.balance, payload);
+  const withdrawing = parseGatewayAmount(
+    typeof first.withdrawing === "string" ? first.withdrawing : "0",
+    payload,
+  );
+  const withdrawable = parseGatewayAmount(
+    typeof first.withdrawable === "string" ? first.withdrawable : "0",
+    payload,
+  );
+  return formatGatewayBalance({ available, withdrawing, withdrawable });
+}
+
+function parseGatewayAmount(value: string, payload: unknown): bigint {
+  try {
+    return parseUnits(value, 6);
+  } catch (error) {
+    throw new AppError(
+      "UPSTREAM_REQUEST_FAILED",
+      "Circle Gateway balance response included an invalid amount",
+      502,
+      {
+        payload,
+        cause: error instanceof Error ? error.message : String(error),
+      },
+    );
+  }
+}
+
+function formatGatewayBalance(parts: {
+  available: bigint;
+  withdrawing: bigint;
+  withdrawable: bigint;
+}): CircleGatewayBalance {
+  const total = parts.available + parts.withdrawing;
+  return {
+    total,
+    available: parts.available,
+    withdrawing: parts.withdrawing,
+    withdrawable: parts.withdrawable,
+    formattedTotal: formatUnits(total, 6),
+    formattedAvailable: formatUnits(parts.available, 6),
+    formattedWithdrawing: formatUnits(parts.withdrawing, 6),
+    formattedWithdrawable: formatUnits(parts.withdrawable, 6),
+  };
+}
+
+function extractSignature(payload: unknown): `0x${string}` | null {
+  const data = isRecord(payload) && isRecord(payload.data) ? payload.data : payload;
+  const signature = isRecord(data) ? data.signature : null;
+  return typeof signature === "string" && signature.startsWith("0x")
+    ? (signature as `0x${string}`)
+    : null;
 }
 
 function isTokenBalance(value: unknown): value is CircleWalletTokenBalance {
