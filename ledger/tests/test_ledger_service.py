@@ -456,6 +456,35 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertEqual(state["accounts"][0]["circleWalletId"], "circle-wallet-1")
         self.assertEqual(state["entries"], [])
 
+    def test_gateway_deposit_proxies_to_wallet_mcp(self) -> None:
+        class FakeWalletClient:
+            async def gateway_deposit(self, request):
+                self.request = request
+                return {
+                    "agentId": request.agentId,
+                    "amountAtomic": request.amountAtomic,
+                    "mode": "gateway_deposit",
+                    "gatewayBalance": {"availableAtomic": request.amountAtomic},
+                }
+
+        fake_client = FakeWalletClient()
+        with patch.object(main, "get_ledger_wallet_client", return_value=fake_client):
+            response = self.client.post(
+                "/ledger/gateway/deposits",
+                json={
+                    "agentId": "agent_research",
+                    "amountAtomic": "1000",
+                    "refId": "deposit:test",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["agentId"], "agent_research")
+        self.assertEqual(payload["amountAtomic"], "1000")
+        self.assertEqual(payload["mode"], "gateway_deposit")
+        self.assertEqual(fake_client.request.refId, "deposit:test")
+
     def test_ledger_state_includes_circle_usdc_balance_for_bound_accounts(self) -> None:
         class FakeWalletClient:
             async def status(self, *, wallet_address=None, circle_wallet_id=None):

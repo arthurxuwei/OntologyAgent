@@ -245,6 +245,14 @@ class AgentWalletRequest(BaseModel):
     agentDescription: Optional[str] = None
 
 
+class GatewayDepositRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    agentId: str = Field(min_length=1)
+    amountAtomic: str = Field(min_length=1)
+    refId: Optional[str] = None
+
+
 class CreateEscrowRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
@@ -1218,6 +1226,20 @@ class LedgerWalletClient:
         if not wallet:
             raise RuntimeError("wallet MCP response did not include wallet status content")
         return wallet
+
+    async def gateway_deposit(self, request: GatewayDepositRequest) -> dict[str, Any]:
+        payload = await self._call_wallet_tool(
+            "agent_wallet_gateway_deposit",
+            {
+                "agentId": request.agentId,
+                "amountAtomic": request.amountAtomic,
+                "refId": request.refId,
+            },
+        )
+        deposit = self._extract_tool_content(payload)
+        if not deposit:
+            raise RuntimeError("wallet MCP response did not include Gateway deposit content")
+        return deposit
 
     async def _call_wallet_tool(self, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         request = {
@@ -2282,6 +2304,15 @@ async def credit_agent_balance(agent_id: str, request: CreditRequest) -> dict[st
 async def create_or_reuse_agent_wallet(request: AgentWalletRequest) -> dict[str, Any]:
     try:
         return await get_or_create_agent_wallet(request)
+    except (ValueError, RuntimeError) as error:
+        raise http_error(error) from error
+
+
+@app.post("/ledger/gateway/deposits")
+async def deposit_agent_wallet_to_gateway(request: GatewayDepositRequest) -> dict[str, Any]:
+    try:
+        parse_positive_atomic(request.amountAtomic)
+        return await get_ledger_wallet_client().gateway_deposit(request)
     except (ValueError, RuntimeError) as error:
         raise http_error(error) from error
 
