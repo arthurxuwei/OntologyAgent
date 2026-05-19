@@ -339,6 +339,16 @@ def decimal_usdc_to_float(value: Any, fallback: float = 0.0) -> float:
         return fallback
 
 
+def decimal_usdc_to_atomic_string(value: Any) -> Optional[str]:
+    try:
+        atomic = Decimal(str(value)) * Decimal("1000000")
+    except (InvalidOperation, ValueError):
+        return None
+    if atomic < 0:
+        return None
+    return str(int(atomic.to_integral_value()))
+
+
 def short_address(value: Any) -> str:
     text = str(value or "").strip()
     if not text:
@@ -2014,6 +2024,10 @@ async def ledger_state_with_circle_balances() -> dict[str, Any]:
             usdc_balance = balances.get(DEFAULT_ASSET)
             if isinstance(usdc_balance, str):
                 account["circleUsdcBalance"] = usdc_balance
+                circle_available_atomic = decimal_usdc_to_atomic_string(usdc_balance)
+                if circle_available_atomic is not None:
+                    account["availableAtomic"] = circle_available_atomic
+                    account["balanceSource"] = "circle"
     return state
 
 

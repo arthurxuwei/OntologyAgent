@@ -61,7 +61,7 @@ def route_payment_intent(intent: PaymentIntent) -> PaymentRouteDecision:
             "method": "ledger_transfer",
             "reason": (
                 "Direct Agent-to-Agent payments require a real Circle USDC transfer "
-                "and then a matching ledger available balance update."
+                "before the ledger records the transfer."
             ),
             "allowedTools": ["agent_wallet_transfer"],
         }

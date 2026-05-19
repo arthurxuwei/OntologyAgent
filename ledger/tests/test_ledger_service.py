@@ -12,6 +12,7 @@ from cryptography.hazmat.primitives.asymmetric import ed25519
 from fastapi.testclient import TestClient
 
 import main
+import mcp_tools
 
 
 class LedgerServiceTests(unittest.TestCase):
@@ -460,7 +461,7 @@ class LedgerServiceTests(unittest.TestCase):
 
         self.assertEqual(state["accounts"][0]["circleUsdcBalance"], "1.98")
 
-    def test_ledger_state_reports_circle_balance_without_mutating_available(self) -> None:
+    def test_ledger_state_uses_circle_balance_as_agent_visible_available(self) -> None:
         class FakeWalletClient:
             async def status(self, *, wallet_address=None, circle_wallet_id=None):
                 assert circle_wallet_id == "circle-wallet-1"
@@ -479,9 +480,37 @@ class LedgerServiceTests(unittest.TestCase):
 
         account = state["accounts"][0]
         self.assertEqual(account["circleUsdcBalance"], "1.98")
-        self.assertEqual(account["availableAtomic"], "0")
+        self.assertEqual(account["availableAtomic"], "1980000")
+        self.assertNotIn("ledgerAvailableAtomic", account)
+        self.assertEqual(account["balanceSource"], "circle")
         self.assertEqual(state["entries"], [])
         self.assertEqual(state_after_second_read["entries"], [])
+        self.assertEqual(main.get_store().load().accounts[0].availableAtomic, "0")
+
+    def test_mcp_ledger_state_uses_circle_balance_as_agent_visible_available(
+        self,
+    ) -> None:
+        class FakeWalletClient:
+            async def status(self, *, wallet_address=None, circle_wallet_id=None):
+                assert circle_wallet_id == "circle-wallet-1"
+                return {"balances": {"USDC": "1.98"}}
+
+        store = main.get_store()
+        store.bind_account_wallet(
+            agent_id="agent_research",
+            wallet_address="0x1111111111111111111111111111111111111111",
+            circle_wallet_id="circle-wallet-1",
+        )
+        mcp_tools.configure_store_factory(main.get_store)
+
+        with patch.object(main, "get_ledger_wallet_client", return_value=FakeWalletClient()):
+            state = asyncio.run(mcp_tools.agent_wallet_get_ledger_state_tool())
+
+        account = state["accounts"][0]
+        self.assertEqual(account["circleUsdcBalance"], "1.98")
+        self.assertEqual(account["availableAtomic"], "1980000")
+        self.assertNotIn("ledgerAvailableAtomic", account)
+        self.assertEqual(account["balanceSource"], "circle")
 
     def test_dashboard_data_uses_circle_usdc_as_available_balance(self) -> None:
         class FakeWalletClient:

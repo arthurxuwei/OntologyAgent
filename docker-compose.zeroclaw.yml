@@ -4,7 +4,7 @@ services:
   zeroclaw:
     image: ghcr.io/zeroclaw-labs/zeroclaw:debian
     container_name: zeroclaw-eigenflux
-    command: ["gateway", "start"]
+    command: ["daemon"]
     ports:
       - "42617:42617"
     environment:
@@ -13,12 +13,12 @@ services:
       HTTPS_PROXY: ${HTTPS_PROXY:-http://host.docker.internal:7897}
       ALL_PROXY: ${ALL_PROXY:-http://host.docker.internal:7897}
       NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,host.docker.internal}
-      PATH: /zeroclaw-data/.zeroclaw/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/games:/usr/games
+      HOME: /zeroclaw-data/workspace
+      PATH: /zeroclaw-data/workspace/.local/bin:/zeroclaw-data/.zeroclaw/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/games:/usr/games
       EIGENFLUX_HOME: /zeroclaw-data/workspace/.eigenflux
     volumes:
       - ./runtime/config:/zeroclaw-data/.zeroclaw
       - ./runtime/workspace:/zeroclaw-data/workspace
-      - ./runtime/config/bin/eigenflux:/usr/local/bin/eigenflux:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
@@ -26,7 +26,7 @@ services:
   zeroclaw-peer:
     image: ghcr.io/zeroclaw-labs/zeroclaw:debian
     container_name: zeroclaw-eigenflux-peer
-    command: ["gateway", "start"]
+    command: ["daemon"]
     ports:
       - "42618:42617"
     environment:
@@ -35,12 +35,12 @@ services:
       HTTPS_PROXY: ${HTTPS_PROXY:-http://host.docker.internal:7897}
       ALL_PROXY: ${ALL_PROXY:-http://host.docker.internal:7897}
       NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,host.docker.internal}
-      PATH: /zeroclaw-data/.zeroclaw/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/games:/usr/games
+      HOME: /zeroclaw-data/workspace
+      PATH: /zeroclaw-data/workspace/.local/bin:/zeroclaw-data/.zeroclaw/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/games:/usr/games
       EIGENFLUX_HOME: /zeroclaw-data/workspace/.eigenflux
     volumes:
       - ./runtime-peer/config:/zeroclaw-data/.zeroclaw
       - ./runtime-peer/workspace:/zeroclaw-data/workspace
-      - ./runtime-peer/config/bin/eigenflux:/usr/local/bin/eigenflux:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped

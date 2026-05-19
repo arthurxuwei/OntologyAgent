@@ -59,7 +59,9 @@ async def route_payment_intent_tool(
 
 
 async def agent_wallet_get_ledger_state_tool() -> dict[str, Any]:
-    return ledger_store().load().model_dump()
+    from main import ledger_state_with_circle_balances
+
+    return await ledger_state_with_circle_balances()
 
 
 async def agent_wallet_get_or_create_tool(
