@@ -537,6 +537,107 @@ def build_dashboard_data(
     }
 
 
+def scoped_ledger_state(
+    ledger_state: dict[str, Any],
+    agent_id: Optional[str] = None,
+) -> dict[str, Any]:
+    scoped_agent_id = str(agent_id or "").strip()
+    if not scoped_agent_id:
+        state = dict(ledger_state)
+        state["accounts"] = []
+        state["entries"] = []
+        state["escrows"] = []
+        state["onrampSessions"] = []
+        state["onrampEvents"] = []
+        state["chainRecords"] = []
+        state["settlementRecords"] = []
+        return state
+
+    accounts = [
+        account
+        for account in ledger_state.get("accounts", [])
+        if isinstance(account, dict)
+        and str(account.get("agentId") or "").strip() == scoped_agent_id
+    ]
+
+    entries = [
+        entry
+        for entry in ledger_state.get("entries", [])
+        if isinstance(entry, dict)
+        and str(entry.get("agentId") or "").strip() == scoped_agent_id
+    ]
+    entry_ids = {
+        str(entry.get("entryId") or "").strip()
+        for entry in entries
+        if str(entry.get("entryId") or "").strip()
+    }
+
+    escrows = [
+        escrow
+        for escrow in ledger_state.get("escrows", [])
+        if isinstance(escrow, dict)
+        and (
+            str(escrow.get("buyerAgentId") or "").strip() == scoped_agent_id
+            or str(escrow.get("sellerAgentId") or "").strip() == scoped_agent_id
+        )
+    ]
+    escrow_ids = {
+        str(escrow.get("escrowId") or "").strip()
+        for escrow in escrows
+        if str(escrow.get("escrowId") or "").strip()
+    }
+
+    onramp_sessions = [
+        session
+        for session in ledger_state.get("onrampSessions", [])
+        if isinstance(session, dict)
+        and str(session.get("agentId") or "").strip() == scoped_agent_id
+    ]
+    onramp_session_ids = {
+        str(session.get("sessionId") or "").strip()
+        for session in onramp_sessions
+        if str(session.get("sessionId") or "").strip()
+    }
+
+    chain_records = [
+        record
+        for record in ledger_state.get("chainRecords", [])
+        if isinstance(record, dict)
+        and (
+            str(record.get("escrowId") or "").strip() in escrow_ids
+            or any(
+                str(entry_id or "").strip() in entry_ids
+                for entry_id in record.get("entryIds", [])
+            )
+        )
+    ]
+    settlement_records = [
+        record
+        for record in ledger_state.get("settlementRecords", [])
+        if isinstance(record, dict)
+        and (
+            str(record.get("escrowId") or "").strip() in escrow_ids
+            or str(record.get("fromAgentId") or "").strip() == scoped_agent_id
+            or str(record.get("toAgentId") or "").strip() == scoped_agent_id
+        )
+    ]
+
+    state = dict(ledger_state)
+    state["accounts"] = accounts
+    state["entries"] = entries
+    state["escrows"] = escrows
+    state["onrampSessions"] = onramp_sessions
+    state["onrampEvents"] = [
+        event
+        for event in ledger_state.get("onrampEvents", [])
+        if isinstance(event, dict)
+        and str(event.get("sessionId") or "").strip() in onramp_session_ids
+    ]
+    state["chainRecords"] = chain_records
+    state["settlementRecords"] = settlement_records
+    return state
+
+
 def build_claimable_agents(
     *,
     email: str,
@@ -1971,8 +2072,11 @@ def ledger_dashboard() -> FileResponse:
 
 
 @app.get("/ledger/state")
-async def get_ledger_state() -> dict[str, Any]:
-    return await ledger_state_with_circle_balances()
+async def get_ledger_state(agentId: str = "") -> dict[str, Any]:
+    return scoped_ledger_state(
+        await ledger_state_with_circle_balances(),
+        agent_id=agentId,
+    )
 
 
 @app.get("/dashboard/data")

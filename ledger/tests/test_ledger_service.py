@@ -386,7 +386,7 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertEqual(account["availableAtomic"], "5000000")
         self.assertEqual(account["lockedAtomic"], "0")
 
-        state = self.client.get("/ledger/state").json()
+        state = self.client.get("/ledger/state?agentId=agent_buyer").json()
         self.assertEqual(len(state["entries"]), 1)
         self.assertEqual(state["entries"][0]["entryType"], "credit")
 
@@ -431,7 +431,7 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertEqual(payload["account"]["availableAtomic"], "0")
         self.assertEqual(payload["account"]["lockedAtomic"], "0")
 
-        state = self.client.get("/ledger/state").json()
+        state = self.client.get("/ledger/state?agentId=agent_research").json()
         self.assertEqual(len(state["accounts"]), 1)
         self.assertEqual(state["accounts"][0]["agentId"], "agent_research")
         self.assertEqual(state["accounts"][0]["agentName"], "Research Agent")
@@ -457,9 +457,102 @@ class LedgerServiceTests(unittest.TestCase):
         )
 
         with patch.object(main, "get_ledger_wallet_client", return_value=FakeWalletClient()):
-            state = self.client.get("/ledger/state").json()
+            state = self.client.get("/ledger/state?agentId=agent_research").json()
 
         self.assertEqual(state["accounts"][0]["circleUsdcBalance"], "1.98")
+
+    def test_ledger_state_returns_no_data_without_agent_id(self) -> None:
+        store = main.get_store()
+        store.bind_account_wallet(
+            agent_id="agent_owner",
+            agent_name="Owner Agent",
+            email="owner@example.com",
+            wallet_address=None,
+            circle_wallet_id=None,
+        )
+        store.credit(
+            agent_id="agent_owner",
+            amount_atomic="5000000",
+            reason="owner funding",
+            metadata={},
+        )
+
+        state = self.client.get("/ledger/state").json()
+
+        self.assertEqual(state["accounts"], [])
+        self.assertEqual(state["entries"], [])
+        self.assertEqual(state["escrows"], [])
+        self.assertEqual(state["onrampSessions"], [])
+        self.assertEqual(state["onrampEvents"], [])
+        self.assertEqual(state["chainRecords"], [])
+        self.assertEqual(state["settlementRecords"], [])
+
+    def test_ledger_state_can_be_scoped_to_agent_id(self) -> None:
+        store = main.get_store()
+        store.bind_account_wallet(
+            agent_id="agent_owner",
+            agent_name="Owner Agent",
+            email="owner@example.com",
+            wallet_address=None,
+            circle_wallet_id=None,
+        )
+        store.bind_account_wallet(
+            agent_id="agent_counterparty",
+            agent_name="Counterparty Agent",
+            email="counterparty@example.com",
+            wallet_address=None,
+            circle_wallet_id=None,
+        )
+        store.bind_account_wallet(
+            agent_id="agent_other",
+            agent_name="Other Agent",
+            email="other@example.com",
+            wallet_address=None,
+            circle_wallet_id=None,
+        )
+        store.credit(
+            agent_id="agent_owner",
+            amount_atomic="5000000",
+            reason="owner funding",
+            metadata={},
+        )
+        store.credit(
+            agent_id="agent_other",
+            amount_atomic="5000000",
+            reason="other funding",
+            metadata={},
+        )
+        store.create_escrow(
+            buyer_agent_id="agent_owner",
+            seller_agent_id="agent_counterparty",
+            amount_atomic="1000000",
+            task_id="owner_task",
+            description=None,
+            metadata={},
+        )
+        store.create_escrow(
+            buyer_agent_id="agent_other",
+            seller_agent_id="agent_counterparty",
+            amount_atomic="1000000",
+            task_id="other_task",
+            description=None,
+            metadata={},
+        )
+
+        state = self.client.get("/ledger/state?agentId=agent_owner").json()
+
+        self.assertEqual(
+            [account["agentId"] for account in state["accounts"]],
+            ["agent_owner"],
+        )
+        self.assertEqual(
+            {entry["agentId"] for entry in state["entries"]},
+            {"agent_owner"},
+        )
+        self.assertEqual(
+            [escrow["taskId"] for escrow in state["escrows"]],
+            ["owner_task"],
+        )
 
     def test_ledger_state_uses_circle_balance_as_agent_visible_available(self) -> None:
         class FakeWalletClient:
@@ -475,8 +568,8 @@ class LedgerServiceTests(unittest.TestCase):
         )
 
         with patch.object(main, "get_ledger_wallet_client", return_value=FakeWalletClient()):
-            state = self.client.get("/ledger/state").json()
-            state_after_second_read = self.client.get("/ledger/state").json()
+            state = self.client.get("/ledger/state?agentId=agent_research").json()
+            state_after_second_read = self.client.get("/ledger/state?agentId=agent_research").json()
 
         account = state["accounts"][0]
         self.assertEqual(account["circleUsdcBalance"], "1.98")
@@ -589,7 +682,10 @@ class LedgerServiceTests(unittest.TestCase):
             )
 
         self.assertEqual(result["account"]["agentId"], "agent_research")
-        self.assertEqual(self.client.get("/ledger/state").json()["accounts"][0]["agentId"], "agent_research")
+        self.assertEqual(
+            self.client.get("/ledger/state?agentId=agent_research").json()["accounts"][0]["agentId"],
+            "agent_research",
+        )
 
     def test_create_onramp_session_persists_coinbase_hosted_url(self) -> None:
         os.environ["COINBASE_ONRAMP_MOCK"] = "true"
@@ -614,7 +710,7 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertEqual(payload["purchaseCurrency"], "USDC")
         self.assertTrue(payload["onrampUrl"].startswith("https://pay.coinbase.com/buy/select-asset"))
 
-        state = self.client.get("/ledger/state").json()
+        state = self.client.get("/ledger/state?agentId=agentA").json()
         self.assertEqual(len(state["onrampSessions"]), 1)
         self.assertEqual(state["onrampSessions"][0]["idempotencyKey"], "fund-agentA-10")
 
@@ -632,7 +728,10 @@ class LedgerServiceTests(unittest.TestCase):
         second = self.client.post("/onramp/sessions", json=request).json()
 
         self.assertEqual(first["sessionId"], second["sessionId"])
-        self.assertEqual(len(self.client.get("/ledger/state").json()["onrampSessions"]), 1)
+        self.assertEqual(
+            len(self.client.get("/ledger/state?agentId=agentA").json()["onrampSessions"]),
+            1,
+        )
 
     def test_confirm_onramp_credits_ledger_once(self) -> None:
         os.environ["COINBASE_ONRAMP_MOCK"] = "true"
@@ -665,7 +764,7 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertEqual(second.status_code, 200)
         self.assertEqual(first.json()["status"], "credited")
         self.assertEqual(second.json()["status"], "credited")
-        state = self.client.get("/ledger/state").json()
+        state = self.client.get("/ledger/state?agentId=agentA").json()
         credit_entries = [
             entry for entry in state["entries"]
             if entry["reason"] == "coinbase_onramp_confirmed"
@@ -698,7 +797,7 @@ class LedgerServiceTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["detail"], "amountAtomic must be a positive integer string")
-        state = self.client.get("/ledger/state").json()
+        state = self.client.get("/ledger/state?agentId=agentA").json()
         self.assertEqual(state["accounts"], [])
 
     def test_create_escrow_moves_buyer_available_to_locked(self) -> None:
@@ -724,7 +823,7 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertEqual(escrow["amountAtomic"], "3000000")
 
         accounts = {
-            item["agentId"]: item for item in self.client.get("/ledger/state").json()["accounts"]
+            item["agentId"]: item for item in self.client.get("/ledger/state?agentId=agent_buyer").json()["accounts"]
         }
         self.assertEqual(accounts["agent_buyer"]["availableAtomic"], "2000000")
         self.assertEqual(accounts["agent_buyer"]["lockedAtomic"], "3000000")
@@ -774,7 +873,7 @@ class LedgerServiceTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["chainRecord"]["txHash"], "0xtesttx")
-        state = self.client.get("/ledger/state").json()
+        state = self.client.get("/ledger/state?agentId=agent_buyer").json()
         self.assertEqual(len(state["chainRecords"]), 2)
         lock_record = state["chainRecords"][1]
         self.assertEqual(lock_record["eventType"], "escrow_lock")
@@ -798,7 +897,7 @@ class LedgerServiceTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["detail"], "insufficient available balance")
-        state = self.client.get("/ledger/state").json()
+        state = self.client.get("/ledger/state?agentId=agent_buyer").json()
         self.assertEqual(state["escrows"], [])
         self.assertEqual(state["accounts"][0]["availableAtomic"], "1000000")
         self.assertEqual(state["accounts"][0]["lockedAtomic"], "0")
@@ -822,11 +921,14 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["escrow"]["status"], "released")
         accounts = {
-            item["agentId"]: item for item in self.client.get("/ledger/state").json()["accounts"]
+            item["agentId"]: item for item in self.client.get("/ledger/state?agentId=agent_buyer").json()["accounts"]
         }
         self.assertEqual(accounts["agent_buyer"]["availableAtomic"], "2000000")
         self.assertEqual(accounts["agent_buyer"]["lockedAtomic"], "0")
-        self.assertEqual(accounts["agent_seller"]["availableAtomic"], "3000000")
+        seller_accounts = {
+            item["agentId"]: item for item in self.client.get("/ledger/state?agentId=agent_seller").json()["accounts"]
+        }
+        self.assertEqual(seller_accounts["agent_seller"]["availableAtomic"], "3000000")
 
     def test_release_escrow_persists_settlement_record_when_enabled(self) -> None:
         class FakeSettlementClient:
@@ -872,7 +974,7 @@ class LedgerServiceTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["settlementRecord"]["transactionHash"], "0xrealtransfer")
-        state = self.client.get("/ledger/state").json()
+        state = self.client.get("/ledger/state?agentId=agent_buyer").json()
         self.assertEqual(len(state["settlementRecords"]), 1)
         self.assertEqual(state["settlementRecords"][0]["status"], "submitted")
 
@@ -1107,7 +1209,7 @@ class LedgerServiceTests(unittest.TestCase):
             response = self.client.post(f"/ledger/escrows/{escrow['escrowId']}/release")
 
         self.assertEqual(response.status_code, 502)
-        state = self.client.get("/ledger/state").json()
+        state = self.client.get("/ledger/state?agentId=agent_buyer").json()
         escrow_state = state["escrows"][0]
         self.assertEqual(escrow_state["status"], "locked")
 
@@ -1130,7 +1232,7 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["escrow"]["status"], "refunded")
         accounts = {
-            item["agentId"]: item for item in self.client.get("/ledger/state").json()["accounts"]
+            item["agentId"]: item for item in self.client.get("/ledger/state?agentId=agent_buyer").json()["accounts"]
         }
         self.assertEqual(accounts["agent_buyer"]["availableAtomic"], "5000000")
         self.assertEqual(accounts["agent_buyer"]["lockedAtomic"], "0")
@@ -1185,7 +1287,7 @@ class LedgerServiceTests(unittest.TestCase):
         main.get_store.cache_clear()
         reloaded_client = TestClient(main.app)
 
-        state = reloaded_client.get("/ledger/state").json()
+        state = reloaded_client.get("/ledger/state?agentId=agent_buyer").json()
 
         self.assertEqual(state["accounts"][0]["agentId"], "agent_buyer")
         self.assertEqual(state["accounts"][0]["availableAtomic"], "5000000")
