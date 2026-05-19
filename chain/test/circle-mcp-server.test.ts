@@ -57,6 +57,7 @@ test("circle MCP exposes Agent Wallet lifecycle and settlement tools", async () 
     const response = await client.listTools();
     const toolNames = response.tools.map((tool) => tool.name).sort();
     assert.deepEqual(toolNames, [
+      "agent_wallet_gateway_deposit",
       "agent_wallet_get_or_create",
       "agent_wallet_import_circle_wallets",
       "agent_wallet_init",

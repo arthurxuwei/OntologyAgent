@@ -138,6 +138,23 @@ export function createCircleMcpServer(runtime: CircleRuntime): McpServer {
   );
 
   server.registerTool(
+    "agent_wallet_gateway_deposit",
+    {
+      description:
+        "Backend-only funding step: deposit USDC from a bound Circle Agent Wallet into Circle Gateway for Nanopayments.",
+      inputSchema: {
+        agentId: z.string().optional().describe("Agent id bound to a Circle wallet"),
+        agentName: z.string().optional().describe("Agent name bound to a Circle wallet"),
+        circleWalletId: z.string().optional().describe("Explicit Circle wallet id"),
+        walletAddress: z.string().optional().describe("Explicit wallet address"),
+        amountAtomic: z.string().describe("USDC amount in atomic units"),
+        refId: z.string().optional().describe("Deposit reference id"),
+      },
+    },
+    async (args) => runTool(() => runtime.agentWalletService.depositToGateway(args)),
+  );
+
+  server.registerTool(
     "agent_wallet_transaction_status",
     {
       description: "Return Circle transaction status for an Agent Wallet transfer.",

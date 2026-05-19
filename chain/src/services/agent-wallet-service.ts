@@ -12,6 +12,8 @@ import type {
   AgentWalletCallX402ServiceResult,
   AgentWalletFaucetCommand,
   AgentWalletFaucetResult,
+  AgentWalletGatewayDepositCommand,
+  AgentWalletGatewayDepositResult,
   AgentWalletGetOrCreateCommand,
   AgentWalletGetOrCreateResult,
   AgentWalletInitCommand,
@@ -355,6 +357,85 @@ export class AgentWalletService {
       transactionHash: transaction.txHash,
       state: transaction.state,
       mode: "circle",
+      raw,
+    };
+  }
+
+  async depositToGateway(
+    command: AgentWalletGatewayDepositCommand,
+  ): Promise<AgentWalletGatewayDepositResult> {
+    const binding = await this.resolveBinding({
+      agentId: command.agentId,
+      agentName: command.agentName,
+    });
+    const circleWalletId = firstNonEmpty(command.circleWalletId, binding?.circleWalletId);
+    if (!circleWalletId) {
+      throw new AppError(
+        "VALIDATION_ERROR",
+        "agentId/agentName must resolve to a real Circle wallet id, or circleWalletId must be provided",
+        400,
+      );
+    }
+
+    const walletAddress = firstNonEmpty(command.walletAddress, binding?.walletAddress);
+    if (!walletAddress) {
+      throw new AppError(
+        "VALIDATION_ERROR",
+        "agentId/agentName must resolve to a wallet address, or walletAddress must be provided",
+        400,
+      );
+    }
+
+    const amountAtomic = parsePositiveBigInt(command.amountAtomic, "amountAtomic");
+    const amount = atomicUsdcToDecimal(command.amountAtomic);
+    const tokenAddress = normalizeRequestAddress(
+      this.config.x402.usdcAssetAddress,
+      "X402_USDC_ASSET_ADDRESS",
+    );
+    const chainConfig = gatewayChainConfig(this.config.x402.network);
+    const gatewayWallet = normalizeRequestAddress(
+      chainConfig.gatewayWallet,
+      "Gateway verifying contract",
+    );
+    const normalizedWalletAddress = normalizeRequestAddress(walletAddress, "walletAddress");
+
+    const raw = await this.circleWalletService.depositToGateway({
+      walletId: circleWalletId,
+      walletAddress: normalizedWalletAddress,
+      tokenAddress,
+      gatewayWallet,
+      amountAtomic: amountAtomic.toString(),
+      refId: command.refId,
+    });
+    const gatewayBalance = await this.circleWalletService.getGatewayBalance(
+      normalizedWalletAddress,
+      chainConfig.domain,
+    );
+    const approvalTransaction = extractTransaction(raw.approvalFinal ?? raw.approval);
+    const depositTransaction = extractTransaction(raw.depositFinal ?? raw.deposit);
+
+    return {
+      agentId: binding?.agentId ?? command.agentId ?? null,
+      agentName: binding?.agentName ?? command.agentName ?? null,
+      circleWalletId,
+      walletAddress: normalizedWalletAddress,
+      asset: "USDC",
+      amount,
+      amountAtomic: amountAtomic.toString(),
+      tokenAddress,
+      gatewayWallet,
+      blockchain: "BASE-SEPOLIA",
+      approvalTransactionId: approvalTransaction.id,
+      approvalState: approvalTransaction.state,
+      depositTransactionId: depositTransaction.id,
+      depositState: depositTransaction.state,
+      gatewayBalance: {
+        availableAtomic: gatewayBalance.available.toString(),
+        totalAtomic: gatewayBalance.total.toString(),
+        formattedAvailable: gatewayBalance.formattedAvailable,
+        formattedTotal: gatewayBalance.formattedTotal,
+      },
+      mode: "gateway_deposit",
       raw,
     };
   }

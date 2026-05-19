@@ -89,7 +89,10 @@ export type CircleEntitySecretCiphertextFactory = (
 type CircleWalletClient =
   Pick<
     CircleDeveloperControlledWalletsClient,
-    "createTransaction" | "getTransaction" | "requestTestnetTokens"
+    | "createContractExecutionTransaction"
+    | "createTransaction"
+    | "getTransaction"
+    | "requestTestnetTokens"
   > &
     Partial<Pick<CircleDeveloperControlledWalletsClient, "signTypedData">>;
 
@@ -97,6 +100,7 @@ export type CircleWalletServiceOptions = {
   createEntitySecretCiphertext?: CircleEntitySecretCiphertextFactory;
   fetchImpl?: typeof fetch;
   client?: CircleWalletClient | {
+    createContractExecutionTransaction?(input: unknown): Promise<any>;
     createTransaction(input: unknown): Promise<any>;
     getTransaction(input: unknown): Promise<any>;
     requestTestnetTokens(input: unknown): Promise<any>;
@@ -108,6 +112,7 @@ export class CircleWalletService {
   private readonly createEntitySecretCiphertext?: CircleEntitySecretCiphertextFactory;
   private readonly fetchImpl: typeof fetch;
   private readonly client?: CircleWalletClient | {
+    createContractExecutionTransaction?(input: unknown): Promise<any>;
     createTransaction(input: unknown): Promise<any>;
     getTransaction(input: unknown): Promise<any>;
     requestTestnetTokens(input: unknown): Promise<any>;
@@ -478,6 +483,99 @@ export class CircleWalletService {
     return { verify, settle };
   }
 
+  async depositToGateway(command: {
+    walletId: string;
+    walletAddress: string;
+    tokenAddress: string;
+    gatewayWallet: string;
+    amountAtomic: string;
+    refId?: string;
+  }): Promise<{
+    approval: unknown;
+    approvalFinal: unknown;
+    deposit: unknown;
+    depositFinal: unknown;
+  }> {
+    if (this.config.network.mockChain) {
+      const approvalTx = mockTransactionHash("approve", command.walletId, command.amountAtomic);
+      const depositTx = mockTransactionHash("deposit", command.walletId, command.amountAtomic);
+      return {
+        approval: { transaction: { id: approvalTx, state: "COMPLETE" } },
+        approvalFinal: { transaction: { id: approvalTx, state: "COMPLETE" } },
+        deposit: { transaction: { id: depositTx, state: "COMPLETE" } },
+        depositFinal: { transaction: { id: depositTx, state: "COMPLETE" } },
+      };
+    }
+
+    const client = this.requireClient();
+    if (typeof client.createContractExecutionTransaction !== "function") {
+      throw new AppError(
+        "CONFIG_ERROR",
+        "Circle contract execution support is required for Gateway deposits",
+        500,
+      );
+    }
+
+    const approval = (
+      await client.createContractExecutionTransaction({
+        walletId: command.walletId,
+        contractAddress: normalizeAddress(command.tokenAddress),
+        abiFunctionSignature: "approve(address,uint256)",
+        abiParameters: [normalizeAddress(command.gatewayWallet), command.amountAtomic],
+        refId: appendRef(command.refId, "gateway-approve"),
+        fee: {
+          type: "level",
+          config: {
+            feeLevel: "MEDIUM",
+          },
+        },
+      } as any)
+    ).data;
+    const approvalTransaction = extractCircleTransaction(approval);
+    if (!approvalTransaction.id) {
+      throw new AppError(
+        "UPSTREAM_REQUEST_FAILED",
+        "Circle approval response did not include a transaction id",
+        502,
+        approval,
+      );
+    }
+    const approvalFinal = await this.waitForCircleTransaction(approvalTransaction.id);
+
+    const deposit = (
+      await client.createContractExecutionTransaction({
+        walletId: command.walletId,
+        contractAddress: normalizeAddress(command.gatewayWallet),
+        abiFunctionSignature: "deposit(address,uint256)",
+        abiParameters: [normalizeAddress(command.tokenAddress), command.amountAtomic],
+        refId: appendRef(command.refId, "gateway-deposit"),
+        fee: {
+          type: "level",
+          config: {
+            feeLevel: "MEDIUM",
+          },
+        },
+      } as any)
+    ).data;
+    const depositTransaction = extractCircleTransaction(deposit);
+    if (!depositTransaction.id) {
+      throw new AppError(
+        "UPSTREAM_REQUEST_FAILED",
+        "Circle Gateway deposit response did not include a transaction id",
+        502,
+        deposit,
+      );
+    }
+    const depositFinal = await this.waitForCircleTransaction(depositTransaction.id);
+
+    return {
+      approval,
+      approvalFinal,
+      deposit,
+      depositFinal,
+    };
+  }
+
   async getTransaction(transactionId: string): Promise<unknown> {
     if (this.config.network.mockChain) {
       return {
@@ -507,6 +605,7 @@ export class CircleWalletService {
   }
 
   private requireClient(): CircleWalletClient | {
+    createContractExecutionTransaction?(input: unknown): Promise<any>;
     createTransaction(input: unknown): Promise<any>;
     getTransaction(input: unknown): Promise<any>;
     requestTestnetTokens(input: unknown): Promise<any>;
@@ -531,6 +630,36 @@ export class CircleWalletService {
       entitySecret,
       baseUrl: circleSdkBaseUrl(this.config.circle.baseUrl),
     });
+  }
+
+  private async waitForCircleTransaction(transactionId: string): Promise<unknown> {
+    const deadline = Date.now() + 120_000;
+    let lastPayload: unknown = null;
+
+    while (Date.now() < deadline) {
+      lastPayload = await this.getTransaction(transactionId);
+      const transaction = extractCircleTransaction(lastPayload);
+      const state = transaction.state?.toUpperCase() ?? null;
+      if (state && ["COMPLETE", "CONFIRMED", "SUCCESS", "MINED"].includes(state)) {
+        return lastPayload;
+      }
+      if (state && ["FAILED", "CANCELLED", "CANCELED", "DENIED"].includes(state)) {
+        throw new AppError(
+          "UPSTREAM_REQUEST_FAILED",
+          `Circle transaction ${transactionId} failed with state ${state}`,
+          424,
+          lastPayload,
+        );
+      }
+      await sleep(5_000);
+    }
+
+    throw new AppError(
+      "UPSTREAM_REQUEST_FAILED",
+      `Timed out waiting for Circle transaction ${transactionId} to complete`,
+      504,
+      lastPayload,
+    );
   }
 }
 
@@ -576,6 +705,14 @@ function mockTransactionHash(...values: string[]): `0x${string}` {
 function mockSignature(...values: string[]): `0x${string}` {
   const digest = createHash("sha512").update(values.join(":")).digest("hex");
   return `0x${digest}${digest.slice(0, 2)}`;
+}
+
+function appendRef(refId: string | undefined, suffix: string): string {
+  return refId ? `${refId}:${suffix}` : suffix;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function stringifyJsonSafe(value: unknown): string {
@@ -691,6 +828,25 @@ function extractSignature(payload: unknown): `0x${string}` | null {
   return typeof signature === "string" && signature.startsWith("0x")
     ? (signature as `0x${string}`)
     : null;
+}
+
+function extractCircleTransaction(payload: unknown): {
+  id: string | null;
+  state: string | null;
+} {
+  const container = isRecord(payload) && isRecord(payload.transaction)
+    ? payload.transaction
+    : isRecord(payload) && isRecord(payload.data) && isRecord(payload.data.transaction)
+      ? payload.data.transaction
+      : isRecord(payload) && typeof payload.id === "string"
+        ? payload
+        : isRecord(payload) && isRecord(payload.data) && typeof payload.data.id === "string"
+          ? payload.data
+          : null;
+  return {
+    id: typeof container?.id === "string" ? container.id : null,
+    state: typeof container?.state === "string" ? container.state : null,
+  };
 }
 
 function isTokenBalance(value: unknown): value is CircleWalletTokenBalance {

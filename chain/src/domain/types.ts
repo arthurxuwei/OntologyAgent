@@ -222,6 +222,40 @@ export type AgentWalletTransferCommand = {
   refId?: string;
 };
 
+export type AgentWalletGatewayDepositCommand = {
+  agentId?: string;
+  agentName?: string;
+  circleWalletId?: string;
+  walletAddress?: string;
+  amountAtomic: string;
+  refId?: string;
+};
+
+export type AgentWalletGatewayDepositResult = {
+  agentId: string | null;
+  agentName: string | null;
+  circleWalletId: string;
+  walletAddress: string;
+  asset: "USDC";
+  amount: string;
+  amountAtomic: string;
+  tokenAddress: string;
+  gatewayWallet: string;
+  blockchain: "BASE-SEPOLIA";
+  approvalTransactionId: string | null;
+  approvalState: string | null;
+  depositTransactionId: string | null;
+  depositState: string | null;
+  gatewayBalance: {
+    availableAtomic: string;
+    totalAtomic: string;
+    formattedAvailable: string;
+    formattedTotal: string;
+  };
+  mode: "gateway_deposit";
+  raw: unknown;
+};
+
 export type AgentWalletTransferResult = {
   fromAgentId: string | null;
   fromAgentName: string | null;
