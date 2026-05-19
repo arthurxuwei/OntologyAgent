@@ -1406,3 +1406,79 @@ test("CircleWalletService serializes bigint typed data and adds EIP712Domain for
   ]);
   assert.equal(signedData.message.value, "1000");
 });
+
+test("CircleWalletService wraps direct Gateway payloads with x402 envelope", async () => {
+  const requests: Array<{ url: string; body: any }> = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    requests.push({
+      url,
+      body: JSON.parse(String(init?.body)),
+    });
+    if (url.endsWith("/v1/x402/verify")) {
+      return new Response(
+        JSON.stringify({ isValid: true, payer: "0x1111111111111111111111111111111111111111" }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
+    }
+    return new Response(
+      JSON.stringify({
+        success: true,
+        payer: "0x1111111111111111111111111111111111111111",
+        transaction: "0xgatewaysettlement",
+        network: "eip155:84532",
+      }),
+      {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      },
+    );
+  }) as typeof fetch;
+
+  try {
+    const service = new CircleWalletService(
+      liveCircleConfig({ X402_FACILITATOR_URL: "https://gateway-api-testnet.circle.com" }),
+    );
+    const paymentRequirements = {
+      scheme: "exact",
+      network: "eip155:84532",
+      asset: "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+      amount: "1000",
+      payTo: "0x2222222222222222222222222222222222222222",
+      maxTimeoutSeconds: 604800,
+      extra: {
+        name: "GatewayWalletBatched",
+        version: "1",
+        verifyingContract: "0x0077777d7eba4688bdef3e311b846f25870a19b9",
+      },
+    };
+
+    const result = await service.settleGatewayPayment({
+      paymentPayload: {
+        x402Version: 2,
+        payload: {
+          signature: `0x${"33".repeat(65)}`,
+        },
+      },
+      paymentRequirements,
+    });
+
+    assert.equal(result.verify.isValid, true);
+    assert.equal(result.settle.success, true);
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0].url, "https://gateway-api-testnet.circle.com/v1/x402/verify");
+    assert.deepEqual(requests[0].body.paymentPayload.resource, {
+      url: "agent-wallet://gateway-transfer",
+      description: "Agent Wallet Gateway transfer",
+      mimeType: "application/json",
+    });
+    assert.deepEqual(requests[0].body.paymentPayload.accepted, paymentRequirements);
+    assert.deepEqual(requests[1].body.paymentPayload.accepted, paymentRequirements);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

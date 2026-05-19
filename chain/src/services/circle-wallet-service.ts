@@ -50,6 +50,12 @@ export type CircleGatewayBalance = {
 
 type GatewayPaymentPayload = {
   x402Version: number;
+  resource?: {
+    url: string;
+    description: string;
+    mimeType: string;
+  };
+  accepted?: Record<string, unknown>;
   payload: unknown;
 };
 
@@ -464,8 +470,12 @@ export class CircleWalletService {
     const facilitator = new BatchFacilitatorClient({
       url: gatewayFacilitatorBaseUrl(this.config.x402.facilitatorUrl),
     });
+    const paymentPayload = withGatewayPaymentEnvelope(
+      command.paymentPayload,
+      command.paymentRequirements,
+    );
     const verify = await facilitator.verify(
-      command.paymentPayload as any,
+      paymentPayload as any,
       command.paymentRequirements as any,
     );
     if (!verify.isValid) {
@@ -479,7 +489,7 @@ export class CircleWalletService {
       };
     }
     const settle = await facilitator.settle(
-      command.paymentPayload as any,
+      paymentPayload as any,
       command.paymentRequirements as any,
     );
     return { verify, settle };
@@ -762,6 +772,21 @@ function eip712DomainFields(domain: Record<string, unknown>): Array<{ name: stri
     fields.push({ name: "salt", type: "bytes32" });
   }
   return fields;
+}
+
+function withGatewayPaymentEnvelope(
+  paymentPayload: GatewayPaymentPayload,
+  paymentRequirements: GatewayPaymentRequirements,
+): GatewayPaymentPayload {
+  return {
+    ...paymentPayload,
+    resource: paymentPayload.resource ?? {
+      url: "agent-wallet://gateway-transfer",
+      description: "Agent Wallet Gateway transfer",
+      mimeType: "application/json",
+    },
+    accepted: paymentPayload.accepted ?? paymentRequirements,
+  };
 }
 
 async function parseJsonPayload(response: Response): Promise<unknown> {
