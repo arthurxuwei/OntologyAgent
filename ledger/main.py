@@ -530,6 +530,17 @@ def short_address(value: Any) -> str:
     return f"{text[:10]}...{text[-6:]}"
 
 
+def claim_code_for_account(account: dict[str, Any], owner_email: str) -> str:
+    agent_id = str(account.get("agentId") or "").strip()
+    wallet_address = str(
+        account.get("walletAddress") or account.get("circleWalletId") or ""
+    ).strip()
+    seed = f"{normalize_email(owner_email) or ''}:{agent_id}:{wallet_address}".encode(
+        "utf-8"
+    )
+    return "clm_" + hashlib.sha256(seed).hexdigest()[:18]
+
+
 def normalize_evm_address(value: Any) -> str:
     text = str(value or "").strip()
     if len(text) != 42 or not text.startswith("0x"):
@@ -886,6 +897,7 @@ def build_claimable_agents(
                 "agentId": agent_id,
                 "agentName": str(account.get("agentName") or agent_id),
                 "ownerEmail": normalized_email,
+                "claimCode": claim_code_for_account(account, normalized_email),
                 "walletAddress": str(wallet_address),
                 "displayWalletAddress": short_address(wallet_address),
                 "circleWalletId": account.get("circleWalletId"),

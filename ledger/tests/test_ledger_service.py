@@ -239,6 +239,10 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertIn("if (!claimed)    return <window.MvpClaimScreen />", html)
         self.assertIn("window.ClaimForm = ClaimForm", html)
         self.assertIn("fetch(`/dashboard/claimable-agents?", html)
+        self.assertIn("t('mvp.dash.claim.code_label')", html)
+        self.assertIn("candidate.claimCode", html)
+        self.assertNotIn("agent id / name", html)
+        self.assertNotIn("function CandidateButton", html)
         self.assertIn("window.localStorage.getItem(STORAGE_KEYS.mockState) || 'day1'", html)
         self.assertNotIn('type="email"', html)
         self.assertNotIn('placeholder="you@example.com"', html)
@@ -373,6 +377,8 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertEqual(candidate["agentName"], "Beta Research")
         self.assertEqual(candidate["ownerEmail"], "owner@example.com")
         self.assertEqual(candidate["claimStatus"], "unclaimed")
+        self.assertTrue(candidate["claimCode"].startswith("clm_"))
+        self.assertNotEqual(candidate["claimCode"], "agent_beta")
         self.assertEqual(candidate["dashboard"]["balance"]["available"], 1.25)
 
     def test_management_page_helpers_render_and_call_ledger_api(self) -> None:

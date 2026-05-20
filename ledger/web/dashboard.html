@@ -3222,10 +3222,13 @@ window.MockStateToggle = MockStateToggle;
 (function () {
   function ClaimForm({ mode = 'initial', onClaimed, onDismiss }) {
     const t = window.useT();
-    const { agents: claimedAgents, claimAgent, ownerEmail, currentUser, resetAll } = window.useAppState();
+    const { agents: claimedAgents, claimAgent, ownerEmail, currentUser, resetAll, claimToken } = window.useAppState();
     const [candidates, setCandidates] = React.useState([]);
     const [status, setStatus] = React.useState('loading');
-    const [query, setQuery] = React.useState('');
+    const [code, setCode] = React.useState(() =>
+      (mode === 'initial' && claimToken) ? claimToken : ''
+    );
+    const [step, setStep] = React.useState('input');
     const [matched, setMatched] = React.useState(null);
     const [errorKey, setErrorKey] = React.useState('');
 
@@ -3249,7 +3252,6 @@ window.MockStateToggle = MockStateToggle;
           const next = Array.isArray(payload.agents) ? payload.agents : [];
           setCandidates(next);
           setStatus(next.length ? 'ready' : 'empty');
-          if (next.length === 1) setMatched(next[0]);
         })
         .catch(() => {
           if (cancelled) return;
@@ -3259,25 +3261,35 @@ window.MockStateToggle = MockStateToggle;
       return () => { cancelled = true; };
     }, [ownerEmail, claimedAgents]);
 
-    const trimmedQuery = query.trim();
-    const canValidate = candidates.length > 0 && (trimmedQuery.length > 0 || candidates.length === 1);
+    const trimmedCode = code.trim();
+    const canValidate = candidates.length > 0 && trimmedCode.length > 0;
+    const demoCodes = React.useMemo(() => {
+      return candidates
+        .filter((candidate) => candidate.claimCode && !claimedAgents.includes(candidate.agentId))
+        .map((candidate) => [candidate.claimCode, candidate.agentName || candidate.agentId]);
+    }, [candidates, claimedAgents]);
 
     const handleValidate = () => {
       if (!canValidate) return;
-      const lowered = trimmedQuery.toLowerCase();
-      const next = trimmedQuery
-        ? candidates.find((candidate) => (
-            String(candidate.agentId || '').toLowerCase() === lowered ||
-            String(candidate.agentName || '').toLowerCase().includes(lowered)
-          ))
-        : candidates[0];
+      const lowered = trimmedCode.toLowerCase();
+      const next = candidates.find((candidate) => (
+        String(candidate.claimCode || '').trim().toLowerCase() === lowered
+      ));
       if (!next) {
         setMatched(null);
         setErrorKey('mvp.dash.claim.error_not_found');
+        setStep('input');
+        return;
+      }
+      if (claimedAgents.includes(next.agentId)) {
+        setMatched(null);
+        setErrorKey('mvp.dash.claim.error_already_claimed');
+        setStep('input');
         return;
       }
       setErrorKey('');
       setMatched(next);
+      setStep('confirm');
     };
 
     const handleClaim = (candidate) => {
@@ -3287,10 +3299,18 @@ window.MockStateToggle = MockStateToggle;
     };
 
     const handleUseDifferent = () => {
+      setStep('input');
       setMatched(null);
-      setQuery('');
+      setCode('');
       setErrorKey('');
-      if (mode === 'initial' && resetAll) resetAll();
+    };
+
+    const handleReturnToRegistration = () => {
+      setStep('input');
+      setMatched(null);
+      setCode('');
+      setErrorKey('');
+      if (resetAll) resetAll();
     };
 
     if (status === 'loading') {
@@ -3303,16 +3323,17 @@ window.MockStateToggle = MockStateToggle;
       return (
         <>
           <ClaimStatusCard title="No unclaimed agents" body={ownerEmail || '-'} />
-          <UseDifferentButton onClick={handleUseDifferent}>{t('dash.claim.return_to_registration')}</UseDifferentButton>
+          <UseDifferentButton onClick={handleReturnToRegistration}>{t('dash.claim.return_to_registration')}</UseDifferentButton>
         </>
       );
     }
 
-    if (matched) {
+    if (step === 'confirm' && matched) {
       return (
         <ConfirmStep
           t={t}
           candidate={matched}
+          code={trimmedCode}
           ownerHandle={ownerHandleFor(currentUser) || ownerEmail}
           onClaim={() => handleClaim(matched)}
           onUseDifferent={handleUseDifferent}
@@ -3321,19 +3342,38 @@ window.MockStateToggle = MockStateToggle;
     }
 
     return (
+      <InputStep
+        t={t}
+        code={code}
+        onCodeChange={(value) => {
+          setCode(value);
+          if (errorKey) setErrorKey('');
+        }}
+        onValidate={handleValidate}
+        canValidate={canValidate}
+        errorKey={errorKey}
+        demoCodes={demoCodes}
+        mode={mode}
+      />
+    );
+  }
+
+  function InputStep({ t, code, onCodeChange, onValidate, canValidate, errorKey, demoCodes, mode }) {
+    const handleKey = (e) => { if (e.key === 'Enter' && canValidate) onValidate(); };
+    return (
       <>
         <div className="font-body" style={{ fontSize: '13px', color: 'var(--ink-secondary)', lineHeight: 1.55, marginBottom: '16px' }}>
           {t(mode === 'initial' ? 'mvp.dash.claim.input_help_initial' : 'mvp.dash.claim.input_help_add')}
         </div>
         <div className="smallcaps-mono" style={{ color: 'var(--ink-secondary)', marginBottom: '6px', fontSize: '10px' }}>
-          {t('dash.claim.agent_label')}
+          {t('mvp.dash.claim.code_label')}
         </div>
         <input
           type="text"
-          value={query}
-          onChange={(e) => { setQuery(e.target.value); if (errorKey) setErrorKey(''); }}
-          onKeyDown={(e) => { if (e.key === 'Enter' && canValidate) handleValidate(); }}
-          placeholder={candidates.length === 1 ? candidates[0].agentName || candidates[0].agentId : 'agent id / name'}
+          value={code}
+          onChange={(e) => onCodeChange(e.target.value)}
+          onKeyDown={handleKey}
+          placeholder={t('mvp.dash.claim.code_placeholder')}
           autoFocus
           className="font-mono"
           style={{ width: '100%', padding: '10px 14px', border: `1px solid ${errorKey ? 'var(--status-negative)' : 'var(--stroke-rule)'}`, background: 'var(--surface-paper)', fontSize: '13px', color: 'var(--ink-primary)', outline: 'none', letterSpacing: '0.02em' }}
@@ -3342,28 +3382,41 @@ window.MockStateToggle = MockStateToggle;
           <div className="font-body" style={{ marginTop: '6px', fontSize: '11px', color: 'var(--status-negative)' }}>{t(errorKey)}</div>
         )}
         <div style={{ marginTop: '18px' }}>
-          <button type="button" onClick={handleValidate} disabled={!canValidate} className="font-body" style={{ padding: '10px 22px', background: canValidate ? 'var(--ink-primary)' : 'var(--stroke-hairline)', border: `1px solid ${canValidate ? 'var(--ink-primary)' : 'var(--stroke-rule)'}`, color: canValidate ? 'var(--ink-inverse)' : 'var(--ink-tertiary)', fontSize: '13px', cursor: canValidate ? 'pointer' : 'not-allowed', letterSpacing: '0.02em' }}>
+          <button type="button" onClick={onValidate} disabled={!canValidate} className="font-body" style={{ padding: '10px 22px', background: canValidate ? 'var(--ink-primary)' : 'var(--stroke-hairline)', border: `1px solid ${canValidate ? 'var(--ink-primary)' : 'var(--stroke-rule)'}`, color: canValidate ? 'var(--ink-inverse)' : 'var(--ink-tertiary)', fontSize: '13px', cursor: canValidate ? 'pointer' : 'not-allowed', letterSpacing: '0.02em' }}>
             {t('mvp.dash.claim.validate_button')} ->
           </button>
         </div>
-        <div style={{ marginTop: '28px', paddingTop: '18px', borderTop: '1px dashed var(--stroke-rule)', display: 'grid', gap: '10px' }}>
-          {candidates.map((candidate) => (
-            <CandidateButton key={candidate.agentId} candidate={candidate} onClick={() => setMatched(candidate)} />
-          ))}
-        </div>
+        {demoCodes.length > 0 && (
+          <DemoHint t={t} demoCodes={demoCodes} onUse={onCodeChange} />
+        )}
       </>
     );
   }
 
-  function CandidateButton({ candidate, onClick }) {
+  function DemoHint({ t, demoCodes, onUse }) {
     return (
-      <button type="button" onClick={onClick} style={{ display: 'grid', gridTemplateColumns: '1fr auto', alignItems: 'center', gap: '14px', padding: '14px 16px', background: 'var(--surface-card)', border: '1px solid var(--stroke-hairline)', cursor: 'pointer', textAlign: 'left' }}>
-        <div style={{ minWidth: 0 }}>
-          <div className="font-display" style={{ fontSize: '18px', color: 'var(--ink-primary)' }}>{candidate.agentName || candidate.agentId}</div>
-          <div className="font-mono" style={{ marginTop: '4px', fontSize: '11px', color: 'var(--ink-tertiary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{candidate.displayWalletAddress || candidate.walletAddress || candidate.agentId}</div>
+      <div style={{ marginTop: '28px', paddingTop: '18px', borderTop: '1px dashed var(--stroke-rule)' }}>
+        <div className="smallcaps-mono" style={{ fontSize: '10px', color: 'var(--ink-tertiary)', marginBottom: '10px', letterSpacing: '0.08em' }}>
+          {t('mvp.dash.claim.demo_hint_label')}
         </div>
-        <span className="font-mono" style={{ color: 'var(--accent-amber)' }}>-></span>
-      </button>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          {demoCodes.map(([claimCode, label]) => (
+            <div key={claimCode} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '8px 12px', background: 'var(--surface-card)', border: '1px solid var(--stroke-hairline)' }}>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div className="font-mono" style={{ fontSize: '11px', color: 'var(--ink-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {claimCode}
+                </div>
+                <div className="font-body" style={{ fontSize: '10px', color: 'var(--ink-tertiary)', marginTop: '2px' }}>
+                  {t('mvp.dash.claim.demo_hint_for')} {label}
+                </div>
+              </div>
+              <button type="button" onClick={() => onUse(claimCode)} className="smallcaps-mono" style={{ padding: '4px 10px', background: 'transparent', border: '1px solid var(--stroke-rule)', color: 'var(--ink-secondary)', fontSize: '9px', letterSpacing: '0.08em', cursor: 'pointer', textTransform: 'uppercase', flexShrink: 0 }}>
+                {t('mvp.dash.claim.demo_hint_use')}
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
     );
   }
 
@@ -3376,7 +3429,10 @@ window.MockStateToggle = MockStateToggle;
     );
   }
 
-  function ConfirmStep({ t, candidate, ownerHandle, onClaim, onUseDifferent }) {
+  function ConfirmStep({ t, candidate, code, ownerHandle, onClaim, onUseDifferent }) {
+    const truncatedCode = code.length > 22
+      ? `${code.slice(0, 14)}...${code.slice(-4)}`
+      : code;
     return (
       <>
         <div className="font-body" style={{ display: 'inline-block', padding: '4px 10px', background: 'rgba(45, 95, 63, 0.08)', border: '1px solid rgba(45, 95, 63, 0.32)', color: 'var(--status-positive)', fontSize: '11px', letterSpacing: '0.04em', marginBottom: '20px' }}>
@@ -3386,7 +3442,7 @@ window.MockStateToggle = MockStateToggle;
           <Row label={t('mvp.dash.claim.confirm_agent_label')} value={candidate.agentName || candidate.agentId} />
           <Row label={t('mvp.dash.claim.confirm_wallet_label')} value={candidate.displayWalletAddress || candidate.walletAddress || '-'} mono />
           <Row label={t('mvp.dash.claim.confirm_owner_label')} value={ownerHandle || candidate.ownerEmail || '-'} mono />
-          <Row label={t('mvp.dash.claim.confirm_code_label')} value={candidate.agentId} mono last />
+          <Row label={t('mvp.dash.claim.confirm_code_label')} value={truncatedCode} mono last />
         </div>
         <div style={{ marginTop: '22px', display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
           <button type="button" onClick={onClaim} className="font-body" style={{ padding: '12px 24px', background: 'var(--accent-amber)', color: 'var(--ink-inverse)', border: 'none', fontSize: '14px', fontWeight: 500, letterSpacing: '0.02em', cursor: 'pointer', boxShadow: '0 0 0 4px var(--accent-amber-soft)' }}>
@@ -3824,27 +3880,33 @@ window.MockStateToggle = MockStateToggle;
     'mvp.dash.claim.slug':                  { en: 'CHIEF · CLAIM',                            zh: 'CHIEF · 认领' },
     'mvp.dash.claim.initial_headline':      { en: 'Claim your first agent.',                  zh: '认领你的第一个 agent。' },
     'mvp.dash.claim.initial_subhead': {
-      en: 'Choose the unclaimed agent assigned to this email and bind it to your account.',
-      zh: '选择分配给这个邮箱、尚未认领的 agent,并绑定到你的账号。',
+      en: 'Your agent printed a claim code when it attached its wallet. Paste it below to bind ownership to your account.',
+      zh: 'agent 装钱包的时候打了一串 claim code 给你。把它粘到下面,把所有权认到你账号上。',
     },
     'mvp.dash.claim.add_title':              { en: 'Add another agent',                       zh: '添加另一个 agent' },
     'mvp.dash.claim.input_help_initial': {
-      en: 'Only unclaimed agents assigned to your email are shown here.',
-      zh: '这里仅展示分配给你邮箱、尚未认领的 agent。',
+      en: "Paste the code from your agent's chat. It looks like clm_...",
+      zh: '把 agent 在 chat 里打给你的那串 code 粘进来,通常是 clm_... 开头。',
     },
     'mvp.dash.claim.input_help_add': {
-      en: 'Search the unclaimed agents assigned to this email.',
-      zh: '搜索分配给这个邮箱、尚未认领的 agent。',
+      en: 'Paste the claim code printed by the agent you want to attach.',
+      zh: '把要添加的那个 agent 打出来的 claim code 粘进来。',
     },
-    'mvp.dash.claim.validate_button':        { en: 'Validate agent',                          zh: '验证' },
-    'mvp.dash.claim.error_not_found':        { en: 'Agent not found for this email.',         zh: '这个邮箱下没有匹配的 agent。' },
-    'mvp.dash.claim.confirm_validated':      { en: 'Agent validated',                         zh: '验证通过' },
+    'mvp.dash.claim.code_label':             { en: 'CLAIM CODE',                              zh: '认领码' },
+    'mvp.dash.claim.code_placeholder':       { en: 'clm_...',                                 zh: 'clm_...' },
+    'mvp.dash.claim.validate_button':        { en: 'Validate code',                           zh: '验证' },
+    'mvp.dash.claim.error_not_found':        { en: 'Code not recognized. Check for typos.',   zh: '没识别到这串 code,检查一下有没有打错。' },
+    'mvp.dash.claim.error_already_claimed':  { en: "You've already claimed this agent.",      zh: '这个 agent 已经认领过了。' },
+    'mvp.dash.claim.demo_hint_label':        { en: 'CLAIM CODE · paste any to try the flow',  zh: '认领码 · 用任意一个走通流程' },
+    'mvp.dash.claim.demo_hint_for':          { en: 'for',                                     zh: '对应' },
+    'mvp.dash.claim.demo_hint_use':          { en: 'Use',                                     zh: '使用' },
+    'mvp.dash.claim.confirm_validated':      { en: 'Code validated',                          zh: '验证通过' },
     'mvp.dash.claim.confirm_agent_label':    { en: 'AGENT',                                  zh: 'AGENT' },
     'mvp.dash.claim.confirm_wallet_label':   { en: 'WALLET',                                 zh: '钱包' },
     'mvp.dash.claim.confirm_owner_label':    { en: 'OWNER',                                  zh: '所有者' },
-    'mvp.dash.claim.confirm_code_label':     { en: 'AGENT ID',                               zh: 'AGENT ID' },
+    'mvp.dash.claim.confirm_code_label':     { en: 'CODE',                                   zh: '认领码' },
     'mvp.dash.claim.claim_button':           { en: 'Claim wallet',                           zh: '认领钱包' },
-    'mvp.dash.claim.use_different':          { en: 'Use a different account',                zh: '换一个账号' },
+    'mvp.dash.claim.use_different':          { en: 'Use a different code',                   zh: '换一串 code' },
 
     // ── Settings · Account card ───────────────────────────────────────────
     'mvp.dash.settings.account_signed_in_via': { en: 'SIGNED IN VIA',     zh: '登录方式' },
