@@ -379,7 +379,8 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertIn("if (!registered) return <window.MvpGithubAuthScreen />", html)
         self.assertIn("if (!claimed)    return <window.MvpClaimScreen />", html)
         self.assertIn("window.ClaimForm = ClaimForm", html)
-        self.assertIn("fetch(`/dashboard/claimable-agents?", html)
+        self.assertIn("fetch(`/dashboard/claimable-agents?claimed=${claimed}`)", html)
+        self.assertNotIn("email=${email}", html)
         self.assertIn("t('mvp.dash.claim.code_label')", html)
         self.assertIn("const canValidate = trimmedCode.length > 0", html)
         self.assertIn("candidate.claimCode", html)
@@ -396,7 +397,8 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertNotIn('type="email"', html)
         self.assertNotIn('placeholder="you@example.com"', html)
         self.assertNotIn("<window.MockStateToggle />", html)
-        self.assertIn("fetch(`/dashboard/data${emailQuery}`)", html)
+        self.assertIn("fetch('/dashboard/data')", html)
+        self.assertNotIn("const emailQuery = ownerEmail", html)
         self.assertIn("fetch('/onramp/sessions'", html)
         self.assertIn("fullWalletAddress", html)
         self.assertIn("const qrAddress = String(address || '').trim();", html)
@@ -529,6 +531,27 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertTrue(candidate["claimCode"].startswith("clm_"))
         self.assertNotEqual(candidate["claimCode"], "agent_beta")
         self.assertEqual(candidate["dashboard"]["balance"]["available"], 1.25)
+
+    def test_dashboard_claimable_agents_can_load_without_chief_email(self) -> None:
+        store = main.get_store()
+        store.bind_account_wallet(
+            agent_id="agent_eigenflux",
+            agent_name="EigenFlux Worker",
+            email="agent-bound@example.com",
+            wallet_address="0x4444444444444444444444444444444444444444",
+            circle_wallet_id="circle-eigenflux",
+        )
+
+        response = self.client.get("/dashboard/claimable-agents")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertIsNone(payload["email"])
+        self.assertEqual(len(payload["agents"]), 1)
+        candidate = payload["agents"][0]
+        self.assertEqual(candidate["agentId"], "agent_eigenflux")
+        self.assertEqual(candidate["ownerEmail"], "agent-bound@example.com")
+        self.assertTrue(candidate["claimCode"].startswith("clm_"))
 
     def test_management_page_helpers_render_and_call_ledger_api(self) -> None:
         if shutil.which("node") is None:

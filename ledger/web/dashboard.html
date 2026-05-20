@@ -3217,7 +3217,7 @@ window.MockStateToggle = MockStateToggle;
 <script type="text/babel" data-src="src/dashboard/Onboarding/ClaimForm.jsx">
 // MVP ClaimForm fused with the real ledger dashboard: the surface keeps the
 // prototype's validate/confirm shape, but candidates come from the logged-in
-// email via /dashboard/claimable-agents.
+// claim code via /dashboard/claimable-agents.
 
 (function () {
   function ClaimForm({ mode = 'initial', onClaimed, onDismiss }) {
@@ -3234,15 +3234,9 @@ window.MockStateToggle = MockStateToggle;
 
     React.useEffect(() => {
       let cancelled = false;
-      if (!ownerEmail) {
-        setCandidates([]);
-        setStatus('empty');
-        return () => { cancelled = true; };
-      }
       const claimed = encodeURIComponent(claimedAgents.join(','));
-      const email = encodeURIComponent(ownerEmail);
       setStatus('loading');
-      fetch(`/dashboard/claimable-agents?email=${email}&claimed=${claimed}`)
+      fetch(`/dashboard/claimable-agents?claimed=${claimed}`)
         .then((response) => {
           if (!response.ok) throw new Error(`claimable agents ${response.status}`);
           return response.json();
@@ -3259,7 +3253,7 @@ window.MockStateToggle = MockStateToggle;
           setStatus('error');
         });
       return () => { cancelled = true; };
-    }, [ownerEmail, claimedAgents]);
+    }, [claimedAgents]);
 
     const trimmedCode = code.trim();
     const canValidate = trimmedCode.length > 0;
@@ -3391,7 +3385,7 @@ window.MockStateToggle = MockStateToggle;
         )}
         {status === 'empty' && (
           <div className="font-body" style={{ marginTop: '18px', fontSize: '12px', color: 'var(--ink-tertiary)', lineHeight: 1.5 }}>
-            {t('mvp.dash.claim.no_agents')} {ownerEmail || '-'}
+            {t('mvp.dash.claim.no_agents')}
             <div style={{ marginTop: '10px' }}>
               <UseDifferentButton onClick={onReturnToRegistration}>{t('dash.claim.return_to_registration')}</UseDifferentButton>
             </div>
@@ -3901,7 +3895,7 @@ window.MockStateToggle = MockStateToggle;
     'mvp.dash.claim.error_load_failed':      { en: 'Unable to load claim codes. Try again after the ledger service is available.', zh: '暂时加载不了 claim code,等 ledger 服务恢复后再试。' },
     'mvp.dash.claim.error_not_found':        { en: 'Code not recognized. Check for typos.',   zh: '没识别到这串 code,检查一下有没有打错。' },
     'mvp.dash.claim.error_already_claimed':  { en: "You've already claimed this agent.",      zh: '这个 agent 已经认领过了。' },
-    'mvp.dash.claim.no_agents':              { en: 'No unclaimed agents for',                 zh: '当前邮箱没有未认领 agent:' },
+    'mvp.dash.claim.no_agents':              { en: 'No unclaimed agents available.',          zh: '当前没有可认领的 agent。' },
     'mvp.dash.claim.demo_hint_label':        { en: 'DEMO CODE · paste any to try the flow',   zh: '演示 CODE · 用任意一个走通流程' },
     'mvp.dash.claim.demo_hint_for':          { en: 'for',                                     zh: '对应' },
     'mvp.dash.claim.demo_hint_use':          { en: 'Use',                                     zh: '使用' },
@@ -7316,8 +7310,7 @@ window.MockStateToggle = MockStateToggle;
 
     React.useEffect(() => {
       let cancelled = false;
-      const emailQuery = ownerEmail ? `?email=${encodeURIComponent(ownerEmail)}` : '';
-      fetch(`/dashboard/data${emailQuery}`)
+      fetch('/dashboard/data')
         .then((response) => {
           if (!response.ok) throw new Error(`dashboard data ${response.status}`);
           return response.json();

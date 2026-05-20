@@ -883,13 +883,11 @@ def scoped_ledger_state(
 
 def build_claimable_agents(
     *,
-    email: str,
+    email: Optional[str] = None,
     ledger_state: dict[str, Any],
     claimed_agent_ids: list[str],
 ) -> dict[str, Any]:
     normalized_email = normalize_email(email)
-    if normalized_email is None:
-        raise HTTPException(status_code=400, detail="email is required")
     claimed = {str(agent_id).strip() for agent_id in claimed_agent_ids if str(agent_id).strip()}
     dashboard_state = build_dashboard_data(ledger_state)
     candidates: list[dict[str, Any]] = []
@@ -903,7 +901,8 @@ def build_claimable_agents(
         agent_id = str(account.get("agentId") or "").strip()
         if not agent_id or agent_id in seen or agent_id in claimed:
             continue
-        if normalize_email(account.get("email")) != normalized_email:
+        account_email = normalize_email(account.get("email"))
+        if normalized_email and account_email != normalized_email:
             continue
         seen.add(agent_id)
         wallet_address = (
@@ -916,8 +915,8 @@ def build_claimable_agents(
             {
                 "agentId": agent_id,
                 "agentName": str(account.get("agentName") or agent_id),
-                "ownerEmail": normalized_email,
-                "claimCode": claim_code_for_account(account, normalized_email),
+                "ownerEmail": account_email,
+                "claimCode": claim_code_for_account(account, account_email or ""),
                 "walletAddress": str(wallet_address),
                 "displayWalletAddress": short_address(wallet_address),
                 "circleWalletId": account.get("circleWalletId"),
@@ -2623,7 +2622,7 @@ async def dashboard_data(email: str = "") -> dict[str, Any]:
 
 
 @app.get("/dashboard/claimable-agents")
-async def dashboard_claimable_agents(email: str, claimed: str = "") -> dict[str, Any]:
+async def dashboard_claimable_agents(email: str = "", claimed: str = "") -> dict[str, Any]:
     claimed_agent_ids = [
         item.strip()
         for item in claimed.split(",")
