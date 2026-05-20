@@ -3262,7 +3262,7 @@ window.MockStateToggle = MockStateToggle;
     }, [ownerEmail, claimedAgents]);
 
     const trimmedCode = code.trim();
-    const canValidate = candidates.length > 0 && trimmedCode.length > 0;
+    const canValidate = trimmedCode.length > 0;
     const demoCodes = React.useMemo(() => {
       return candidates
         .filter((candidate) => candidate.claimCode && !claimedAgents.includes(candidate.agentId))
@@ -3271,6 +3271,18 @@ window.MockStateToggle = MockStateToggle;
 
     const handleValidate = () => {
       if (!canValidate) return;
+      if (status === 'loading') {
+        setMatched(null);
+        setErrorKey('mvp.dash.claim.error_loading');
+        setStep('input');
+        return;
+      }
+      if (status === 'error') {
+        setMatched(null);
+        setErrorKey('mvp.dash.claim.error_load_failed');
+        setStep('input');
+        return;
+      }
       const lowered = trimmedCode.toLowerCase();
       const next = candidates.find((candidate) => (
         String(candidate.claimCode || '').trim().toLowerCase() === lowered
@@ -3313,21 +3325,6 @@ window.MockStateToggle = MockStateToggle;
       if (resetAll) resetAll();
     };
 
-    if (status === 'loading') {
-      return <ClaimStatusCard title="Looking up agents" body={ownerEmail || '-'} />;
-    }
-    if (status === 'error') {
-      return <ClaimStatusCard title="Unable to load agents" body="Try again after the ledger service is available." />;
-    }
-    if (status === 'empty') {
-      return (
-        <>
-          <ClaimStatusCard title="No unclaimed agents" body={ownerEmail || '-'} />
-          <UseDifferentButton onClick={handleReturnToRegistration}>{t('dash.claim.return_to_registration')}</UseDifferentButton>
-        </>
-      );
-    }
-
     if (step === 'confirm' && matched) {
       return (
         <ConfirmStep
@@ -3353,12 +3350,15 @@ window.MockStateToggle = MockStateToggle;
         canValidate={canValidate}
         errorKey={errorKey}
         demoCodes={demoCodes}
+        status={status}
+        ownerEmail={ownerEmail}
         mode={mode}
+        onReturnToRegistration={handleReturnToRegistration}
       />
     );
   }
 
-  function InputStep({ t, code, onCodeChange, onValidate, canValidate, errorKey, demoCodes, mode }) {
+  function InputStep({ t, code, onCodeChange, onValidate, canValidate, errorKey, demoCodes, status, ownerEmail, mode, onReturnToRegistration }) {
     const handleKey = (e) => { if (e.key === 'Enter' && canValidate) onValidate(); };
     return (
       <>
@@ -3389,6 +3389,14 @@ window.MockStateToggle = MockStateToggle;
         {demoCodes.length > 0 && (
           <DemoHint t={t} demoCodes={demoCodes} onUse={onCodeChange} />
         )}
+        {status === 'empty' && (
+          <div className="font-body" style={{ marginTop: '18px', fontSize: '12px', color: 'var(--ink-tertiary)', lineHeight: 1.5 }}>
+            {t('mvp.dash.claim.no_agents')} {ownerEmail || '-'}
+            <div style={{ marginTop: '10px' }}>
+              <UseDifferentButton onClick={onReturnToRegistration}>{t('dash.claim.return_to_registration')}</UseDifferentButton>
+            </div>
+          </div>
+        )}
       </>
     );
   }
@@ -3416,15 +3424,6 @@ window.MockStateToggle = MockStateToggle;
             </div>
           ))}
         </div>
-      </div>
-    );
-  }
-
-  function ClaimStatusCard({ title, body }) {
-    return (
-      <div style={{ padding: '24px', background: 'var(--surface-card)', border: '1px solid var(--stroke-hairline)' }}>
-        <div className="font-display" style={{ fontSize: '22px', color: 'var(--ink-primary)' }}>{title}</div>
-        <div className="font-body" style={{ marginTop: '8px', fontSize: '14px', color: 'var(--ink-secondary)' }}>{body}</div>
       </div>
     );
   }
@@ -3898,8 +3897,11 @@ window.MockStateToggle = MockStateToggle;
     'mvp.dash.claim.code_label':             { en: 'CLAIM CODE',                              zh: '认领码' },
     'mvp.dash.claim.code_placeholder':       { en: 'clm_…',                                   zh: 'clm_…' },
     'mvp.dash.claim.validate_button':        { en: 'Validate code',                           zh: '验证' },
+    'mvp.dash.claim.error_loading':          { en: 'Still loading claim codes. Try again in a moment.', zh: 'claim code 还在加载,稍后再试。' },
+    'mvp.dash.claim.error_load_failed':      { en: 'Unable to load claim codes. Try again after the ledger service is available.', zh: '暂时加载不了 claim code,等 ledger 服务恢复后再试。' },
     'mvp.dash.claim.error_not_found':        { en: 'Code not recognized. Check for typos.',   zh: '没识别到这串 code,检查一下有没有打错。' },
     'mvp.dash.claim.error_already_claimed':  { en: "You've already claimed this agent.",      zh: '这个 agent 已经认领过了。' },
+    'mvp.dash.claim.no_agents':              { en: 'No unclaimed agents for',                 zh: '当前邮箱没有未认领 agent:' },
     'mvp.dash.claim.demo_hint_label':        { en: 'DEMO CODE · paste any to try the flow',   zh: '演示 CODE · 用任意一个走通流程' },
     'mvp.dash.claim.demo_hint_for':          { en: 'for',                                     zh: '对应' },
     'mvp.dash.claim.demo_hint_use':          { en: 'Use',                                     zh: '使用' },
