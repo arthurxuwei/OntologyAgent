@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import {
   initiateDeveloperControlledWalletsClient,
   type CircleDeveloperControlledWalletsClient,
@@ -86,6 +86,29 @@ type GatewaySettleResponse = {
 export type CircleGatewaySettlementResult = {
   verify: GatewayVerifyResponse;
   settle: GatewaySettleResponse;
+};
+
+const MAX_UINT256 = (2n ** 256n - 1n).toString();
+
+type GatewayBurnIntent = {
+  maxBlockHeight: string;
+  maxFee: string;
+  spec: {
+    version: number;
+    sourceDomain: number;
+    destinationDomain: number;
+    sourceContract: string;
+    destinationContract: string;
+    sourceToken: string;
+    destinationToken: string;
+    sourceDepositor: string;
+    destinationRecipient: string;
+    sourceSigner: string;
+    destinationCaller: string;
+    value: string;
+    salt: string;
+    hookData: string;
+  };
 };
 
 export type CircleEntitySecretCiphertextFactory = (
@@ -588,6 +611,134 @@ export class CircleWalletService {
     };
   }
 
+  async withdrawFromGateway(command: {
+    walletId: string;
+    walletAddress: string;
+    recipientAddress: string;
+    tokenAddress: string;
+    gatewayWallet: string;
+    gatewayMinter: string;
+    sourceDomain: number;
+    destinationDomain: number;
+    amountAtomic: string;
+    refId?: string;
+  }): Promise<{
+    burnIntent: GatewayBurnIntent;
+    gatewayTransfer: unknown;
+    gatewayTransferId: string | null;
+    mint: unknown;
+    mintFinal: unknown;
+  }> {
+    if (this.config.network.mockChain) {
+      const mintTx = mockTransactionHash(
+        "gateway-withdraw",
+        command.walletId,
+        command.recipientAddress,
+        command.amountAtomic,
+      );
+      return {
+        burnIntent: createGatewayBurnIntent(command),
+        gatewayTransfer: {
+          id: `mock-gateway-transfer-${Date.now().toString(16)}`,
+          attestation: "0x00",
+          signature: mockSignature("gateway-transfer", command.walletId),
+        },
+        gatewayTransferId: `mock-gateway-transfer-${Date.now().toString(16)}`,
+        mint: { transaction: { id: mintTx, txHash: mintTx, state: "COMPLETE" } },
+        mintFinal: { transaction: { id: mintTx, txHash: mintTx, state: "COMPLETE" } },
+      };
+    }
+
+    const client = this.requireClient();
+    if (typeof client.createContractExecutionTransaction !== "function") {
+      throw new AppError(
+        "CONFIG_ERROR",
+        "Circle contract execution support is required for Gateway withdrawals",
+        500,
+      );
+    }
+
+    const burnIntent = createGatewayBurnIntent(command);
+    const signature = await this.signTypedData({
+      walletId: command.walletId,
+      data: gatewayBurnIntentTypedData(burnIntent),
+      memo: appendRef(command.refId, "gateway-withdraw-sign"),
+    });
+    const gatewayResponse = await this.fetchImpl(
+      `${gatewayApiBaseUrl(this.config.x402.facilitatorUrl)}/transfer`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: stringifyJsonSafe([{ burnIntent, signature }]),
+      },
+    );
+    const gatewayTransfer = await parseJsonPayload(gatewayResponse);
+    if (!gatewayResponse.ok) {
+      throw new AppError(
+        "UPSTREAM_REQUEST_FAILED",
+        `Circle Gateway transfer request failed with HTTP ${gatewayResponse.status}`,
+        gatewayResponse.status,
+        gatewayTransfer,
+      );
+    }
+    if (!isRecord(gatewayTransfer) || gatewayTransfer.success === false || gatewayTransfer.error) {
+      throw new AppError(
+        "UPSTREAM_REQUEST_FAILED",
+        `Circle Gateway transfer request failed: ${gatewayTransferErrorMessage(gatewayTransfer)}`,
+        424,
+        gatewayTransfer,
+      );
+    }
+    const attestation = typeof gatewayTransfer.attestation === "string"
+      ? gatewayTransfer.attestation
+      : null;
+    const attestationSignature = typeof gatewayTransfer.signature === "string"
+      ? gatewayTransfer.signature
+      : null;
+    if (!attestation || !attestationSignature) {
+      throw new AppError(
+        "UPSTREAM_REQUEST_FAILED",
+        "Circle Gateway transfer response did not include attestation and signature",
+        502,
+        gatewayTransfer,
+      );
+    }
+
+    const mint = (
+      await client.createContractExecutionTransaction({
+        walletId: command.walletId,
+        contractAddress: normalizeAddress(command.gatewayMinter),
+        abiFunctionSignature: "gatewayMint(bytes,bytes)",
+        abiParameters: [attestation, attestationSignature],
+        refId: appendRef(command.refId, "gateway-mint"),
+        fee: {
+          type: "level",
+          config: {
+            feeLevel: "MEDIUM",
+          },
+        },
+      } as any)
+    ).data;
+    const mintTransaction = extractCircleTransaction(mint);
+    if (!mintTransaction.id) {
+      throw new AppError(
+        "UPSTREAM_REQUEST_FAILED",
+        "Circle Gateway mint response did not include a transaction id",
+        502,
+        mint,
+      );
+    }
+    const mintFinal = await this.waitForCircleTransaction(mintTransaction.id);
+
+    return {
+      burnIntent,
+      gatewayTransfer,
+      gatewayTransferId: typeof gatewayTransfer.id === "string" ? gatewayTransfer.id : null,
+      mint,
+      mintFinal,
+    };
+  }
+
   async getTransaction(transactionId: string): Promise<unknown> {
     if (this.config.network.mockChain) {
       return {
@@ -731,6 +882,91 @@ function stringifyJsonSafe(value: unknown): string {
   return JSON.stringify(value, (_, nestedValue) =>
     typeof nestedValue === "bigint" ? nestedValue.toString() : nestedValue,
   );
+}
+
+function createGatewayBurnIntent(command: {
+  walletAddress: string;
+  recipientAddress: string;
+  tokenAddress: string;
+  gatewayWallet: string;
+  gatewayMinter: string;
+  sourceDomain: number;
+  destinationDomain: number;
+  amountAtomic: string;
+}): GatewayBurnIntent {
+  return {
+    maxBlockHeight: MAX_UINT256,
+    maxFee: "2010000",
+    spec: {
+      version: 1,
+      sourceDomain: command.sourceDomain,
+      destinationDomain: command.destinationDomain,
+      sourceContract: addressToBytes32(command.gatewayWallet),
+      destinationContract: addressToBytes32(command.gatewayMinter),
+      sourceToken: addressToBytes32(command.tokenAddress),
+      destinationToken: addressToBytes32(command.tokenAddress),
+      sourceDepositor: addressToBytes32(command.walletAddress),
+      destinationRecipient: addressToBytes32(command.recipientAddress),
+      sourceSigner: addressToBytes32(command.walletAddress),
+      destinationCaller: addressToBytes32("0x0000000000000000000000000000000000000000"),
+      value: command.amountAtomic,
+      salt: `0x${randomBytes(32).toString("hex")}`,
+      hookData: "0x",
+    },
+  };
+}
+
+function gatewayBurnIntentTypedData(burnIntent: GatewayBurnIntent): unknown {
+  return {
+    domain: { name: "GatewayWallet", version: "1" },
+    types: {
+      EIP712Domain: [
+        { name: "name", type: "string" },
+        { name: "version", type: "string" },
+      ],
+      TransferSpec: [
+        { name: "version", type: "uint32" },
+        { name: "sourceDomain", type: "uint32" },
+        { name: "destinationDomain", type: "uint32" },
+        { name: "sourceContract", type: "bytes32" },
+        { name: "destinationContract", type: "bytes32" },
+        { name: "sourceToken", type: "bytes32" },
+        { name: "destinationToken", type: "bytes32" },
+        { name: "sourceDepositor", type: "bytes32" },
+        { name: "destinationRecipient", type: "bytes32" },
+        { name: "sourceSigner", type: "bytes32" },
+        { name: "destinationCaller", type: "bytes32" },
+        { name: "value", type: "uint256" },
+        { name: "salt", type: "bytes32" },
+        { name: "hookData", type: "bytes" },
+      ],
+      BurnIntent: [
+        { name: "maxBlockHeight", type: "uint256" },
+        { name: "maxFee", type: "uint256" },
+        { name: "spec", type: "TransferSpec" },
+      ],
+    },
+    primaryType: "BurnIntent",
+    message: burnIntent,
+  };
+}
+
+function addressToBytes32(address: string): string {
+  const normalized = normalizeAddress(address).toLowerCase();
+  return `0x${"0".repeat(24)}${normalized.slice(2)}`;
+}
+
+function gatewayTransferErrorMessage(payload: unknown): string {
+  if (!isRecord(payload)) {
+    return "unknown error";
+  }
+  if (typeof payload.message === "string") {
+    return payload.message;
+  }
+  if (typeof payload.error === "string") {
+    return payload.error;
+  }
+  return stringifyJsonSafe(payload);
 }
 
 function addEip712DomainType(value: unknown): unknown {

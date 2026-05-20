@@ -158,6 +158,24 @@ export function createCircleMcpServer(runtime: CircleRuntime): McpServer {
   );
 
   server.registerTool(
+    "agent_wallet_gateway_withdraw",
+    {
+      description:
+        "Backend-only funding step: withdraw available Circle Gateway USDC by minting it to a destination Base address.",
+      inputSchema: {
+        agentId: z.string().optional().describe("Agent id bound to a Circle wallet"),
+        agentName: z.string().optional().describe("Agent name bound to a Circle wallet"),
+        circleWalletId: z.string().optional().describe("Explicit Circle wallet id"),
+        walletAddress: z.string().optional().describe("Explicit Gateway balance owner address"),
+        recipientAddress: z.string().optional().describe("Destination wallet address; defaults to walletAddress"),
+        amountAtomic: z.string().describe("USDC amount in atomic units"),
+        refId: z.string().optional().describe("Withdrawal reference id"),
+      },
+    },
+    async (args) => runTool(() => runtime.agentWalletService.withdrawFromGateway(args)),
+  );
+
+  server.registerTool(
     "agent_wallet_transaction_status",
     {
       description: "Return Circle transaction status for an Agent Wallet transfer.",

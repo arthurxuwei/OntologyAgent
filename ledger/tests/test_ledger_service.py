@@ -497,6 +497,37 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertEqual(payload["mode"], "gateway_deposit")
         self.assertEqual(fake_client.request.refId, "deposit:test")
 
+    def test_gateway_withdrawal_proxies_to_wallet_mcp(self) -> None:
+        class FakeWalletClient:
+            async def gateway_withdraw(self, request):
+                self.request = request
+                return {
+                    "agentId": request.agentId,
+                    "amountAtomic": request.amountAtomic,
+                    "recipientAddress": request.recipientAddress,
+                    "mode": "gateway_withdraw",
+                    "mintTransactionHash": "0xmint",
+                }
+
+        fake_client = FakeWalletClient()
+        with patch.object(main, "get_ledger_wallet_client", return_value=fake_client):
+            response = self.client.post(
+                "/ledger/gateway/withdrawals",
+                json={
+                    "agentId": "agent_research",
+                    "amountAtomic": "1000",
+                    "recipientAddress": "0x1111111111111111111111111111111111111111",
+                    "refId": "withdraw:test",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["agentId"], "agent_research")
+        self.assertEqual(payload["amountAtomic"], "1000")
+        self.assertEqual(payload["mode"], "gateway_withdraw")
+        self.assertEqual(fake_client.request.refId, "withdraw:test")
+
     def test_ledger_state_includes_circle_usdc_balance_for_bound_accounts(self) -> None:
         class FakeWalletClient:
             async def status(self, *, wallet_address=None, circle_wallet_id=None):

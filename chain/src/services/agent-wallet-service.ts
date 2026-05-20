@@ -14,6 +14,8 @@ import type {
   AgentWalletFaucetResult,
   AgentWalletGatewayDepositCommand,
   AgentWalletGatewayDepositResult,
+  AgentWalletGatewayWithdrawCommand,
+  AgentWalletGatewayWithdrawResult,
   AgentWalletGetOrCreateCommand,
   AgentWalletGetOrCreateResult,
   AgentWalletInitCommand,
@@ -498,6 +500,121 @@ export class AgentWalletService {
     };
   }
 
+  async withdrawFromGateway(
+    command: AgentWalletGatewayWithdrawCommand,
+  ): Promise<AgentWalletGatewayWithdrawResult> {
+    const binding = await this.resolveBinding({
+      agentId: command.agentId,
+      agentName: command.agentName,
+    });
+    const circleWalletId = firstNonEmpty(command.circleWalletId, binding?.circleWalletId);
+    if (!circleWalletId) {
+      throw new AppError(
+        "VALIDATION_ERROR",
+        "agentId/agentName must resolve to a real Circle wallet id, or circleWalletId must be provided",
+        400,
+      );
+    }
+
+    const walletAddress = firstNonEmpty(command.walletAddress, binding?.walletAddress);
+    if (!walletAddress) {
+      throw new AppError(
+        "VALIDATION_ERROR",
+        "agentId/agentName must resolve to a wallet address, or walletAddress must be provided",
+        400,
+      );
+    }
+
+    const amountAtomic = parsePositiveBigInt(command.amountAtomic, "amountAtomic");
+    const amount = atomicUsdcToDecimal(command.amountAtomic);
+    const sourceAddress = normalizeRequestAddress(walletAddress, "walletAddress");
+    const recipientAddressInput = firstNonEmpty(command.recipientAddress, walletAddress);
+    if (!recipientAddressInput) {
+      throw new AppError("VALIDATION_ERROR", "recipientAddress is required", 400);
+    }
+    const recipientAddress = normalizeRequestAddress(recipientAddressInput, "recipientAddress");
+    const tokenAddress = normalizeRequestAddress(
+      this.config.x402.usdcAssetAddress,
+      "X402_USDC_ASSET_ADDRESS",
+    );
+    const chainConfig = gatewayChainConfig(this.config.x402.network);
+    const gatewayWallet = normalizeRequestAddress(
+      chainConfig.gatewayWallet,
+      "Gateway wallet contract",
+    );
+    const gatewayMinter = normalizeRequestAddress(
+      chainConfig.gatewayMinter,
+      "Gateway minter contract",
+    );
+
+    const gatewayBalance = await this.circleWalletService.getGatewayBalance(
+      sourceAddress,
+      chainConfig.domain,
+    );
+    if (gatewayBalance.available < amountAtomic) {
+      throw new AppError(
+        "INSUFFICIENT_GATEWAY_BALANCE",
+        `Gateway available balance is insufficient. Have ${gatewayBalance.formattedAvailable} USDC, need ${amount}.`,
+        424,
+        {
+          availableAtomic: gatewayBalance.available.toString(),
+          requiredAtomic: amountAtomic.toString(),
+          gatewayBalance: {
+            formattedAvailable: gatewayBalance.formattedAvailable,
+            formattedTotal: gatewayBalance.formattedTotal,
+          },
+        },
+      );
+    }
+
+    const raw = await this.circleWalletService.withdrawFromGateway({
+      walletId: circleWalletId,
+      walletAddress: sourceAddress,
+      recipientAddress,
+      tokenAddress,
+      gatewayWallet,
+      gatewayMinter,
+      sourceDomain: chainConfig.domain,
+      destinationDomain: chainConfig.domain,
+      amountAtomic: amountAtomic.toString(),
+      refId: command.refId,
+    });
+    const mintTransaction = extractCircleTransactionFromRaw(raw, "mintFinal")
+      ?? extractCircleTransactionFromRaw(raw, "mint");
+    const gatewayTransferId = extractStringFromRaw(raw, "gatewayTransferId");
+    const refreshedGatewayBalance = await this.circleWalletService.getGatewayBalance(
+      sourceAddress,
+      chainConfig.domain,
+    );
+
+    return {
+      agentId: binding?.agentId ?? command.agentId ?? null,
+      agentName: binding?.agentName ?? command.agentName ?? null,
+      circleWalletId,
+      walletAddress: sourceAddress,
+      recipientAddress,
+      asset: "USDC",
+      amount,
+      amountAtomic: amountAtomic.toString(),
+      tokenAddress,
+      gatewayWallet,
+      gatewayMinter,
+      blockchain: "BASE-SEPOLIA",
+      gatewayTransferId,
+      mintTransactionId: mintTransaction?.id ?? null,
+      mintTransactionHash: mintTransaction?.txHash ?? null,
+      mintState: mintTransaction?.state ?? null,
+      gatewayBalance: {
+        availableAtomic: refreshedGatewayBalance.available.toString(),
+        totalAtomic: refreshedGatewayBalance.total.toString(),
+        formattedAvailable: refreshedGatewayBalance.formattedAvailable,
+        formattedTotal: refreshedGatewayBalance.formattedTotal,
+      },
+      mode: "gateway_withdraw",
+      raw,
+    };
+  }
+
   private async gatewayUsdcTransfer(input: {
     command: AgentWalletTransferCommand;
     source: AgentWalletBinding;
@@ -774,6 +891,20 @@ function extractTransaction(payload: unknown): {
   };
 }
 
+function extractCircleTransactionFromRaw(
+  payload: unknown,
+  key: string,
+): { id: string | null; txHash: string | null; state: string | null } | null {
+  if (!isRecord(payload) || !isRecord(payload[key])) {
+    return null;
+  }
+  return extractTransaction(payload[key]);
+}
+
+function extractStringFromRaw(payload: unknown, key: string): string | null {
+  return isRecord(payload) && typeof payload[key] === "string" ? payload[key] : null;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -803,6 +934,7 @@ function parsePositiveBigInt(value: string, fieldName: string): bigint {
 function gatewayChainConfig(network: string): {
   domain: number;
   gatewayWallet: string;
+  gatewayMinter: string;
 } {
   if (network === "eip155:84532") {
     return CHAIN_CONFIGS.baseSepolia;

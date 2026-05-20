@@ -1099,6 +1099,103 @@ test("AgentWalletService deposits USDC into Circle Gateway", async () => {
   );
 });
 
+test("AgentWalletService withdraws USDC from Circle Gateway", async () => {
+  await withTempStateFile(
+    {
+      wallets: [],
+      agentWalletBindings: [
+        {
+          agentName: "ZeroClaw EigenFlux Peer",
+          agentId: "peer-agent",
+          email: "peer@example.com",
+          walletAddress: "0x2222222222222222222222222222222222222222",
+          circleWalletId: "circle-peer",
+          circleWalletSetId: "circle-wallet-set",
+          blockchain: "BASE-SEPOLIA",
+          mode: "circle",
+          updatedAt: "2026-05-13T00:00:00.000Z",
+        },
+      ],
+    },
+    async (statePath) => {
+      const config = liveCircleConfig({
+        AGENT_WALLET_STATE_PATH: statePath,
+        X402_FACILITATOR_URL: "https://gateway-api-testnet.circle.com",
+        X402_NETWORK: "eip155:84532",
+      });
+      let balanceCalls = 0;
+      const circleWalletService = {
+        withdrawFromGateway: async (input: {
+          walletId: string;
+          walletAddress: string;
+          recipientAddress: string;
+          tokenAddress: string;
+          gatewayWallet: string;
+          gatewayMinter: string;
+          sourceDomain: number;
+          destinationDomain: number;
+          amountAtomic: string;
+          refId?: string;
+        }) => {
+          assert.deepEqual(input, {
+            walletId: "circle-peer",
+            walletAddress: "0x2222222222222222222222222222222222222222",
+            recipientAddress: "0x1111111111111111111111111111111111111111",
+            tokenAddress: "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+            gatewayWallet: "0x0077777d7eba4688bdef3e311b846f25870a19b9",
+            gatewayMinter: "0x0022222abe238cc2c7bb1f21003f0a260052475b",
+            sourceDomain: 6,
+            destinationDomain: 6,
+            amountAtomic: "1000",
+            refId: "withdraw:test",
+          });
+          return {
+            gatewayTransferId: "gateway-transfer-1",
+            mint: { transaction: { id: "mint-tx", txHash: "0xmint", state: "INITIATED" } },
+            mintFinal: { transaction: { id: "mint-tx", txHash: "0xmint", state: "CONFIRMED" } },
+          };
+        },
+        getGatewayBalance: async (walletAddress: string, domain: number) => {
+          balanceCalls += 1;
+          assert.equal(walletAddress, "0x2222222222222222222222222222222222222222");
+          assert.equal(domain, 6);
+          return {
+            total: balanceCalls === 1 ? 1000n : 0n,
+            available: balanceCalls === 1 ? 1000n : 0n,
+            withdrawing: 0n,
+            withdrawable: balanceCalls === 1 ? 1000n : 0n,
+            formattedTotal: balanceCalls === 1 ? "0.001" : "0",
+            formattedAvailable: balanceCalls === 1 ? "0.001" : "0",
+            formattedWithdrawing: "0",
+            formattedWithdrawable: balanceCalls === 1 ? "0.001" : "0",
+          };
+        },
+      } as unknown as CircleWalletService;
+      const service = new AgentWalletService(
+        config,
+        fakeX402FetchService(baseX402Result()),
+        circleWalletService,
+      );
+
+      const result = await service.withdrawFromGateway({
+        agentId: "peer-agent",
+        recipientAddress: "0x1111111111111111111111111111111111111111",
+        amountAtomic: "1000",
+        refId: "withdraw:test",
+      });
+
+      assert.equal(result.circleWalletId, "circle-peer");
+      assert.equal(result.amount, "0.001");
+      assert.equal(result.gatewayTransferId, "gateway-transfer-1");
+      assert.equal(result.mintTransactionId, "mint-tx");
+      assert.equal(result.mintTransactionHash, "0xmint");
+      assert.equal(result.mintState, "CONFIRMED");
+      assert.equal(result.gatewayBalance.availableAtomic, "0");
+      assert.equal(result.mode, "gateway_withdraw");
+    },
+  );
+});
+
 test("AgentWalletService returns Circle transaction status", async () => {
   const config = loadConfig({
     CHAIN_MOCK: "false",

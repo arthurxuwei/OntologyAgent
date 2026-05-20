@@ -256,6 +256,22 @@ class GatewayDepositRequest(BaseModel):
     refId: Optional[str] = None
 
 
+class GatewayWithdrawalRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    agentId: str = Field(min_length=1)
+    amountAtomic: str = Field(min_length=1)
+    recipientAddress: Optional[str] = None
+    refId: Optional[str] = None
+
+    @field_validator("recipientAddress")
+    @classmethod
+    def validate_recipient_address(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        return normalize_evm_address(value)
+
+
 class CreateEscrowRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
@@ -1363,6 +1379,23 @@ class LedgerWalletClient:
         if not deposit:
             raise RuntimeError("wallet MCP response did not include Gateway deposit content")
         return deposit
+
+    async def gateway_withdraw(self, request: GatewayWithdrawalRequest) -> dict[str, Any]:
+        arguments: dict[str, Any] = {
+            "agentId": request.agentId,
+            "amountAtomic": request.amountAtomic,
+            "refId": request.refId,
+        }
+        if request.recipientAddress is not None:
+            arguments["recipientAddress"] = request.recipientAddress
+        payload = await self._call_wallet_tool(
+            "agent_wallet_gateway_withdraw",
+            arguments,
+        )
+        withdrawal = self._extract_tool_content(payload)
+        if not withdrawal:
+            raise RuntimeError("wallet MCP response did not include Gateway withdrawal content")
+        return withdrawal
 
     async def _call_wallet_tool(self, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         request = {
@@ -2573,6 +2606,15 @@ async def deposit_agent_wallet_to_gateway(request: GatewayDepositRequest) -> dic
     try:
         parse_positive_atomic(request.amountAtomic)
         return await get_ledger_wallet_client().gateway_deposit(request)
+    except (ValueError, RuntimeError) as error:
+        raise http_error(error) from error
+
+
+@app.post("/ledger/gateway/withdrawals")
+async def withdraw_agent_wallet_from_gateway(request: GatewayWithdrawalRequest) -> dict[str, Any]:
+    try:
+        parse_positive_atomic(request.amountAtomic)
+        return await get_ledger_wallet_client().gateway_withdraw(request)
     except (ValueError, RuntimeError) as error:
         raise http_error(error) from error
 

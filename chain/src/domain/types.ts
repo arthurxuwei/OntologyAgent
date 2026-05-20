@@ -256,6 +256,43 @@ export type AgentWalletGatewayDepositResult = {
   raw: unknown;
 };
 
+export type AgentWalletGatewayWithdrawCommand = {
+  agentId?: string;
+  agentName?: string;
+  circleWalletId?: string;
+  walletAddress?: string;
+  recipientAddress?: string;
+  amountAtomic: string;
+  refId?: string;
+};
+
+export type AgentWalletGatewayWithdrawResult = {
+  agentId: string | null;
+  agentName: string | null;
+  circleWalletId: string;
+  walletAddress: string;
+  recipientAddress: string;
+  asset: "USDC";
+  amount: string;
+  amountAtomic: string;
+  tokenAddress: string;
+  gatewayWallet: string;
+  gatewayMinter: string;
+  blockchain: "BASE-SEPOLIA";
+  gatewayTransferId: string | null;
+  mintTransactionId: string | null;
+  mintTransactionHash: string | null;
+  mintState: string | null;
+  gatewayBalance: {
+    availableAtomic: string;
+    totalAtomic: string;
+    formattedAvailable: string;
+    formattedTotal: string;
+  };
+  mode: "gateway_withdraw";
+  raw: unknown;
+};
+
 export type AgentWalletTransferResult = {
   fromAgentId: string | null;
   fromAgentName: string | null;
