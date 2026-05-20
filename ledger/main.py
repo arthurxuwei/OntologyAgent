@@ -2651,6 +2651,7 @@ async def github_login(request: Request) -> RedirectResponse:
 
 
 @app.get("/auth/github/callback")
+@app.get("/dashboard/auth/github/callback")
 async def github_callback(
     request: Request,
     code: str = "",

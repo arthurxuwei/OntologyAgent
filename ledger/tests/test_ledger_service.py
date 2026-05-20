@@ -129,6 +129,15 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertEqual(response.status_code, 307)
         self.assertEqual(response.headers["location"], "/dashboard?auth_error=access_denied")
 
+    def test_nested_dashboard_github_callback_receives_oauth_error(self) -> None:
+        response = self.client.get(
+            "/dashboard/auth/github/callback?error=access_denied",
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 307)
+        self.assertEqual(response.headers["location"], "/dashboard?auth_error=access_denied")
+
     def test_github_login_requires_oauth_config(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
             response = self.client.get("/auth/github/login", follow_redirects=False)
