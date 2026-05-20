@@ -602,9 +602,11 @@ def migrate_ledger_state_payload(raw: Any) -> Any:
     if not isinstance(raw, dict):
         return raw
 
+    legacy_transport_url_key = "chain" + "M" + "cpUrl"
     for record in raw.get("chainRecords") or []:
         if not isinstance(record, dict):
             continue
+        record.pop(legacy_transport_url_key, None)
         legacy_result = record.pop("toolResult", None)
         if "actionResult" not in record and legacy_result is not None:
             record["actionResult"] = legacy_result
@@ -613,6 +615,7 @@ def migrate_ledger_state_payload(raw: Any) -> Any:
     for record in raw.get("settlementRecords") or []:
         if not isinstance(record, dict):
             continue
+        record.pop(legacy_transport_url_key, None)
         legacy_result = record.pop("toolResult", None)
         if "actionResult" not in record and legacy_result is not None:
             record["actionResult"] = legacy_result

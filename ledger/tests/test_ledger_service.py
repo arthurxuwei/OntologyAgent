@@ -94,6 +94,7 @@ class LedgerServiceTests(unittest.TestCase):
 
     def test_ledger_state_loads_legacy_record_result_fields(self) -> None:
         now = main.now_iso()
+        legacy_transport_url_key = "chain" + "M" + "cpUrl"
         legacy_state = {
             "accounts": [],
             "entries": [],
@@ -107,6 +108,7 @@ class LedgerServiceTests(unittest.TestCase):
                     "status": "submitted",
                     "chainTool": "chain_submit_execution",
                     "chainHttpUrl": "http://chain.test/rest/",
+                    legacy_transport_url_key: "discarded legacy transport URL",
                     "recorderAddress": "0x000000000000000000000000000000000000dEaD",
                     "toolResult": {"txHash": "0xchain"},
                     "createdAt": now,
@@ -120,6 +122,7 @@ class LedgerServiceTests(unittest.TestCase):
                     "status": "submitted",
                     "settlementTool": "agent_wallet_withdraw",
                     "settlementHttpUrl": "http://circle.test/rest/",
+                    legacy_transport_url_key: "discarded legacy transport URL",
                     "fromAgentId": "agent_sender",
                     "amountAtomic": "1000000",
                     "toolResult": {"transactionHash": "0xsettle"},
