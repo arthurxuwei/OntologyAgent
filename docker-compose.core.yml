@@ -19,9 +19,9 @@ services:
       LEDGER_CHAIN_RECORD_REQUIRE_SUCCESS: ${LEDGER_CHAIN_RECORD_REQUIRE_SUCCESS:-false}
       LEDGER_SETTLEMENT_ENABLED: ${LEDGER_SETTLEMENT_ENABLED:-false}
       LEDGER_SETTLEMENT_REQUIRE_SUCCESS: ${LEDGER_SETTLEMENT_REQUIRE_SUCCESS:-false}
-      LEDGER_SETTLEMENT_MCP_URL: ${LEDGER_SETTLEMENT_MCP_URL:-http://circle-mcp:8093/mcp/}
+      LEDGER_SETTLEMENT_HTTP_URL: ${LEDGER_SETTLEMENT_HTTP_URL:-http://circle:8093}
       LEDGER_SETTLEMENT_TIMEOUT_SECONDS: ${LEDGER_SETTLEMENT_TIMEOUT_SECONDS:-60}
-      LEDGER_WALLET_MCP_URL: ${LEDGER_WALLET_MCP_URL:-http://circle-mcp:8093/mcp/}
+      LEDGER_WALLET_HTTP_URL: ${LEDGER_WALLET_HTTP_URL:-http://circle:8093}
       LEDGER_WALLET_TIMEOUT_SECONDS: ${LEDGER_WALLET_TIMEOUT_SECONDS:-60}
     volumes:
       - ${CHIEF_DATA_ROOT:-/opt/chief/data}/ledger:/app/data
@@ -34,7 +34,7 @@ services:
     container_name: chief-circle
     command: npm run start:circle
     environment:
-      CIRCLE_MCP_PORT: ${CIRCLE_MCP_PORT:-8093}
+      CIRCLE_HTTP_PORT: ${CIRCLE_HTTP_PORT:-8093}
       CHAIN_MOCK: ${CHAIN_MOCK:-false}
       CHAIN_MOCK_BALANCE_ETH: ${CHAIN_MOCK_BALANCE_ETH:-1.0}
       CHAIN_MOCK_USDC_BALANCE: ${CHAIN_MOCK_USDC_BALANCE:-0}
@@ -50,8 +50,4 @@ services:
       AGENT_WALLET_STATE_PATH: ${AGENT_WALLET_STATE_PATH:-/app/data/agent_wallet_state.json}
     volumes:
       - ${CHIEF_DATA_ROOT:-/opt/chief/data}/chain:/app/data
-    networks:
-      default:
-        aliases:
-          - circle-mcp
     restart: unless-stopped

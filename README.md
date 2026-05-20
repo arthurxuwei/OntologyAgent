@@ -3,8 +3,8 @@
 当前仓库由三条能力线组成：
 
 - `agent`：Python Agent 本体，负责交互式会话、tool orchestration，以及对子 Agent 的管理
-- `chain`：TypeScript 链上 MCP skill provider，负责直接链上执行、UserOperation、交易状态和 x402 buyer flow
-- `circle`：内部 Circle MCP backend，负责真实 Circle 钱包生命周期和 ledger release 结算
+- `chain`：TypeScript 链上 REST 服务，负责直接链上执行、UserOperation、交易状态和 x402 buyer flow
+- `circle`：内部 Circle REST 服务，负责真实 Circle 钱包生命周期和 ledger release 结算
 - `ledger`：独立链下账本服务，也是公网统一入口，负责 Agent Wallet onboarding、内部余额、Escrow 锁款、放款、退款和流水记录
 
 Agent / ZeroClaw 安装包已拆到独立仓库：[chief-install](https://github.com/arthurxuwei/chief-install)。
@@ -50,8 +50,8 @@ docker compose up -d --build
 - `x402-seller` 健康检查：`http://localhost:8001/health`
 - `x402-seller` 演示资源：`GET http://localhost:8001/x402/demo-resource`
 - `x402-seller` Circle Nanopayments 演示资源：`GET http://localhost:8001/x402/agent-services/research-summary/nanopayments`
-- `chain` MCP：`http://localhost:8091/mcp/`
-- `circle` MCP：`http://localhost:8093/mcp/`
+- `chain` REST：`http://localhost:8091/health`
+- `circle` REST：`http://localhost:8093/health`
 
 ## Worktree 注意事项
 
@@ -77,18 +77,18 @@ docker compose --env-file "$(dirname "$(git rev-parse --git-common-dir)")/.env" 
 
 这样可以确保 Compose 使用当前仓库根目录的环境变量，而不是 worktree 目录下不存在或不完整的 `.env`。
 
-## MCP 架构
+## REST 服务架构
 
 当前设计里：
 
 - `agent` 是 agent 本体，不承载 seller resource
 - `ledger` 是独立链下账本服务，不属于 `agent` 或 `chain` 进程
-- 链上动作只能通过 `chain` MCP tools 完成
-- Agent Wallet 生命周期和 Circle 转账结算由 `ledger` 统一入口触发；`circle` MCP 只作为内部 backend
-- `chain` 不再提供 Fastify HTTP 业务接口
+- 链上动作只能通过 `chain` REST 服务完成
+- Agent Wallet 生命周期和 Circle 转账结算由 `ledger` 统一入口触发；`circle` REST 服务只作为内部 backend
+- `chain` 暴露明确的 REST 业务接口
 - 撮合型 A2A 的 Escrow/余额状态应落在 `ledger`，而不是用 x402 或链上交易直接承担
 
-`agent` 启动后会同时发现三类内部工具：
+`agent` 启动后会注册 REST-backed 工具：
 
 - 本地 wealth 工具
   - `get_wealth_status`
@@ -104,13 +104,13 @@ docker compose --env-file "$(dirname "$(git rev-parse --git-common-dir)")/.env" 
   - `agent_wallet_create_escrow`
   - `agent_wallet_release_escrow`
   - `agent_wallet_refund_escrow`
-- `chain` MCP tools
+- `chain` REST-backed tools
   - `chain_get_wallet_state`（内部账本 / 自治循环使用）
   - `chain_sign_transfer`
   - `chain_submit_execution`
   - `chain_submit_user_operation`
   - `chain_x402_fetch`
-- 内部 `circle` MCP backend（不作为 agent/public 入口）
+- 内部 `circle` REST backend（不作为 agent/public 入口）
 
 ### Offchain Ledger Service（V1）
 
@@ -359,7 +359,7 @@ PRIVATE_KEY=0x... \
 ./scripts/live-x402-simplescraper.sh
 ```
 
-脚本会通过 `chain` MCP tool `chain_x402_fetch` 请求：
+脚本会通过 `chain` REST endpoint `/x402/fetch` 请求：
 
 - `POST https://api.simplescraper.io/v1/extract`
 
@@ -387,7 +387,7 @@ PRIVATE_KEY=0x... \
 - `OPENAI_BASE_URL`：OpenAI 兼容 endpoint；会被 `docker compose` 直接注入 `agent` 容器
 - `OPENAI_ENDPOINT`：`OPENAI_BASE_URL` 的兼容别名；如两者都设置，优先使用 `OPENAI_BASE_URL`
 - `BRAIN_AGENT_MODEL`：管家使用的模型名；会被 `docker compose` 直接注入 `agent` 容器，默认 `gpt-4o-mini`
-- `CHAIN_MCP_URL`：`agent` 访问链上 MCP 的地址，默认 `http://chain-mcp:8091/mcp/`
+- `CHAIN_HTTP_URL`：`agent` 访问链上 REST 服务的地址，默认 `http://chain:8091`
 - `CHAIN_TIMEOUT_SECONDS`：请求相关超时，默认 `20`
 - `BRAIN_AGENT_MODEL`：Agent 模型名，默认 `gpt-4o-mini`
 - `AUTONOMY_ENABLED`：是否开启后台自治循环，默认 `false`
@@ -419,7 +419,7 @@ PRIVATE_KEY=0x... \
 - `maxDrawdownRatio`
 ### chain
 
-- `CHAIN_MCP_PORT`：chain MCP 端口，默认 `8091`
+- `CHAIN_HTTP_PORT`：chain REST 端口，默认 `8091`
 - `PRIVATE_KEY`：链上执行和 x402 buyer 默认签名私钥
 - `RPC_URL`：链 RPC 地址，默认 Base Sepolia
 - `CHAIN_ID`：期望连接的链 ID，默认 `84532`
@@ -442,7 +442,7 @@ PRIVATE_KEY=0x... \
 
 ### circle
 
-- `CIRCLE_MCP_PORT`：circle MCP 端口，默认 `8093`
+- `CIRCLE_HTTP_PORT`：circle REST 端口，默认 `8093`
 - `AGENT_WALLET_STATE_PATH`：Agent Wallet 本地 demo 状态文件，Docker 默认 `/app/data/agent_wallet_state.json`
 - `CIRCLE_API_KEY`：Circle sandbox API key；`CHAIN_MOCK=false` 且创建真实 Agent Wallet 时需要
 - `CIRCLE_ENTITY_SECRET`：Circle entity secret；用于按请求生成 entity secret ciphertext
@@ -461,9 +461,9 @@ PRIVATE_KEY=0x... \
 - `COINBASE_ONRAMP_API_BASE_URL`：Coinbase API base URL，默认 `https://api.developer.coinbase.com`
 - `COINBASE_ONRAMP_TOKEN_PATH`：Coinbase Onramp session token path，默认 `/onramp/v1/token`
 - `COINBASE_ONRAMP_HOSTED_URL`：Coinbase hosted onramp URL，默认 `https://pay.coinbase.com/buy/select-asset`
-- `LEDGER_CHAIN_MCP_URL`：ledger 链上审计记录使用的 chain MCP 地址，默认 `http://chain-mcp:8091/mcp/`
-- `LEDGER_SETTLEMENT_MCP_URL`：ledger release 真实结算使用的 Circle MCP 地址，默认 `http://circle-mcp:8093/mcp/`
-- `LEDGER_WALLET_MCP_URL`：ledger Agent Wallet onboarding 使用的内部 Circle MCP 地址，默认 `http://circle-mcp:8093/mcp/`
+- `LEDGER_CHAIN_HTTP_URL`：ledger 链上审计记录使用的 chain REST 地址，默认 `http://chain:8091`
+- `LEDGER_SETTLEMENT_HTTP_URL`：ledger release 真实结算使用的 Circle REST 地址，默认 `http://circle:8093`
+- `LEDGER_WALLET_HTTP_URL`：ledger Agent Wallet onboarding 使用的内部 Circle REST 地址，默认 `http://circle:8093`
 
 ## Agent Wallet MVP x402 Demo
 
@@ -512,7 +512,7 @@ curl -X POST http://localhost:8000/agent-wallet/reset
 
 `agent` 内置 LangGraph Agent，会自动使用：
 
-- `chain` 链上 MCP tools
+- `chain` REST-backed tools
 - 本地的理财子管理工具
 
 单轮调用示例：

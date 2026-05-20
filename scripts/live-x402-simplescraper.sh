@@ -21,31 +21,6 @@ wait_for_url() {
   return 1
 }
 
-wait_for_chain_mcp() {
-  local max_retries="${1:-60}"
-
-  for ((i=1; i<=max_retries; i+=1)); do
-    if docker compose exec -T agent python - <<'PY' >/dev/null 2>&1
-import asyncio
-from chain_mcp_client import ChainMcpClient
-
-async def main():
-    tools = await ChainMcpClient("http://chain-mcp:8091/mcp/").list_tools()
-    assert "chain_x402_fetch" in tools
-
-asyncio.run(main())
-PY
-    then
-      echo "✅ chain-mcp is ready"
-      return 0
-    fi
-    sleep 1
-  done
-
-  echo "❌ chain-mcp failed to become ready"
-  return 1
-}
-
 require_env() {
   local env_name="$1"
   if [[ -z "${!env_name:-}" ]]; then
@@ -78,7 +53,7 @@ echo "===> Starting live Base Sepolia stack for Simplescraper x402"
 docker compose up -d --build
 
 wait_for_url "http://localhost:8000/health" "agent"
-wait_for_chain_mcp
+wait_for_url "http://localhost:8091/health" "chain"
 
 echo
 echo "===> Brain health"
@@ -87,27 +62,11 @@ echo
 
 echo
 echo "===> Simplescraper live x402 fetch"
-docker compose exec -T agent python - <<PY
-import asyncio
-import json
-from chain_mcp_client import ChainMcpClient
-
-async def main():
-    result = await ChainMcpClient("http://chain-mcp:8091/mcp/").call_tool(
-        "chain_x402_fetch",
-        {
-            "url": "${SIMPLESCRAPER_ENDPOINT}",
-            "method": "POST",
-            "body": {
-                "url": "${SIMPLESCRAPER_TARGET_URL}",
-                "markdown": True,
-            },
-        },
-    )
-    print(json.dumps(result, ensure_ascii=False))
-
-asyncio.run(main())
-PY
+curl -sS \
+  -H "Content-Type: application/json" \
+  -d "{\"url\":\"${SIMPLESCRAPER_ENDPOINT}\",\"method\":\"POST\",\"body\":{\"url\":\"${SIMPLESCRAPER_TARGET_URL}\",\"markdown\":true}}" \
+  "http://localhost:8091/x402/fetch"
+echo
 
 echo
 echo "===> Done"

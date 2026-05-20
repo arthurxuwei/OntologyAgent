@@ -4,15 +4,15 @@ This deployment publishes and runs only the currently exposed core services:
 
 - `ledger` on public port `8092`
 
-It intentionally excludes `agent`, `x402-seller`, `x402-mock`, and the public
-`chain` and `circle` MCP services. The `chain` Docker image is still built
-because the internal Circle MCP entrypoint lives in the same `chain/` package and starts with
+It intentionally excludes `agent`, `x402-seller`, `x402-mock`, and public
+`chain`/`circle` endpoints. The `chain` Docker image is still built
+because the internal Circle REST entrypoint lives in the same `chain/` package and starts with
 `npm run start:circle`.
 
 ## Security Posture
 
-This phase exposes only the ledger UI and ledger MCP endpoint directly to the
-public internet. Circle MCP is an internal backend used by ledger for wallet
+This phase exposes only the ledger UI and ledger REST API directly to the
+public internet. Circle REST is an internal backend used by ledger for wallet
 onboarding and escrow release settlement. Use only sandbox/testnet credentials,
 set strict spend caps, and keep real funds out of the configured wallets.
 
@@ -57,9 +57,9 @@ CIRCLE_WALLET_SET_ID=
 CIRCLE_USDC_TOKEN_ID=
 
 LEDGER_SETTLEMENT_ENABLED=false
-LEDGER_SETTLEMENT_MCP_URL=http://circle-mcp:8093/mcp/
+LEDGER_SETTLEMENT_HTTP_URL=http://circle:8093
 LEDGER_SETTLEMENT_REQUIRE_SUCCESS=false
-LEDGER_WALLET_MCP_URL=http://circle-mcp:8093/mcp/
+LEDGER_WALLET_HTTP_URL=http://circle:8093
 EOF
 ```
 
@@ -71,7 +71,7 @@ only after the wallet contains testnet funds you are prepared to spend.
 Open the temporary public test ports:
 
 - TCP `22` for SSH
-- TCP `8092` for ledger UI, ledger health, and ledger MCP
+- TCP `8092` for ledger UI, ledger health, and ledger REST API
 
 Example `tccli` commands:
 
@@ -92,7 +92,7 @@ Keep `80` and `443` closed until a later Nginx/domain phase.
 ## Optional Cloudflare Domain Handoff
 
 After the domain is active in Cloudflare, prefer Cloudflare Tunnel over opening
-the MCP ports directly. Create a remotely managed tunnel in Cloudflare Zero
+service ports directly. Create a remotely managed tunnel in Cloudflare Zero
 Trust, then add public hostnames that target the Docker service names:
 
 - `ledger.<domain>` -> `http://ledger:8092`
@@ -121,10 +121,10 @@ curl -fsS https://ledger.<domain>/health
 On push to `main`, `.github/workflows/deploy-core-services.yml`:
 
 1. Runs ledger unit tests.
-2. Runs chain package typecheck and tests because Circle MCP is implemented in
+2. Runs chain package typecheck and tests because Circle REST is implemented in
    the same package.
 3. Builds `ledger` and `chain` images. The `chain` image contains both the
-   chain and Circle MCP entrypoints, but only internal Circle is deployed for now.
+   chain and Circle REST entrypoints, but only internal Circle is deployed for now.
 4. Pushes both images to GHCR with `<sha>` and `latest` tags.
 5. Copies `docker-compose.core.yml` and `docker-compose.cloudflare.yml` to
    `/opt/chief`.
@@ -134,7 +134,7 @@ On push to `main`, `.github/workflows/deploy-core-services.yml`:
 
 The internal `circle` service reuses the `chain` image and starts with
 `npm run start:circle`. It is not published as a public endpoint. The `chain`
-MCP container is not started.
+container is not started in this core deployment.
 
 ## Validation
 
@@ -144,14 +144,10 @@ From your local machine:
 curl -fsS http://<lighthouse-ip>:8092/health
 ```
 
-List MCP tools:
+Read ledger state:
 
 ```bash
-curl -fsS http://<lighthouse-ip>:8092/mcp/ \
-  -H 'Content-Type: application/json' \
-  -H 'Accept: application/json, text/event-stream' \
-  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"smoke-test","version":"0.1.0"}}}'
-
+curl -fsS http://<lighthouse-ip>:8092/ledger/state
 ```
 
 Verify persistence on the server:
