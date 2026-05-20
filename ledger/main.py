@@ -9,7 +9,6 @@ import threading
 import time
 import uuid
 import base64
-from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from functools import lru_cache
@@ -24,17 +23,6 @@ from circle_client import CircleHttpClient
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, RedirectResponse
-from mcp_tools import (
-    agent_wallet_create_escrow_tool,
-    agent_wallet_create_onramp_session_tool,
-    agent_wallet_get_or_create_tool,
-    agent_wallet_get_ledger_state_tool,
-    agent_wallet_refund_escrow_tool,
-    agent_wallet_release_escrow_tool,
-    agent_wallet_transfer_tool,
-    build_mcp_app,
-    route_payment_intent_tool,
-)
 from payment_router import PaymentIntent, route_payment_intent
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
 
@@ -114,15 +102,15 @@ class LedgerChainRecord(BaseModel):
         "withdrawal",
     ]
     status: Literal["submitted", "failed"]
-    chainTool: str = "chain_submit_execution"
-    chainMcpUrl: str
+    chainAction: str = "submit_execution"
+    chainHttpUrl: str
     recorderAddress: str
     txHash: Optional[str] = None
     mode: Optional[str] = None
     escrowId: Optional[str] = None
     entryIds: list[str] = Field(default_factory=list)
     payload: dict[str, Any] = Field(default_factory=dict)
-    toolResult: dict[str, Any] = Field(default_factory=dict)
+    actionResult: dict[str, Any] = Field(default_factory=dict)
     error: Optional[str] = None
     createdAt: str
     updatedAt: str
@@ -134,8 +122,8 @@ class LedgerSettlementRecord(BaseModel):
     recordId: str
     eventType: Literal["escrow_release", "agent_transfer", "withdrawal"]
     status: Literal["submitted", "failed"]
-    settlementTool: str = "agent_wallet_settle_ledger_transfer"
-    chainMcpUrl: str
+    settlementAction: str = "settle_ledger_transfer"
+    settlementHttpUrl: str
     escrowId: Optional[str] = None
     transferId: Optional[str] = None
     fromAgentId: str
@@ -147,7 +135,7 @@ class LedgerSettlementRecord(BaseModel):
     transactionHash: Optional[str] = None
     transactionState: Optional[str] = None
     mode: Optional[str] = None
-    toolResult: dict[str, Any] = Field(default_factory=dict)
+    actionResult: dict[str, Any] = Field(default_factory=dict)
     error: Optional[str] = None
     createdAt: str
     updatedAt: str
@@ -969,7 +957,7 @@ class LedgerChainRecorder:
         base_record = {
             "recordId": f"chainrec_{uuid.uuid4().hex}",
             "eventType": event_type,
-            "chainMcpUrl": self.chain_http_url,
+            "chainHttpUrl": self.chain_http_url,
             "recorderAddress": self.recorder_address,
             "escrowId": escrow.escrowId if escrow is not None else None,
             "entryIds": [entry.entryId for entry in entries],
@@ -1004,7 +992,7 @@ class LedgerChainRecorder:
                 status="submitted",
                 txHash=tx_hash,
                 mode=mode if isinstance(mode, str) else None,
-                toolResult=structured,
+                actionResult=structured,
             )
         except Exception as error:
             record = LedgerChainRecord(
@@ -1059,7 +1047,7 @@ class LedgerSettlementClient:
         base_record = {
             "recordId": f"settle_{uuid.uuid4().hex}",
             "eventType": "escrow_release",
-            "chainMcpUrl": self.settlement_http_url,
+            "settlementHttpUrl": self.settlement_http_url,
             "escrowId": escrow.escrowId,
             "fromAgentId": escrow.buyerAgentId,
             "toAgentId": escrow.sellerAgentId,
@@ -1069,7 +1057,7 @@ class LedgerSettlementClient:
             "updatedAt": current,
         }
         try:
-            result = await self._call_transfer_tool(
+            result = await self._submit_settlement_transfer(
                 from_agent_id=escrow.buyerAgentId,
                 to_agent_id=escrow.sellerAgentId,
                 amount_atomic=escrow.amountAtomic,
@@ -1091,7 +1079,7 @@ class LedgerSettlementClient:
                 if isinstance(transfer.get("state"), str)
                 else None,
                 mode=transfer.get("mode") if isinstance(transfer.get("mode"), str) else None,
-                toolResult=result,
+                actionResult=result,
             )
         except Exception as error:
             record = LedgerSettlementRecord(
@@ -1115,7 +1103,7 @@ class LedgerSettlementClient:
         base_record = {
             "recordId": f"settle_{uuid.uuid4().hex}",
             "eventType": "agent_transfer",
-            "chainMcpUrl": self.settlement_http_url,
+            "settlementHttpUrl": self.settlement_http_url,
             "transferId": ref_id,
             "fromAgentId": from_agent_id,
             "toAgentId": to_agent_id,
@@ -1132,7 +1120,7 @@ class LedgerSettlementClient:
             )
             raise LedgerSettlementError(record)
         try:
-            result = await self._call_transfer_tool(
+            result = await self._submit_settlement_transfer(
                 from_agent_id=from_agent_id,
                 to_agent_id=to_agent_id,
                 amount_atomic=amount_atomic,
@@ -1154,7 +1142,7 @@ class LedgerSettlementClient:
                 if isinstance(transfer.get("state"), str)
                 else None,
                 mode=transfer.get("mode") if isinstance(transfer.get("mode"), str) else None,
-                toolResult=result,
+                actionResult=result,
             )
         except LedgerSettlementError:
             raise
@@ -1179,7 +1167,7 @@ class LedgerSettlementClient:
         base_record = {
             "recordId": f"settle_{uuid.uuid4().hex}",
             "eventType": "withdrawal",
-            "chainMcpUrl": self.settlement_http_url,
+            "settlementHttpUrl": self.settlement_http_url,
             "transferId": ref_id,
             "fromAgentId": from_agent_id,
             "toAddress": destination,
@@ -1196,7 +1184,7 @@ class LedgerSettlementClient:
             )
             raise LedgerSettlementError(record)
         try:
-            result = await self._call_transfer_tool(
+            result = await self._submit_settlement_transfer(
                 from_agent_id=from_agent_id,
                 to_address=destination,
                 amount_atomic=amount_atomic,
@@ -1218,7 +1206,7 @@ class LedgerSettlementClient:
                 if isinstance(transfer.get("state"), str)
                 else None,
                 mode=transfer.get("mode") if isinstance(transfer.get("mode"), str) else None,
-                toolResult=result,
+                actionResult=result,
             )
         except LedgerSettlementError:
             raise
@@ -1230,7 +1218,7 @@ class LedgerSettlementClient:
             )
             raise LedgerSettlementError(record) from error
 
-    async def _call_transfer_tool(
+    async def _submit_settlement_transfer(
         self,
         *,
         from_agent_id: str,
@@ -2724,16 +2712,3 @@ async def refund_escrow(escrow_id: str) -> dict[str, Any]:
         "escrow": escrow.model_dump(),
         "chainRecord": chain_record.model_dump() if chain_record is not None else None,
     }
-
-
-_ledger_mcp_app = build_mcp_app(get_store)
-
-
-@asynccontextmanager
-async def ledger_app_lifespan(_app: FastAPI):
-    async with _ledger_mcp_app.router.lifespan_context(_ledger_mcp_app):
-        yield
-
-
-app.router.lifespan_context = ledger_app_lifespan
-app.mount("/", _ledger_mcp_app)

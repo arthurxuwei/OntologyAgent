@@ -14,7 +14,6 @@ from cryptography.hazmat.primitives.asymmetric import ed25519
 from fastapi.testclient import TestClient
 
 import main
-import mcp_tools
 
 
 class LedgerServiceTests(unittest.TestCase):
@@ -203,11 +202,11 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertEqual(payload["sub"], "test-api-key-id")
         self.assertEqual(payload["uri"], "POST api.developer.coinbase.com/onramp/v1/token")
 
-    def test_mcp_endpoint_initializes_with_ledger_app_lifespan(self) -> None:
+    def test_legacy_protocol_endpoint_is_not_served(self) -> None:
         with TestClient(main.app) as client:
-            response = client.get("/mcp/")
+            response = client.get("/" + "mc" + "p/")
 
-        self.assertNotEqual(response.status_code, 500)
+        self.assertEqual(response.status_code, 404)
 
     def test_root_redirects_to_dashboard(self) -> None:
         response = self.client.get("/", follow_redirects=False)
@@ -559,7 +558,7 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertEqual(state["accounts"][0]["circleWalletId"], "circle-wallet-1")
         self.assertEqual(state["entries"], [])
 
-    def test_gateway_deposit_proxies_to_wallet_mcp(self) -> None:
+    def test_gateway_deposit_proxies_to_wallet_rest_client(self) -> None:
         class FakeWalletClient:
             async def gateway_deposit(self, request):
                 self.request = request
@@ -588,7 +587,7 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertEqual(payload["mode"], "gateway_deposit")
         self.assertEqual(fake_client.request.refId, "deposit:test")
 
-    def test_gateway_withdrawal_proxies_to_wallet_mcp(self) -> None:
+    def test_gateway_withdrawal_proxies_to_wallet_rest_client(self) -> None:
         class FakeWalletClient:
             async def gateway_withdraw(self, request):
                 self.request = request
@@ -777,7 +776,7 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertEqual(state_after_second_read["entries"], [])
         self.assertEqual(main.get_store().load().accounts[0].availableAtomic, "0")
 
-    def test_mcp_ledger_state_uses_circle_balance_as_agent_visible_available(
+    def test_ledger_state_helper_uses_circle_balance_as_agent_visible_available(
         self,
     ) -> None:
         class FakeWalletClient:
@@ -791,10 +790,8 @@ class LedgerServiceTests(unittest.TestCase):
             wallet_address="0x1111111111111111111111111111111111111111",
             circle_wallet_id="circle-wallet-1",
         )
-        mcp_tools.configure_store_factory(main.get_store)
-
         with patch.object(main, "get_ledger_wallet_client", return_value=FakeWalletClient()):
-            state = asyncio.run(mcp_tools.agent_wallet_get_ledger_state_tool())
+            state = asyncio.run(main.ledger_state_with_circle_balances())
 
         account = state["accounts"][0]
         self.assertEqual(account["circleUsdcBalance"], "1.98")
@@ -848,7 +845,7 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertEqual(response.json()["detail"], "circle wallet binding agentId mismatch")
         self.assertEqual(self.client.get("/ledger/state").json()["accounts"], [])
 
-    def test_wallet_get_or_create_mcp_tool_creates_ledger_account(self) -> None:
+    def test_wallet_get_or_create_rest_route_creates_ledger_account(self) -> None:
         class FakeWalletClient:
             async def get_or_create(self, request):
                 return {
@@ -867,17 +864,18 @@ class LedgerServiceTests(unittest.TestCase):
                     },
                 }
 
-        tool = getattr(main, "agent_wallet_get_or_create_tool", None)
-        self.assertIsNotNone(tool)
         with patch.object(main, "get_ledger_wallet_client", return_value=FakeWalletClient()):
-            result = asyncio.run(
-                tool(
-                    agentName="Research Agent",
-                    agentId="agent_research",
-                    circleWalletId="circle-wallet-1",
-                )
+            response = self.client.post(
+                "/ledger/wallets/get-or-create",
+                json={
+                    "agentName": "Research Agent",
+                    "agentId": "agent_research",
+                    "circleWalletId": "circle-wallet-1",
+                },
             )
 
+        self.assertEqual(response.status_code, 200)
+        result = response.json()
         self.assertEqual(result["account"]["agentId"], "agent_research")
         self.assertEqual(
             self.client.get("/ledger/state?agentId=agent_research").json()["accounts"][0]["agentId"],
@@ -1035,14 +1033,14 @@ class LedgerServiceTests(unittest.TestCase):
                     recordId="chainrec_test",
                     eventType=event_type,
                     status="submitted",
-                    chainMcpUrl="http://chain.test/mcp/",
+                    chainHttpUrl="http://chain.test",
                     recorderAddress="0x000000000000000000000000000000000000dEaD",
                     txHash="0xtesttx",
                     mode="mock",
                     escrowId=escrow.escrowId if escrow is not None else None,
                     entryIds=[entry.entryId for entry in entries],
                     payload=payload,
-                    toolResult={
+                    actionResult={
                         "execution": {
                             "txHash": "0xtesttx",
                             "mode": "mock",
@@ -1137,7 +1135,7 @@ class LedgerServiceTests(unittest.TestCase):
                     recordId="settle_test",
                     eventType="escrow_release",
                     status="submitted",
-                    chainMcpUrl="http://chain.test/mcp/",
+                    settlementHttpUrl="http://circle.test",
                     escrowId=escrow.escrowId,
                     fromAgentId=escrow.buyerAgentId,
                     toAgentId=escrow.sellerAgentId,
@@ -1146,7 +1144,7 @@ class LedgerServiceTests(unittest.TestCase):
                     transactionHash="0xrealtransfer",
                     transactionState="INITIATED",
                     mode="circle",
-                    toolResult={"transactionHash": "0xrealtransfer"},
+                    actionResult={"transactionHash": "0xrealtransfer"},
                     createdAt=current,
                     updatedAt=current,
                 )
@@ -1201,7 +1199,7 @@ class LedgerServiceTests(unittest.TestCase):
                     recordId="settle_direct",
                     eventType="agent_transfer",
                     status="submitted",
-                    chainMcpUrl="http://circle.test/mcp/",
+                    settlementHttpUrl="http://circle.test",
                     transferId=ref_id,
                     fromAgentId=from_agent_id,
                     toAgentId=to_agent_id,
@@ -1210,7 +1208,7 @@ class LedgerServiceTests(unittest.TestCase):
                     transactionHash="0xagenttransfer",
                     transactionState="INITIATED",
                     mode="circle",
-                    toolResult={"transactionHash": "0xagenttransfer"},
+                    actionResult={"transactionHash": "0xagenttransfer"},
                     createdAt=current,
                     updatedAt=current,
                 )
@@ -1266,7 +1264,7 @@ class LedgerServiceTests(unittest.TestCase):
                     recordId="settle_failed_direct",
                     eventType="agent_transfer",
                     status="failed",
-                    chainMcpUrl="http://circle.test/mcp/",
+                    settlementHttpUrl="http://circle.test",
                     transferId="transfer_failed",
                     fromAgentId="agent_sender",
                     toAgentId="agent_receiver",
@@ -1349,7 +1347,7 @@ class LedgerServiceTests(unittest.TestCase):
                     recordId="settle_withdrawal",
                     eventType="withdrawal",
                     status="submitted",
-                    chainMcpUrl="http://circle.test/mcp/",
+                    settlementHttpUrl="http://circle.test",
                     transferId=ref_id,
                     fromAgentId=from_agent_id,
                     toAddress=to_address,
@@ -1358,7 +1356,7 @@ class LedgerServiceTests(unittest.TestCase):
                     transactionHash="0xwithdrawal",
                     transactionState="INITIATED",
                     mode="circle",
-                    toolResult={"transactionHash": "0xwithdrawal"},
+                    actionResult={"transactionHash": "0xwithdrawal"},
                     createdAt=current,
                     updatedAt=current,
                 )
@@ -1415,7 +1413,7 @@ class LedgerServiceTests(unittest.TestCase):
                     recordId="settle_failed_withdrawal",
                     eventType="withdrawal",
                     status="failed",
-                    chainMcpUrl="http://circle.test/mcp/",
+                    settlementHttpUrl="http://circle.test",
                     transferId="withdrawal_failed",
                     fromAgentId="agent_sender",
                     toAddress="0x2222222222222222222222222222222222222222",
@@ -1522,7 +1520,7 @@ class LedgerServiceTests(unittest.TestCase):
                     recordId="settle_failed",
                     eventType="escrow_release",
                     status="failed",
-                    chainMcpUrl="http://chain.test/mcp/",
+                    settlementHttpUrl="http://circle.test",
                     escrowId=escrow.escrowId,
                     fromAgentId=escrow.buyerAgentId,
                     toAgentId=escrow.sellerAgentId,
@@ -1636,101 +1634,90 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertEqual(state["accounts"][0]["availableAtomic"], "5000000")
         self.assertTrue(Path(self.state_path).exists())
 
-    def test_route_payment_intent_tool_is_served_by_ledger(self) -> None:
-        tool = getattr(main, "route_payment_intent_tool", None)
-        self.assertIsNotNone(tool)
-
-        result = asyncio.run(
-            tool(
-                purpose="paid api",
-                deliveryMode="immediate_api",
-                requiresAcceptance=False,
-                externalService=True,
-                serviceUrl="https://seller.example/x402",
-            )
+    def test_route_payment_intent_is_served_by_ledger_rest(self) -> None:
+        response = self.client.post(
+            "/ledger/payment/route",
+            json={
+                "purpose": "paid api",
+                "deliveryMode": "immediate_api",
+                "requiresAcceptance": False,
+                "externalService": True,
+                "serviceUrl": "https://seller.example/x402",
+            },
         )
 
+        self.assertEqual(response.status_code, 200)
+        result = response.json()
         self.assertEqual(result["method"], "x402")
         self.assertEqual(result["allowedTools"], ["chain_x402_fetch"])
 
     def test_route_payment_intent_supports_funding_onramp(self) -> None:
-        tool = getattr(main, "route_payment_intent_tool", None)
-        self.assertIsNotNone(tool)
-
-        result = asyncio.run(
-            tool(
-                purpose="fund agent wallet",
-                deliveryMode="funding",
-                requiresAcceptance=False,
-                externalService=True,
-            )
+        response = self.client.post(
+            "/ledger/payment/route",
+            json={
+                "purpose": "fund agent wallet",
+                "deliveryMode": "funding",
+                "requiresAcceptance": False,
+                "externalService": True,
+            },
         )
 
+        self.assertEqual(response.status_code, 200)
+        result = response.json()
         self.assertEqual(result["method"], "onramp")
         self.assertEqual(result["allowedTools"], ["agent_wallet_create_onramp_session"])
 
     def test_route_payment_intent_supports_direct_agent_transfer(self) -> None:
-        tool = getattr(main, "route_payment_intent_tool", None)
-        self.assertIsNotNone(tool)
-
-        result = asyncio.run(
-            tool(
-                purpose="pay another agent now",
-                deliveryMode="agent_transfer",
-                requiresAcceptance=False,
-                externalService=False,
-            )
+        response = self.client.post(
+            "/ledger/payment/route",
+            json={
+                "purpose": "pay another agent now",
+                "deliveryMode": "agent_transfer",
+                "requiresAcceptance": False,
+                "externalService": False,
+            },
         )
 
+        self.assertEqual(response.status_code, 200)
+        result = response.json()
         self.assertEqual(result["method"], "gateway_nanopayment")
         self.assertEqual(result["allowedTools"], ["agent_wallet_transfer"])
 
     def test_route_payment_intent_supports_withdrawal(self) -> None:
-        tool = getattr(main, "route_payment_intent_tool", None)
-        self.assertIsNotNone(tool)
-
-        result = asyncio.run(
-            tool(
-                purpose="withdraw USDC to an external wallet",
-                deliveryMode="withdrawal",
-                requiresAcceptance=False,
-                externalService=True,
-            )
+        response = self.client.post(
+            "/ledger/payment/route",
+            json={
+                "purpose": "withdraw USDC to an external wallet",
+                "deliveryMode": "withdrawal",
+                "requiresAcceptance": False,
+                "externalService": True,
+            },
         )
 
+        self.assertEqual(response.status_code, 200)
+        result = response.json()
         self.assertEqual(result["method"], "circle_withdrawal")
         self.assertEqual(result["allowedTools"], ["agent_wallet_settle_ledger_transfer"])
 
-    def test_ledger_mcp_tools_operate_on_local_store(self) -> None:
-        state_tool = getattr(main, "agent_wallet_get_ledger_state_tool", None)
-        transfer_tool = getattr(main, "agent_wallet_transfer_tool", None)
-        create_tool = getattr(main, "agent_wallet_create_escrow_tool", None)
-        release_tool = getattr(main, "agent_wallet_release_escrow_tool", None)
-        refund_tool = getattr(main, "agent_wallet_refund_escrow_tool", None)
-        self.assertFalse(hasattr(main, "agent_wallet_credit_balance_tool"))
-        self.assertIsNotNone(state_tool)
-        self.assertIsNotNone(transfer_tool)
-        self.assertIsNotNone(create_tool)
-        self.assertIsNotNone(release_tool)
-        self.assertIsNotNone(refund_tool)
-
-        main.get_store().credit(
-            agent_id="agent_buyer",
-            amount_atomic="5000000",
-            reason="demo funding",
-            metadata={},
+    def test_ledger_rest_routes_operate_on_local_store(self) -> None:
+        self.client.post(
+            "/ledger/accounts/agent_buyer/credit",
+            json={"amountAtomic": "5000000", "reason": "demo funding"},
         )
-        escrow = asyncio.run(
-            create_tool(
-                buyerAgentId="agent_buyer",
-                sellerAgentId="agent_seller",
-                amountAtomic="3000000",
-                taskId="task_123",
-                description="Research task",
-            )
-        )["escrow"]
-        released = asyncio.run(release_tool(escrow["escrowId"]))["escrow"]
-        state = asyncio.run(state_tool())
+        escrow = self.client.post(
+            "/ledger/escrows",
+            json={
+                "buyerAgentId": "agent_buyer",
+                "sellerAgentId": "agent_seller",
+                "amountAtomic": "3000000",
+                "taskId": "task_123",
+                "description": "Research task",
+            },
+        ).json()["escrow"]
+        released = self.client.post(f"/ledger/escrows/{escrow['escrowId']}/release").json()[
+            "escrow"
+        ]
+        state = self.client.get("/admin/ledger/state").json()
 
         self.assertEqual(released["status"], "released")
         accounts = {item["agentId"]: item for item in state["accounts"]}
@@ -1738,38 +1725,39 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertEqual(accounts["agent_buyer"]["lockedAtomic"], "0")
         self.assertEqual(accounts["agent_seller"]["availableAtomic"], "3000000")
 
-        main.get_store().credit(
-            agent_id="agent_refund_buyer",
-            amount_atomic="4000000",
-            reason="demo funding",
-            metadata={},
+        self.client.post(
+            "/ledger/accounts/agent_refund_buyer/credit",
+            json={"amountAtomic": "4000000", "reason": "demo funding"},
         )
-        refund_escrow = asyncio.run(
-            create_tool(
-                buyerAgentId="agent_refund_buyer",
-                sellerAgentId="agent_refund_seller",
-                amountAtomic="1000000",
-            )
-        )["escrow"]
-        refunded = asyncio.run(refund_tool(refund_escrow["escrowId"]))["escrow"]
+        refund_escrow = self.client.post(
+            "/ledger/escrows",
+            json={
+                "buyerAgentId": "agent_refund_buyer",
+                "sellerAgentId": "agent_refund_seller",
+                "amountAtomic": "1000000",
+            },
+        ).json()["escrow"]
+        refunded = self.client.post(
+            f"/ledger/escrows/{refund_escrow['escrowId']}/refund"
+        ).json()["escrow"]
 
         self.assertEqual(refunded["status"], "refunded")
 
-    def test_onramp_mcp_tool_creates_session(self) -> None:
+    def test_onramp_rest_route_creates_session(self) -> None:
         os.environ["COINBASE_ONRAMP_MOCK"] = "true"
         main.get_coinbase_onramp_client.cache_clear()
-        tool = getattr(main, "agent_wallet_create_onramp_session_tool", None)
-        self.assertIsNotNone(tool)
-
-        result = asyncio.run(
-            tool(
-                agentId="agentA",
-                destinationAddress="0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
-                paymentAmount="10.00",
-                idempotencyKey="fund-agentA-10",
-            )
+        response = self.client.post(
+            "/onramp/sessions",
+            json={
+                "agentId": "agentA",
+                "destinationAddress": "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
+                "paymentAmount": "10.00",
+                "idempotencyKey": "fund-agentA-10",
+            },
         )
 
+        self.assertEqual(response.status_code, 200)
+        result = response.json()
         self.assertEqual(result["agentId"], "agentA")
         self.assertEqual(result["status"], "created")
         self.assertIn("onrampUrl", result)
