@@ -181,6 +181,83 @@ class LedgerServiceTests(unittest.TestCase):
 
         self.assertEqual(status["balances"]["USDC"], "1.23")
 
+    def test_auth_session_returns_anonymous_without_cookie(self) -> None:
+        response = self.client.get("/auth/session")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"authenticated": False, "user": None})
+
+    def test_github_login_redirects_to_github_oauth(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "GITHUB_CLIENT_ID": "github-client",
+                "GITHUB_CLIENT_SECRET": "github-secret",
+                "AUTH_SESSION_SECRET": "session-secret",
+                "PUBLIC_BASE_URL": "https://ledger.example.test",
+            },
+        ):
+            response = self.client.get("/auth/github/login", follow_redirects=False)
+
+        self.assertEqual(response.status_code, 307)
+        location = response.headers["location"]
+        self.assertTrue(location.startswith("https://github.com/login/oauth/authorize?"))
+        self.assertIn("client_id=github-client", location)
+        self.assertNotIn("redirect_uri=", location)
+        self.assertIn("scope=read%3Auser+user%3Aemail", location)
+        self.assertIn("chief_ledger_oauth_state=", response.headers["set-cookie"])
+
+    def test_root_can_receive_github_oauth_callback_error(self) -> None:
+        response = self.client.get("/?error=access_denied", follow_redirects=False)
+
+        self.assertEqual(response.status_code, 307)
+        self.assertEqual(response.headers["location"], "/dashboard?auth_error=access_denied")
+
+    def test_dashboard_can_receive_github_oauth_callback_error(self) -> None:
+        response = self.client.get("/dashboard?error=access_denied", follow_redirects=False)
+
+        self.assertEqual(response.status_code, 307)
+        self.assertEqual(response.headers["location"], "/dashboard?auth_error=access_denied")
+
+    def test_nested_dashboard_github_callback_receives_oauth_error(self) -> None:
+        response = self.client.get(
+            "/dashboard/auth/github/callback?error=access_denied",
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 307)
+        self.assertEqual(response.headers["location"], "/dashboard?auth_error=access_denied")
+
+    def test_github_login_requires_oauth_config(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            response = self.client.get("/auth/github/login", follow_redirects=False)
+
+        self.assertEqual(response.status_code, 500)
+        self.assertIn("GITHUB_CLIENT_ID", response.json()["detail"])
+
+    def test_auth_session_returns_signed_github_user(self) -> None:
+        with patch.dict(os.environ, {"AUTH_SESSION_SECRET": "session-secret"}):
+            session = main.sign_auth_session(
+                {
+                    "provider": "github",
+                    "login": "octo",
+                    "name": "Octo User",
+                    "email": "OWNER@EXAMPLE.COM",
+                    "avatar_url": "https://example.test/avatar.png",
+                }
+            )
+            response = self.client.get(
+                "/auth/session",
+                headers={"Cookie": f"chief_ledger_session={session}"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["authenticated"])
+        self.assertEqual(payload["user"]["provider"], "github")
+        self.assertEqual(payload["user"]["login"], "octo")
+        self.assertEqual(payload["user"]["email"], "owner@example.com")
+
     def test_coinbase_auth_supports_cdp_key_id_and_base64_private_key(self) -> None:
         private_key = ed25519.Ed25519PrivateKey.generate()
         seed = private_key.private_bytes_raw()
@@ -246,24 +323,39 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         html = response.text
         self.assertIn("Agent Wallet · MVP Dashboard", html)
-        self.assertIn("if (!registered) return <window.RegistrationScreen />", html)
-        self.assertIn("if (!claimed)    return <window.ClaimScreen />", html)
-        self.assertIn("const [mockState, setMockStateState]   = React.useState('day1');", html)
+        self.assertIn('href="/auth/github/login"', html)
+        self.assertIn("fetch('/auth/session'", html)
+        self.assertIn("if (!registered) return <window.MvpGithubAuthScreen />", html)
+        self.assertIn("if (!claimed)    return <window.MvpClaimScreen />", html)
+        self.assertIn("window.ClaimForm = ClaimForm", html)
+        self.assertIn("fetch(`/dashboard/claimable-agents?", html)
+        self.assertIn("t('mvp.dash.claim.code_label')", html)
+        self.assertIn("candidate.claimCode", html)
+        self.assertNotIn("agent id / name", html)
+        self.assertNotIn("function CandidateButton", html)
+        self.assertIn("window.localStorage.getItem(STORAGE_KEYS.mockState) || 'day1'", html)
+        self.assertNotIn('type="email"', html)
+        self.assertNotIn('placeholder="you@example.com"', html)
         self.assertNotIn("<window.MockStateToggle />", html)
         self.assertIn("fetch(`/dashboard/data${emailQuery}`)", html)
-        self.assertIn("fetch(`/dashboard/claimable-agents?", html)
         self.assertIn("fetch('/onramp/sessions'", html)
         self.assertIn("fullWalletAddress", html)
         self.assertIn("const qrAddress = String(address || '').trim();", html)
         self.assertIn("qr.addData(qrAddress);", html)
         self.assertIn("data-qr-address={qrAddress}", html)
+        self.assertIn("jsQR.js", html)
         self.assertIn("fetch('/ledger/withdrawals'", html)
+        self.assertIn("<window.AddressPicker", html)
+        self.assertIn("<window.AddAddressModal", html)
+        self.assertIn("wallets, defaultWalletId", html)
         self.assertIn("const amountAtomic = usdcToAtomic(amount);", html)
         self.assertIn("amountAtomic,", html)
         self.assertIn("ownerEmail", html)
         self.assertIn("const MIN_WITHDRAW = 1;", html)
         self.assertIn("Min 1 USDC", html)
         self.assertNotIn("claimAgent('agentA')", html)
+        self.assertNotIn("mvp.dash.settings.danger_button", html)
+        self.assertNotIn("mvp.dash.settings.open_demo", html)
 
     def test_dashboard_data_returns_email_scoped_ledger_accounts(self) -> None:
         store = main.get_store()
@@ -375,6 +467,8 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertEqual(candidate["agentName"], "Beta Research")
         self.assertEqual(candidate["ownerEmail"], "owner@example.com")
         self.assertEqual(candidate["claimStatus"], "unclaimed")
+        self.assertTrue(candidate["claimCode"].startswith("clm_"))
+        self.assertNotEqual(candidate["claimCode"], "agent_beta")
         self.assertEqual(candidate["dashboard"]["balance"]["available"], 1.25)
 
     def test_management_page_helpers_render_and_call_ledger_api(self) -> None:

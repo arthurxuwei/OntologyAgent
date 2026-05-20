@@ -9,6 +9,8 @@ import threading
 import time
 import uuid
 import base64
+import hashlib
+import hmac
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from functools import lru_cache
@@ -21,7 +23,7 @@ import jwt
 from chain_client import ChainHttpClient
 from circle_client import CircleHttpClient
 from cryptography.hazmat.primitives.asymmetric import ed25519
-from fastapi import FastAPI, HTTPException
+from fastapi import Cookie, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, RedirectResponse
 from payment_router import PaymentIntent, route_payment_intent
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
@@ -36,6 +38,13 @@ DEFAULT_CHAIN_HTTP_URL = "http://chain:8091"
 DEFAULT_SETTLEMENT_HTTP_URL = "http://circle:8093"
 DEFAULT_WALLET_HTTP_URL = "http://circle:8093"
 DEFAULT_CHAIN_RECORDER_ADDRESS = "0x000000000000000000000000000000000000dEaD"
+GITHUB_AUTHORIZE_URL = "https://github.com/login/oauth/authorize"
+GITHUB_TOKEN_URL = "https://github.com/login/oauth/access_token"
+GITHUB_USER_URL = "https://api.github.com/user"
+GITHUB_EMAILS_URL = "https://api.github.com/user/emails"
+SESSION_COOKIE = "chief_ledger_session"
+OAUTH_STATE_COOKIE = "chief_ledger_oauth_state"
+AUTH_SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 14
 LEDGER_CONSOLE_PATH = Path(__file__).resolve().parent / "web" / "index.html"
 LEDGER_DASHBOARD_PATH = Path(__file__).resolve().parent / "web" / "dashboard.html"
 NO_CACHE_HEADERS = {
@@ -50,6 +59,118 @@ logger = logging.getLogger("chief.ledger")
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def require_env(name: str) -> str:
+    value = os.getenv(name)
+    if not value:
+        raise RuntimeError(f"{name} is required")
+    return value
+
+
+def public_base_url(request: Request) -> str:
+    configured = os.getenv("PUBLIC_BASE_URL")
+    if configured:
+        return configured.rstrip("/")
+    proto = request.headers.get("x-forwarded-proto") or request.url.scheme
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host")
+    if host:
+        return f"{proto}://{host}".rstrip("/")
+    return str(request.base_url).rstrip("/")
+
+
+def sign_auth_session(user: dict[str, Any]) -> str:
+    secret = require_env("AUTH_SESSION_SECRET").encode("utf-8")
+    payload = json.dumps(user, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    body = base64.urlsafe_b64encode(payload).rstrip(b"=").decode("ascii")
+    signature = hmac.new(secret, body.encode("ascii"), hashlib.sha256).hexdigest()
+    return f"{body}.{signature}"
+
+
+def verify_auth_session(value: str | None) -> dict[str, Any] | None:
+    if not value:
+        return None
+    try:
+        body, signature = value.split(".", 1)
+        secret = require_env("AUTH_SESSION_SECRET").encode("utf-8")
+    except (RuntimeError, ValueError):
+        return None
+    expected = hmac.new(secret, body.encode("ascii"), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected, signature):
+        return None
+    padded = body + ("=" * (-len(body) % 4))
+    try:
+        parsed = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8"))
+    except (ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(parsed, dict) or parsed.get("provider") != "github":
+        return None
+    email = normalize_email(parsed.get("email"))
+    if not email:
+        return None
+    parsed["email"] = email
+    return parsed
+
+
+async def fetch_github_user(code: str, redirect_uri: str | None = None) -> dict[str, Any]:
+    client_id = require_env("GITHUB_CLIENT_ID")
+    client_secret = require_env("GITHUB_CLIENT_SECRET")
+    token_request = {
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "code": code,
+    }
+    if redirect_uri:
+        token_request["redirect_uri"] = redirect_uri
+    async with httpx.AsyncClient(timeout=20) as client:
+        token_response = await client.post(
+            GITHUB_TOKEN_URL,
+            headers={"Accept": "application/json"},
+            data=token_request,
+        )
+        token_response.raise_for_status()
+        token_payload = token_response.json()
+        access_token = token_payload.get("access_token")
+        if not access_token:
+            raise RuntimeError("GitHub OAuth token exchange did not return access_token")
+
+        headers = {
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {access_token}",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+        user_response = await client.get(GITHUB_USER_URL, headers=headers)
+        user_response.raise_for_status()
+        profile = user_response.json()
+
+        email = normalize_email(profile.get("email"))
+        if not email:
+            emails_response = await client.get(GITHUB_EMAILS_URL, headers=headers)
+            emails_response.raise_for_status()
+            for item in emails_response.json():
+                if not isinstance(item, dict):
+                    continue
+                candidate = normalize_email(item.get("email"))
+                if candidate and item.get("primary") and item.get("verified"):
+                    email = candidate
+                    break
+            if not email:
+                for item in emails_response.json():
+                    if isinstance(item, dict) and item.get("verified"):
+                        email = normalize_email(item.get("email"))
+                        if email:
+                            break
+
+    if not email:
+        raise RuntimeError("GitHub account does not expose a verified email")
+    login = str(profile.get("login") or "").strip()
+    return {
+        "provider": "github",
+        "login": login,
+        "name": str(profile.get("name") or login or email).strip(),
+        "email": email,
+        "avatar_url": profile.get("avatar_url"),
+    }
 
 
 class LedgerAccount(BaseModel):
@@ -398,6 +519,17 @@ def short_address(value: Any) -> str:
     if len(text) <= 18:
         return text
     return f"{text[:10]}...{text[-6:]}"
+
+
+def claim_code_for_account(account: dict[str, Any], owner_email: str) -> str:
+    agent_id = str(account.get("agentId") or "").strip()
+    wallet_address = str(
+        account.get("walletAddress") or account.get("circleWalletId") or ""
+    ).strip()
+    seed = f"{normalize_email(owner_email) or ''}:{agent_id}:{wallet_address}".encode(
+        "utf-8"
+    )
+    return "clm_" + hashlib.sha256(seed).hexdigest()[:18]
 
 
 def normalize_evm_address(value: Any) -> str:
@@ -756,6 +888,7 @@ def build_claimable_agents(
                 "agentId": agent_id,
                 "agentName": str(account.get("agentName") or agent_id),
                 "ownerEmail": normalized_email,
+                "claimCode": claim_code_for_account(account, normalized_email),
                 "walletAddress": str(wallet_address),
                 "displayWalletAddress": short_address(wallet_address),
                 "circleWalletId": account.get("circleWalletId"),
@@ -2288,8 +2421,53 @@ def health() -> dict[str, Any]:
     return {"service": "chief-ledger", "status": "ok"}
 
 
+async def complete_github_callback(
+    request: Request,
+    *,
+    code: str = "",
+    state: str = "",
+    error: str = "",
+    stored_state: str | None = None,
+) -> RedirectResponse:
+    if error:
+        return RedirectResponse(f"/dashboard?auth_error={error}", status_code=307)
+    if not code or not state or not stored_state or not hmac.compare_digest(state, stored_state):
+        raise HTTPException(status_code=400, detail="Invalid GitHub OAuth state")
+    try:
+        user = await fetch_github_user(code)
+        session_value = sign_auth_session(user)
+    except (RuntimeError, httpx.HTTPError) as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    response = RedirectResponse("/dashboard", status_code=307)
+    response.set_cookie(
+        SESSION_COOKIE,
+        session_value,
+        httponly=True,
+        samesite="lax",
+        secure=public_base_url(request).startswith("https://"),
+        max_age=AUTH_SESSION_MAX_AGE_SECONDS,
+    )
+    response.delete_cookie(OAUTH_STATE_COOKIE)
+    return response
+
+
 @app.get("/")
-def ledger_home() -> RedirectResponse:
+async def ledger_home(
+    request: Request,
+    code: str = "",
+    state: str = "",
+    error: str = "",
+    stored_state: str | None = Cookie(default=None, alias=OAUTH_STATE_COOKIE),
+) -> RedirectResponse:
+    if code or error:
+        return await complete_github_callback(
+            request,
+            code=code,
+            state=state,
+            error=error,
+            stored_state=stored_state,
+        )
     return RedirectResponse("/dashboard", status_code=307)
 
 
@@ -2308,12 +2486,88 @@ async def get_admin_ledger_state() -> dict[str, Any]:
 
 
 @app.get("/dashboard")
-def ledger_dashboard() -> FileResponse:
+async def ledger_dashboard(
+    request: Request,
+    code: str = "",
+    state: str = "",
+    error: str = "",
+    stored_state: str | None = Cookie(default=None, alias=OAUTH_STATE_COOKIE),
+) -> Response:
+    if code or error:
+        return await complete_github_callback(
+            request,
+            code=code,
+            state=state,
+            error=error,
+            stored_state=stored_state,
+        )
     return FileResponse(
         LEDGER_DASHBOARD_PATH,
         media_type="text/html",
         headers=NO_CACHE_HEADERS,
     )
+
+
+@app.get("/auth/session")
+async def auth_session(
+    session_cookie: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+) -> dict[str, Any]:
+    user = verify_auth_session(session_cookie)
+    return {"authenticated": user is not None, "user": user}
+
+
+@app.get("/auth/github/login")
+async def github_login(request: Request) -> RedirectResponse:
+    try:
+        require_env("GITHUB_CLIENT_ID")
+        require_env("GITHUB_CLIENT_SECRET")
+        require_env("AUTH_SESSION_SECRET")
+    except RuntimeError as error:
+        raise HTTPException(status_code=500, detail=str(error)) from error
+
+    state = secrets.token_urlsafe(24)
+    query = urlencode(
+        {
+            "client_id": os.getenv("GITHUB_CLIENT_ID", ""),
+            "scope": "read:user user:email",
+            "state": state,
+        }
+    )
+    response = RedirectResponse(f"{GITHUB_AUTHORIZE_URL}?{query}", status_code=307)
+    response.set_cookie(
+        OAUTH_STATE_COOKIE,
+        state,
+        httponly=True,
+        samesite="lax",
+        secure=public_base_url(request).startswith("https://"),
+        max_age=600,
+    )
+    return response
+
+
+@app.get("/auth/github/callback")
+@app.get("/dashboard/auth/github/callback")
+async def github_callback(
+    request: Request,
+    code: str = "",
+    state: str = "",
+    error: str = "",
+    stored_state: str | None = Cookie(default=None, alias=OAUTH_STATE_COOKIE),
+) -> RedirectResponse:
+    return await complete_github_callback(
+        request,
+        code=code,
+        state=state,
+        error=error,
+        stored_state=stored_state,
+    )
+
+
+@app.post("/auth/logout")
+async def auth_logout() -> Response:
+    response = Response(content='{"ok":true}', media_type="application/json")
+    response.delete_cookie(SESSION_COOKIE)
+    return response
 
 
 @app.get("/ledger/state")
