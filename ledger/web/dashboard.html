@@ -2080,7 +2080,8 @@ window.LANG_DICT = LANG_DICT;
 
   function MvpAppStateProvider({ children }) {
     const params = React.useMemo(() => new URLSearchParams(window.location.search), []);
-    const claimToken = params.get('claim') || '';
+    const claimToken = params.get('claimCode') || '';
+    const deepLinkAgentId = params.get('agentId') || '';
     const internalMode = params.get('internal') === '1';
     const isReset = params.get('reset') === '1';
 
@@ -2269,6 +2270,10 @@ window.LANG_DICT = LANG_DICT;
           if (payload && payload.authenticated && payload.user) {
             signIn(payload.user);
           } else {
+            if (claimToken && deepLinkAgentId) {
+              window.location.href = `/auth/github/login?returnTo=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+              return;
+            }
             signOut();
           }
         })
@@ -2279,7 +2284,7 @@ window.LANG_DICT = LANG_DICT;
           if (!cancelled) setAuthChecked(true);
         });
       return () => { cancelled = true; };
-    }, [params, signIn, signOut]);
+    }, [params, signIn, signOut, claimToken, deepLinkAgentId]);
 
     // Legacy shim — main project's RegistrationScreen (no longer mounted by
     // MVP but still in the bundle) calls setRegistered(true, {email}). Routes
@@ -2401,7 +2406,7 @@ window.LANG_DICT = LANG_DICT;
       authChecked, registered, currentUser, ownerEmail, externalWallet, mockState,
       wallets, defaultWalletId,
       agents, activeAgentId, claimed,
-      claimToken, internalMode,
+      claimToken, deepLinkAgentId, internalMode,
       signIn, signOut,
       setRegistered, setClaimed, claimAgent, setActiveAgent,
       setMockState, setExternalWallet,
@@ -7250,6 +7255,64 @@ window.MockStateToggle = MockStateToggle;
 // MVP dashboard state is fully isolated from the main project's dashboard).
 
 (function () {
+  function DeepLinkClaimRunner() {
+    const {
+      authChecked, claimToken, deepLinkAgentId, currentUser, ownerEmail,
+      agents: claimedAgents, claimAgent,
+    } = window.useAppState();
+    const consumedRef = React.useRef(false);
+    const [candidates, setCandidates] = React.useState([]);
+    const [status, setStatus] = React.useState('idle');
+
+    React.useEffect(() => {
+      if (!authChecked || consumedRef.current || !claimToken || !deepLinkAgentId || !currentUser || !ownerEmail) {
+        setCandidates([]);
+        setStatus('idle');
+        return;
+      }
+      let cancelled = false;
+      const claimed = encodeURIComponent(claimedAgents.join(','));
+      const email = encodeURIComponent(ownerEmail);
+      setStatus('loading');
+      fetch(`/dashboard/claimable-agents?email=${email}&claimed=${claimed}`)
+        .then((response) => {
+          if (!response.ok) throw new Error(`claimable agents ${response.status}`);
+          return response.json();
+        })
+        .then((payload) => {
+          if (cancelled) return;
+          const next = Array.isArray(payload.agents) ? payload.agents : [];
+          setCandidates(next);
+          setStatus(next.length ? 'ready' : 'empty');
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setCandidates([]);
+          setStatus('error');
+        });
+      return () => { cancelled = true; };
+    }, [authChecked, claimToken, deepLinkAgentId, currentUser, ownerEmail, claimedAgents]);
+
+    React.useEffect(() => {
+      if (!authChecked || consumedRef.current || !claimToken || !deepLinkAgentId || status !== 'ready') return;
+      const lowered = claimToken.trim().toLowerCase();
+      const normalizedDeepLinkAgentId = deepLinkAgentId.trim();
+      const candidate = candidates.find((candidate) => (
+        String(candidate.agentId || '').trim() === normalizedDeepLinkAgentId &&
+        String(candidate.claimCode || '').trim().toLowerCase() === lowered
+      ));
+      if (!candidate) return;
+      consumedRef.current = true;
+      claimAgent(candidate.agentId);
+      const cleanUrl = new URL(window.location.href);
+      cleanUrl.searchParams.delete('claimCode');
+      cleanUrl.searchParams.delete('agentId');
+      window.history.replaceState({}, '', cleanUrl.toString());
+    }, [authChecked, claimToken, deepLinkAgentId, status, candidates, claimAgent]);
+
+    return null;
+  }
+
   function DashboardRouter() {
     const { authChecked, registered, claimed } = window.useAppState();
     if (!authChecked) return <AuthCheckingScreen />;
@@ -7459,6 +7522,7 @@ window.MockStateToggle = MockStateToggle;
               <ResetLink />
               <window.LangSwitcher />
             </div>
+            <DeepLinkClaimRunner />
             <DashboardRouter />
           </div>
         </window.AppStateProvider>

@@ -505,6 +505,26 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertNotIn("mvp.dash.settings.danger_button", html)
         self.assertNotIn("mvp.dash.settings.open_demo", html)
 
+    def test_dashboard_supports_claim_code_deep_link_auto_claim(self) -> None:
+        response = self.client.get("/dashboard")
+
+        self.assertEqual(response.status_code, 200)
+        html = response.text
+        self.assertIn("params.get('claimCode')", html)
+        self.assertIn("params.get('agentId')", html)
+        self.assertIn("returnTo=${encodeURIComponent(window.location.pathname + window.location.search)}", html)
+        self.assertIn("function DeepLinkClaimRunner()", html)
+        self.assertIn("const consumedRef = React.useRef(false);", html)
+        self.assertIn("authChecked, claimToken, deepLinkAgentId, currentUser, ownerEmail,", html)
+        self.assertIn("!authChecked || consumedRef.current", html)
+        self.assertIn("fetch(`/dashboard/claimable-agents?email=${email}&claimed=${claimed}`)", html)
+        self.assertIn("const normalizedDeepLinkAgentId = deepLinkAgentId.trim();", html)
+        self.assertIn("String(candidate.agentId || '').trim() === normalizedDeepLinkAgentId", html)
+        self.assertIn("window.history.replaceState({}, '', cleanUrl.toString())", html)
+        self.assertIn("<DeepLinkClaimRunner />", html)
+        self.assertIn("<DashboardRouter />", html)
+        self.assertLess(html.index("<DeepLinkClaimRunner />"), html.index("<DashboardRouter />"))
+
     def test_dashboard_data_returns_email_scoped_ledger_accounts(self) -> None:
         store = main.get_store()
         store.bind_account_wallet(
