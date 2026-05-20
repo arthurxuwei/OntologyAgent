@@ -549,7 +549,7 @@
       }
 
       async function refreshLedgerState() {
-        const state = await requestJson("/ledger/state", { method: "GET" });
+        const state = await requestJson("/admin/ledger/state", { method: "GET" });
         renderLedgerState(state);
       }
 

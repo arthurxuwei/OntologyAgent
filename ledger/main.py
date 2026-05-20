@@ -2386,6 +2386,11 @@ def ledger_admin() -> FileResponse:
     )
 
 
+@app.get("/admin/ledger/state")
+async def get_admin_ledger_state() -> dict[str, Any]:
+    return await ledger_state_with_circle_balances()
+
+
 @app.get("/dashboard")
 def ledger_dashboard() -> FileResponse:
     return FileResponse(

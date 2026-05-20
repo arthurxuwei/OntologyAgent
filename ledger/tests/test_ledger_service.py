@@ -144,7 +144,7 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertNotIn('id="escrow-form"', html)
         self.assertNotIn("Create Escrow", html)
         self.assertIn('id="settlement-form"', html)
-        self.assertIn("/ledger/state", html)
+        self.assertIn("/admin/ledger/state", html)
         self.assertNotIn("/onramp/sessions", html)
         self.assertIn("/ledger/escrows", html)
         self.assertIn("Onramp Sessions", html)
@@ -322,7 +322,7 @@ class LedgerServiceTests(unittest.TestCase):
                 "};"
                 "global.fetch = async (url, options = {}) => {"
                 "fetchCalls.push({ url, method: options.method || 'GET', body: options.body || null });"
-                "if (url === '/ledger/state') return { ok: true, json: async () => ({"
+                "if (url === '/admin/ledger/state') return { ok: true, json: async () => ({"
                 "accounts: [{ agentId: 'agent_buyer', email: 'buyer@example.com', walletAddress: '0x1111111111111111111111111111111111111111', circleUsdcBalance: '1.98', availableAtomic: '5000000', lockedAtomic: '3000000' }],"
                 "entries: [{ entryId: 'entry_1', entryType: 'credit', agentId: 'agent_buyer' }],"
                 "escrows: [{ escrowId: 'escrow_1', buyerAgentId: 'agent_buyer', sellerAgentId: 'agent_seller', amountAtomic: '3000000', status: 'locked' }],"
@@ -349,6 +349,7 @@ class LedgerServiceTests(unittest.TestCase):
                 "escrowSelection: selectedEscrowId(),"
                 "walletListener: listeners.get('wallet-form:submit'),"
                 "settlementListener: listeners.get('settlement-form:submit'),"
+                "stateCall: fetchCalls.find((call) => call.url === '/admin/ledger/state'),"
                 "walletCall: fetchCalls.find((call) => call.url === '/ledger/wallets/get-or-create'),"
                 "openCall: window.openCalls[0] || null,"
                 "walletOutput: elements.get('wallet-output').textContent"
@@ -378,6 +379,7 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertIn("escrow_1", output["stateHtml"])
         self.assertIn("onramp_1", output["stateHtml"])
         self.assertIn("entry_1", output["stateHtml"])
+        self.assertEqual(output["stateCall"]["method"], "GET")
         self.assertNotIn("{", output["stateHtml"])
         self.assertNotIn('"accounts"', output["stateHtml"])
         self.assertEqual(output["escrowSelection"], "escrow_1")
@@ -538,6 +540,27 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertEqual(state["onrampEvents"], [])
         self.assertEqual(state["chainRecords"], [])
         self.assertEqual(state["settlementRecords"], [])
+
+    def test_admin_ledger_state_returns_full_state(self) -> None:
+        store = main.get_store()
+        store.bind_account_wallet(
+            agent_id="agent_owner",
+            agent_name="Owner Agent",
+            email="owner@example.com",
+            wallet_address=None,
+            circle_wallet_id=None,
+        )
+        store.credit(
+            agent_id="agent_owner",
+            amount_atomic="5000000",
+            reason="owner funding",
+            metadata={},
+        )
+
+        state = self.client.get("/admin/ledger/state").json()
+
+        self.assertEqual([account["agentId"] for account in state["accounts"]], ["agent_owner"])
+        self.assertEqual([entry["agentId"] for entry in state["entries"]], ["agent_owner"])
 
     def test_ledger_state_can_be_scoped_to_agent_id(self) -> None:
         store = main.get_store()
