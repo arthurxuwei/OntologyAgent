@@ -92,7 +92,7 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "ok")
 
-    def test_ledger_state_loads_legacy_mcp_record_fields(self) -> None:
+    def test_ledger_state_loads_legacy_record_result_fields(self) -> None:
         now = main.now_iso()
         legacy_state = {
             "accounts": [],
@@ -106,7 +106,7 @@ class LedgerServiceTests(unittest.TestCase):
                     "eventType": "credit",
                     "status": "submitted",
                     "chainTool": "chain_submit_execution",
-                    "chainMcpUrl": "http://chain.test/mcp/",
+                    "chainHttpUrl": "http://chain.test/rest/",
                     "recorderAddress": "0x000000000000000000000000000000000000dEaD",
                     "toolResult": {"txHash": "0xchain"},
                     "createdAt": now,
@@ -119,7 +119,7 @@ class LedgerServiceTests(unittest.TestCase):
                     "eventType": "withdrawal",
                     "status": "submitted",
                     "settlementTool": "agent_wallet_withdraw",
-                    "chainMcpUrl": "http://circle.test/mcp/",
+                    "settlementHttpUrl": "http://circle.test/rest/",
                     "fromAgentId": "agent_sender",
                     "amountAtomic": "1000000",
                     "toolResult": {"transactionHash": "0xsettle"},
@@ -132,11 +132,11 @@ class LedgerServiceTests(unittest.TestCase):
 
         state = main.get_store().load()
 
-        self.assertEqual(state.chainRecords[0].chainHttpUrl, "http://chain.test/mcp/")
+        self.assertEqual(state.chainRecords[0].chainHttpUrl, "http://chain.test/rest/")
         self.assertEqual(state.chainRecords[0].actionResult, {"txHash": "0xchain"})
         self.assertEqual(
             state.settlementRecords[0].settlementHttpUrl,
-            "http://circle.test/mcp/",
+            "http://circle.test/rest/",
         )
         self.assertEqual(
             state.settlementRecords[0].actionResult,
