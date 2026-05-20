@@ -471,6 +471,121 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertNotEqual(candidate["claimCode"], "agent_beta")
         self.assertEqual(candidate["dashboard"]["balance"]["available"], 1.25)
 
+    def test_claim_link_endpoint_creates_wallet_and_returns_urls(self) -> None:
+        class FakeWalletClient:
+            async def get_or_create(self, request):
+                return {
+                    "circleWalletId": "circle-wallet-1",
+                    "walletAddress": "0x1111111111111111111111111111111111111111",
+                    "mode": "circle",
+                    "binding": {
+                        "agentName": request.agentName,
+                        "agentId": request.agentId,
+                        "walletAddress": "0x1111111111111111111111111111111111111111",
+                        "circleWalletId": "circle-wallet-1",
+                        "circleWalletSetId": "circle-wallet-set",
+                        "blockchain": "BASE-SEPOLIA",
+                        "mode": "circle",
+                        "updatedAt": main.now_iso(),
+                    },
+                }
+
+        with patch.dict(os.environ, {"PUBLIC_BASE_URL": "https://ledger.example.test"}), patch.object(
+            main,
+            "get_ledger_wallet_client",
+            return_value=FakeWalletClient(),
+        ):
+            response = self.client.post(
+                "/ledger/claims/link",
+                json={
+                    "agentId": "312586087945994240",
+                    "agentName": "OpenClaw OntologyAgent",
+                    "email": "OWNER@example.com",
+                    "agentDescription": "OpenClaw profile bio",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["agentId"], "312586087945994240")
+        self.assertEqual(payload["agentName"], "OpenClaw OntologyAgent")
+        self.assertEqual(payload["ownerEmail"], "owner@example.com")
+        self.assertTrue(payload["claimCode"].startswith("clm_"))
+        self.assertIn("claimCode=" + payload["claimCode"], payload["claimUrl"])
+        self.assertIn("agentId=312586087945994240", payload["claimUrl"])
+        self.assertEqual(
+            payload["agentUrl"],
+            "https://ledger.example.test/dashboard?agentId=312586087945994240",
+        )
+        self.assertEqual(payload["walletAddress"], "0x1111111111111111111111111111111111111111")
+        self.assertEqual(payload["circleWalletId"], "circle-wallet-1")
+
+    def test_claim_link_endpoint_persists_claimable_account_without_wallet_ids(self) -> None:
+        class FakeWalletClient:
+            async def get_or_create(self, request):
+                return {"mode": "mock"}
+
+        with patch.dict(os.environ, {"PUBLIC_BASE_URL": "   "}), patch.object(
+            main,
+            "get_ledger_wallet_client",
+            return_value=FakeWalletClient(),
+        ):
+            response = self.client.post(
+                "/ledger/claims/link",
+                json={
+                    "agentId": "312586087945994240",
+                    "agentName": "OpenClaw OntologyAgent",
+                    "email": "OWNER@example.com",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["agentId"], "312586087945994240")
+        self.assertEqual(payload["agentName"], "OpenClaw OntologyAgent")
+        self.assertEqual(payload["ownerEmail"], "owner@example.com")
+        self.assertIn("claimCode=" + payload["claimCode"], payload["claimUrl"])
+        self.assertEqual(
+            payload["agentUrl"],
+            "https://ledger.curawealth.ai/dashboard?agentId=312586087945994240",
+        )
+
+        account = main.get_store().load().accounts[0]
+        self.assertEqual(account.agentId, "312586087945994240")
+        self.assertEqual(account.agentName, "OpenClaw OntologyAgent")
+        self.assertEqual(account.email, "owner@example.com")
+
+        claimable = self.client.get(
+            "/dashboard/claimable-agents?email=owner@example.com"
+        ).json()
+        self.assertEqual(len(claimable["agents"]), 1)
+        self.assertEqual(claimable["agents"][0]["agentId"], "312586087945994240")
+
+    def test_claim_link_endpoint_requires_profile_identity(self) -> None:
+        response = self.client.post(
+            "/ledger/claims/link",
+            json={
+                "agentId": "",
+                "agentName": "OpenClaw OntologyAgent",
+                "email": "owner@example.com",
+            },
+        )
+
+        self.assertEqual(response.status_code, 422)
+
+    def test_claim_link_endpoint_requires_email_via_route_logic(self) -> None:
+        response = self.client.post(
+            "/ledger/claims/link",
+            json={
+                "agentId": "312586087945994240",
+                "agentName": "OpenClaw OntologyAgent",
+                "email": "   ",
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["detail"], "email is required")
+
     def test_management_page_helpers_render_and_call_ledger_api(self) -> None:
         if shutil.which("node") is None:
             self.skipTest("node is required to execute ledger page helpers")

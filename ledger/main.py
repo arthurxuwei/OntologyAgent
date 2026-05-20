@@ -42,6 +42,7 @@ GITHUB_AUTHORIZE_URL = "https://github.com/login/oauth/authorize"
 GITHUB_TOKEN_URL = "https://github.com/login/oauth/access_token"
 GITHUB_USER_URL = "https://api.github.com/user"
 GITHUB_EMAILS_URL = "https://api.github.com/user/emails"
+DEFAULT_PUBLIC_LEDGER_URL = "https://ledger.curawealth.ai"
 SESSION_COOKIE = "chief_ledger_session"
 OAUTH_STATE_COOKIE = "chief_ledger_oauth_state"
 AUTH_SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 14
@@ -77,6 +78,17 @@ def public_base_url(request: Request) -> str:
     if host:
         return f"{proto}://{host}".rstrip("/")
     return str(request.base_url).rstrip("/")
+
+
+def configured_public_base_url() -> str:
+    configured = os.getenv("PUBLIC_BASE_URL")
+    if configured and configured.strip():
+        return configured.strip().rstrip("/")
+    return DEFAULT_PUBLIC_LEDGER_URL
+
+
+def dashboard_url(path_query: dict[str, str]) -> str:
+    return f"{configured_public_base_url()}/dashboard?{urlencode(path_query)}"
 
 
 def sign_auth_session(user: dict[str, Any]) -> str:
@@ -358,6 +370,28 @@ class AgentWalletRequest(BaseModel):
     walletAddress: Optional[str] = None
     circleWalletId: Optional[str] = None
     agentDescription: Optional[str] = None
+
+
+class ClaimLinkRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    agentId: str = Field(min_length=1)
+    agentName: str = Field(min_length=1)
+    email: str
+    agentDescription: Optional[str] = None
+
+
+class ClaimLinkResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    agentId: str
+    agentName: str
+    ownerEmail: str
+    claimCode: str
+    claimUrl: str
+    agentUrl: str
+    walletAddress: Optional[str] = None
+    circleWalletId: Optional[str] = None
 
 
 class GatewayDepositRequest(BaseModel):
@@ -2387,7 +2421,13 @@ async def get_or_create_agent_wallet(request: AgentWalletRequest) -> dict[str, A
             circle_wallet_id=circle_wallet_id,
         )
     else:
-        account = get_store().ensure_account(request.agentId)
+        account = get_store().bind_account_wallet(
+            agent_id=request.agentId,
+            agent_name=request.agentName,
+            email=request.email,
+            wallet_address=None,
+            circle_wallet_id=None,
+        )
     return {
         "wallet": wallet,
         "account": account.model_dump(),
@@ -2581,6 +2621,53 @@ async def get_ledger_state(agentId: str = "") -> dict[str, Any]:
 @app.post("/ledger/payment/route")
 def route_ledger_payment_intent(intent: PaymentIntent) -> dict[str, Any]:
     return route_payment_intent(intent)
+
+
+@app.post("/ledger/claims/link")
+async def create_claim_link(request: ClaimLinkRequest) -> dict[str, Any]:
+    owner_email = normalize_email(request.email)
+    if owner_email is None:
+        raise HTTPException(status_code=400, detail="email is required")
+
+    try:
+        payload = await get_or_create_agent_wallet(
+            AgentWalletRequest(
+                agentName=request.agentName,
+                agentId=request.agentId,
+                email=owner_email,
+                agentDescription=request.agentDescription,
+            )
+        )
+    except Exception as error:
+        raise http_error(error) from error
+
+    account = payload.get("account")
+    wallet = payload.get("wallet")
+    if not isinstance(account, dict):
+        raise HTTPException(status_code=502, detail="claim link response missing account")
+    if not isinstance(wallet, dict):
+        wallet = {}
+
+    claim_code = claim_code_for_account(account, owner_email)
+    response = ClaimLinkResponse(
+        agentId=str(account.get("agentId") or request.agentId),
+        agentName=str(account.get("agentName") or request.agentName),
+        ownerEmail=owner_email,
+        claimCode=claim_code,
+        claimUrl=dashboard_url({"claimCode": claim_code, "agentId": request.agentId}),
+        agentUrl=dashboard_url({"agentId": request.agentId}),
+        walletAddress=(
+            str(account.get("walletAddress") or wallet.get("walletAddress"))
+            if account.get("walletAddress") or wallet.get("walletAddress")
+            else None
+        ),
+        circleWalletId=(
+            str(account.get("circleWalletId") or wallet.get("circleWalletId"))
+            if account.get("circleWalletId") or wallet.get("circleWalletId")
+            else None
+        ),
+    )
+    return response.model_dump()
 
 
 @app.get("/dashboard/data")
