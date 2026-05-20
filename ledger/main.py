@@ -543,6 +543,35 @@ def normalize_evm_address(value: Any) -> str:
     return text
 
 
+def migrate_ledger_state_payload(raw: Any) -> Any:
+    if not isinstance(raw, dict):
+        return raw
+
+    for record in raw.get("chainRecords") or []:
+        if not isinstance(record, dict):
+            continue
+        legacy_url = record.pop("chainMcpUrl", None)
+        if "chainHttpUrl" not in record and legacy_url is not None:
+            record["chainHttpUrl"] = legacy_url
+        legacy_result = record.pop("toolResult", None)
+        if "actionResult" not in record and legacy_result is not None:
+            record["actionResult"] = legacy_result
+        record.pop("chainTool", None)
+
+    for record in raw.get("settlementRecords") or []:
+        if not isinstance(record, dict):
+            continue
+        legacy_url = record.pop("chainMcpUrl", None)
+        if "settlementHttpUrl" not in record and legacy_url is not None:
+            record["settlementHttpUrl"] = legacy_url
+        legacy_result = record.pop("toolResult", None)
+        if "actionResult" not in record and legacy_result is not None:
+            record["actionResult"] = legacy_result
+        record.pop("settlementTool", None)
+
+    return raw
+
+
 def dashboard_counterparty(
     entry: dict[str, Any],
     escrow_by_id: dict[str, dict[str, Any]],
@@ -2002,7 +2031,9 @@ class OffchainLedgerStore:
         if not os.path.exists(self.path):
             return LedgerState()
         with open(self.path, encoding="utf-8") as handle:
-            return LedgerState.model_validate(json.load(handle))
+            return LedgerState.model_validate(
+                migrate_ledger_state_payload(json.load(handle))
+            )
 
     def _save_unlocked(self, state: LedgerState) -> None:
         parent_dir = os.path.dirname(self.path)

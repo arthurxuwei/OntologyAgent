@@ -92,6 +92,57 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "ok")
 
+    def test_ledger_state_loads_legacy_mcp_record_fields(self) -> None:
+        now = main.now_iso()
+        legacy_state = {
+            "accounts": [],
+            "entries": [],
+            "escrows": [],
+            "onrampSessions": [],
+            "onrampEvents": [],
+            "chainRecords": [
+                {
+                    "recordId": "chain_legacy",
+                    "eventType": "credit",
+                    "status": "submitted",
+                    "chainTool": "chain_submit_execution",
+                    "chainMcpUrl": "http://chain.test/mcp/",
+                    "recorderAddress": "0x000000000000000000000000000000000000dEaD",
+                    "toolResult": {"txHash": "0xchain"},
+                    "createdAt": now,
+                    "updatedAt": now,
+                }
+            ],
+            "settlementRecords": [
+                {
+                    "recordId": "settle_legacy",
+                    "eventType": "withdrawal",
+                    "status": "submitted",
+                    "settlementTool": "agent_wallet_withdraw",
+                    "chainMcpUrl": "http://circle.test/mcp/",
+                    "fromAgentId": "agent_sender",
+                    "amountAtomic": "1000000",
+                    "toolResult": {"transactionHash": "0xsettle"},
+                    "createdAt": now,
+                    "updatedAt": now,
+                }
+            ],
+        }
+        Path(self.state_path).write_text(json.dumps(legacy_state), encoding="utf-8")
+
+        state = main.get_store().load()
+
+        self.assertEqual(state.chainRecords[0].chainHttpUrl, "http://chain.test/mcp/")
+        self.assertEqual(state.chainRecords[0].actionResult, {"txHash": "0xchain"})
+        self.assertEqual(
+            state.settlementRecords[0].settlementHttpUrl,
+            "http://circle.test/mcp/",
+        )
+        self.assertEqual(
+            state.settlementRecords[0].actionResult,
+            {"transactionHash": "0xsettle"},
+        )
+
     def test_route_payment_intent_is_served_by_rest(self) -> None:
         response = self.client.post(
             "/ledger/payment/route",
