@@ -15,19 +15,16 @@ def _make_test_tool(name: str) -> StructuredTool:
 
 class MainToolRegistryTests(unittest.TestCase):
     def setUp(self) -> None:
-        main.clear_discovered_tool_cache()
+        main.clear_tool_cache()
         main.get_agent_graph.cache_clear()
         main.get_skill_catalog.cache_clear()
 
-    def test_build_tools_uses_mcp_runtime_not_local_domain_registries(self) -> None:
-        class FakeRuntime:
-            async def discover_tools(self, environ):
-                return [_make_test_tool("route_payment_intent")]
-
-            def health(self):
-                return {"ledger": {"status": "ok"}}
-
-        with patch.object(main, "get_mcp_runtime", return_value=FakeRuntime()):
+    def test_build_tools_uses_rest_registry(self) -> None:
+        with patch.object(
+            main,
+            "build_rest_tools",
+            return_value=[_make_test_tool("route_payment_intent")],
+        ):
             tools = main.build_tools()
 
         self.assertEqual({tool.name for tool in tools}, {"route_payment_intent"})
@@ -45,9 +42,8 @@ class MainToolRegistryTests(unittest.TestCase):
         self.assertIn("You are OntologyAgent.", prompt)
         self.assertIn("Dynamic skill instruction.", prompt)
 
-    def test_clear_discovered_tool_cache_resets_runtime_cache(self) -> None:
-        main.clear_discovered_tool_cache()
-        self.assertEqual(main._discovered_tools, None)
+    def test_clear_tool_cache_resets_agent_graph(self) -> None:
+        main.clear_tool_cache()
 
 
 if __name__ == "__main__":

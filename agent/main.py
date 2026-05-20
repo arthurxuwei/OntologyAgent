@@ -20,8 +20,8 @@ from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from mcp_runtime import McpRuntime
 from prompt_builder import build_agent_prompt
+from rest_tool_registry import build_rest_tools
 from skill_loader import SkillCatalog, load_skill_catalog
 
 
@@ -36,9 +36,6 @@ NO_CACHE_HEADERS = {
     "Expires": "0",
 }
 EMPTY_FINAL_OUTPUT_FALLBACK = "Model returned an empty response. Please retry or change model configuration."
-
-_discovered_tools: Optional[list[StructuredTool]] = None
-
 
 class AgentRunRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
@@ -112,40 +109,12 @@ def get_skill_catalog() -> SkillCatalog:
     return load_skill_catalog(SKILLS_DIR)
 
 
-@lru_cache(maxsize=1)
-def get_mcp_runtime() -> McpRuntime:
-    return McpRuntime(get_skill_catalog())
-
-
-def clear_discovered_tool_cache() -> None:
-    global _discovered_tools
-    _discovered_tools = None
-    get_mcp_runtime.cache_clear()
-
-
-async def refresh_discovered_tool_cache() -> None:
-    global _discovered_tools
-    _discovered_tools = await get_mcp_runtime().discover_tools(os.environ)
-
-
-def _in_running_loop() -> bool:
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return False
-    return True
+def clear_tool_cache() -> None:
+    get_agent_graph.cache_clear()
 
 
 def build_tools() -> list[StructuredTool]:
-    if _discovered_tools is not None:
-        return list(_discovered_tools)
-    if _in_running_loop():
-        return []
-    try:
-        return asyncio.run(get_mcp_runtime().discover_tools(os.environ))
-    except Exception as error:
-        logger.debug("Failed to discover MCP runtime tools: %s", error)
-        return []
+    return build_rest_tools(os.environ)
 
 
 def get_agent_prompt() -> str:
@@ -291,11 +260,6 @@ async def _invoke_agent(messages: list[Any]) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
 
-@app.on_event("startup")
-async def startup_event() -> None:
-    await refresh_discovered_tool_cache()
-
-
 @app.get("/", response_class=HTMLResponse)
 @app.get("/chat", response_class=HTMLResponse)
 def chat_page() -> FileResponse:
@@ -304,7 +268,6 @@ def chat_page() -> FileResponse:
 
 @app.get("/health")
 def health() -> dict[str, Any]:
-    runtime = get_mcp_runtime()
     tools = build_tools()
     return {
         "service": "OntologyAgent-agent",
@@ -312,25 +275,27 @@ def health() -> dict[str, Any]:
         "modelName": os.getenv("BRAIN_AGENT_MODEL", "gpt-4o-mini"),
         "openaiBaseUrl": get_openai_base_url(),
         "skills": [skill.name for skill in get_skill_catalog().skills],
-        "mcpServers": sorted(get_skill_catalog().server_names()),
-        "mcpHealth": runtime.health(),
         "toolCount": len(tools),
         "tools": [tool.name for tool in tools],
+        "toolTransport": "rest",
+        "actionServices": {
+            "ledger": os.getenv("LEDGER_HTTP_URL", "http://ledger:8092"),
+            "chain": os.getenv("CHAIN_HTTP_URL", "http://chain:8091"),
+        },
     }
 
 
 @app.post("/agent/reload-runtime")
 async def reload_agent_runtime() -> dict[str, Any]:
     get_skill_catalog.cache_clear()
-    get_mcp_runtime.cache_clear()
-    clear_discovered_tool_cache()
-    await refresh_discovered_tool_cache()
+    clear_tool_cache()
     get_agent_graph.cache_clear()
     skill_catalog = get_skill_catalog()
     return {
         "ok": True,
         "skills": [skill.name for skill in skill_catalog.skills],
-        "mcpServers": sorted(skill_catalog.server_names()),
+        "tools": [tool.name for tool in build_tools()],
+        "toolTransport": "rest",
     }
 
 

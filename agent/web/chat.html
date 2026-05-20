@@ -243,8 +243,8 @@
                 <div id="skills" class="meta-value">-</div>
               </div>
               <div class="meta-box">
-                <div class="meta-label">MCP Health</div>
-                <div id="mcp-health" class="meta-value">-</div>
+                <div class="meta-label">Action Services</div>
+                <div id="action-services" class="meta-value">-</div>
               </div>
               <button id="reload" type="button">Reload Runtime</button>
             </div>
@@ -260,7 +260,7 @@
       const sendEl = document.getElementById("send");
       const statusEl = document.getElementById("status");
       const skillsEl = document.getElementById("skills");
-      const mcpHealthEl = document.getElementById("mcp-health");
+      const actionServicesEl = document.getElementById("action-services");
       const reloadEl = document.getElementById("reload");
 
       let sessionId = null;
@@ -298,7 +298,7 @@
           const health = await api("/health");
           statusEl.textContent = `${health.status} / ${health.modelName || "unknown model"} / ${health.toolCount || 0} tools`;
           skillsEl.textContent = (health.skills || []).join("\n") || "No enabled skills";
-          mcpHealthEl.textContent = JSON.stringify(health.mcpHealth || {}, null, 2);
+          actionServicesEl.textContent = JSON.stringify(health.actionServices || {}, null, 2);
         } catch (error) {
           statusEl.textContent = error.message;
           statusEl.classList.add("error");

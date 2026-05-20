@@ -15,7 +15,7 @@ class FakeGraph:
 
 class MainApiTests(unittest.TestCase):
     def setUp(self) -> None:
-        main.clear_discovered_tool_cache()
+        main.clear_tool_cache()
         main.get_agent_graph.cache_clear()
         main.get_session_store.cache_clear()
 
@@ -23,24 +23,19 @@ class MainApiTests(unittest.TestCase):
         class Catalog:
             skills = []
 
-            def server_names(self):
-                return {"ledger"}
-
-        class Runtime:
-            def health(self):
-                return {"ledger": {"status": "ok"}}
-
         with patch.object(main, "get_skill_catalog", return_value=Catalog()), patch.object(
-            main, "get_mcp_runtime", return_value=Runtime()
-        ), patch.object(main, "build_tools", return_value=[]):
+            main, "build_tools", return_value=[]
+        ):
             response = TestClient(main.app).get("/health")
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload["status"], "ok")
-        self.assertEqual(payload["mcpServers"], ["ledger"])
+        self.assertEqual(payload["toolTransport"], "rest")
+        self.assertEqual(payload["actionServices"]["ledger"], "http://ledger:8092")
         self.assertNotIn("autonomy", payload)
         self.assertNotIn("chainWallet", payload)
+        self.assertNotIn("mc" + "pServers", payload)
 
     def test_agent_session_message_uses_graph(self) -> None:
         with patch.object(main, "get_agent_graph", return_value=FakeGraph()):

@@ -4,4 +4,3 @@ httpx==0.28.1
 langchain-openai==0.3.31
 langgraph==0.4.8
 langgraph-prebuilt<0.3
-mcp>=1.0,<2

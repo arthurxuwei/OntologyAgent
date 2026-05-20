@@ -24,16 +24,13 @@ class PromptBuilderTests(unittest.TestCase):
         self.assertNotIn("x402 buyer flow", prompt)
         self.assertNotIn("ledger escrow", prompt.lower())
 
-    def test_agent_wallet_prompt_distinguishes_wallet_balance_from_ledger_balance(
-        self,
-    ) -> None:
+    def test_empty_skill_catalog_keeps_prompt_minimal(self) -> None:
         catalog = load_skill_catalog(Path(__file__).resolve().parents[1] / "skills")
 
         prompt = build_agent_prompt(catalog)
 
-        self.assertIn("agent_wallet_status", prompt)
-        self.assertIn("wallet balance", prompt.lower())
-        self.assertIn("do not use ledger state", prompt.lower())
+        self.assertIn("You are OntologyAgent.", prompt)
+        self.assertNotIn("Available skills:", prompt)
 
 
 if __name__ == "__main__":

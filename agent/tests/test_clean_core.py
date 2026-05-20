@@ -27,9 +27,8 @@ class CleanCoreTests(unittest.TestCase):
         root = agent_root()
         core_files = [
             root / "main.py",
-            root / "mcp_runtime.py",
             root / "prompt_builder.py",
-            root / "tool_schema.py",
+            root / "rest_tool_registry.py",
             root / "skill_loader.py",
         ]
         violations = []
