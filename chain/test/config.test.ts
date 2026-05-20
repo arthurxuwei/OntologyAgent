@@ -43,9 +43,9 @@ test("loadConfig rejects non-integer values for integer config fields", () => {
   assert.throws(
     () =>
       loadConfig({
-        CHAIN_MCP_PORT: "8091.5",
+        CHAIN_HTTP_PORT: "8091.5",
       }),
-    /CHAIN_MCP_PORT must be a positive integer/,
+    /CHAIN_HTTP_PORT must be a positive integer/,
   );
 
   assert.throws(

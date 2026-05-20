@@ -1,7 +1,7 @@
 import { parseEther, parseUnits } from "ethers";
 
 export type AppConfig = {
-  mcp: {
+  http: {
     port: number;
   };
   network: {
@@ -163,12 +163,11 @@ export const HARDCODED_WHITELIST = [
 export const HARDCODED_SINGLE_TX_CAP_WEI = parseEther("1.0");
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
-  const chainMcpPortEnv = env.CHAIN_MCP_PORT ?? env.EXECUTOR_MCP_PORT;
   const chainMockEnv = env.CHAIN_MOCK ?? env.EXECUTOR_MOCK_CHAIN;
 
   return {
-    mcp: {
-      port: parseNumberEnv({ ...env, CHAIN_MCP_PORT: chainMcpPortEnv }, "CHAIN_MCP_PORT", 8091),
+    http: {
+      port: parseNumberEnv(env, "CHAIN_HTTP_PORT", 8091),
     },
     network: {
       rpcUrl: env.RPC_URL ?? DEFAULT_TESTNET_RPC_URL,

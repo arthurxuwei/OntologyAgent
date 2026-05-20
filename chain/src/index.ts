@@ -1,20 +1,20 @@
 import { loadConfig } from "./config.js";
-import { createChainMcpApp } from "./mcp/server.js";
+import { createChainHttpApp } from "./http/chain-app.js";
 
 async function start() {
   const config = loadConfig();
-  const { app } = createChainMcpApp(config);
+  const { app } = createChainHttpApp(config);
 
-  app.listen(config.mcp.port, "0.0.0.0", (error?: Error) => {
+  app.listen(config.http.port, "0.0.0.0", (error?: Error) => {
     if (error) {
-      console.error("chain MCP startup failed", error);
+      console.error("chain HTTP startup failed", error);
       process.exit(1);
     }
 
     console.log(
       JSON.stringify({
-        message: "chain MCP server started",
-        mcpPort: config.mcp.port,
+        message: "chain HTTP server started",
+        httpPort: config.http.port,
         rpcUrl: config.network.rpcUrl,
         expectedChainId: config.network.expectedChainId,
         mockChain: config.network.mockChain,
