@@ -101,16 +101,25 @@ class LedgerServiceTests(unittest.TestCase):
             "escrows": [],
             "onrampSessions": [],
             "onrampEvents": [],
+            "legacySummary": {"ignored": True},
             "chainRecords": [
                 {
                     "recordId": "chain_legacy",
                     "eventType": "credit",
                     "status": "submitted",
                     "chainTool": "chain_submit_execution",
-                    "chainHttpUrl": "http://chain.test/rest/",
-                    legacy_transport_url_key: "discarded legacy transport URL",
+                    legacy_transport_url_key: "http://chain.test/legacy/",
                     "recorderAddress": "0x000000000000000000000000000000000000dEaD",
                     "toolResult": {"txHash": "0xchain"},
+                    "legacyExtra": "ignored",
+                    "createdAt": now,
+                    "updatedAt": now,
+                },
+                {
+                    "recordId": "chain_missing_url",
+                    "eventType": "credit",
+                    "status": "failed",
+                    "recorderAddress": "0x000000000000000000000000000000000000dEaD",
                     "createdAt": now,
                     "updatedAt": now,
                 }
@@ -121,11 +130,20 @@ class LedgerServiceTests(unittest.TestCase):
                     "eventType": "withdrawal",
                     "status": "submitted",
                     "settlementTool": "agent_wallet_withdraw",
-                    "settlementHttpUrl": "http://circle.test/rest/",
-                    legacy_transport_url_key: "discarded legacy transport URL",
+                    legacy_transport_url_key: "http://circle.test/legacy/",
                     "fromAgentId": "agent_sender",
                     "amountAtomic": "1000000",
                     "toolResult": {"transactionHash": "0xsettle"},
+                    "legacyExtra": "ignored",
+                    "createdAt": now,
+                    "updatedAt": now,
+                },
+                {
+                    "recordId": "settle_missing_url",
+                    "eventType": "withdrawal",
+                    "status": "failed",
+                    "fromAgentId": "agent_sender",
+                    "amountAtomic": "1000000",
                     "createdAt": now,
                     "updatedAt": now,
                 }
@@ -135,11 +153,16 @@ class LedgerServiceTests(unittest.TestCase):
 
         state = main.get_store().load()
 
-        self.assertEqual(state.chainRecords[0].chainHttpUrl, "http://chain.test/rest/")
+        self.assertEqual(state.chainRecords[0].chainHttpUrl, "http://chain.test/legacy/")
+        self.assertEqual(state.chainRecords[1].chainHttpUrl, main.DEFAULT_CHAIN_HTTP_URL)
         self.assertEqual(state.chainRecords[0].actionResult, {"txHash": "0xchain"})
         self.assertEqual(
             state.settlementRecords[0].settlementHttpUrl,
-            "http://circle.test/rest/",
+            "http://circle.test/legacy/",
+        )
+        self.assertEqual(
+            state.settlementRecords[1].settlementHttpUrl,
+            main.DEFAULT_SETTLEMENT_HTTP_URL,
         )
         self.assertEqual(
             state.settlementRecords[0].actionResult,

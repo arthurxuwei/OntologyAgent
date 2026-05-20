@@ -602,11 +602,25 @@ def migrate_ledger_state_payload(raw: Any) -> Any:
     if not isinstance(raw, dict):
         return raw
 
+    def clean_model_record(record: Any, model_type: type[BaseModel]) -> Any:
+        if not isinstance(record, dict):
+            return record
+        allowed_fields = set(model_type.model_fields)
+        return {
+            key: value
+            for key, value in record.items()
+            if key in allowed_fields
+        }
+
     legacy_transport_url_key = "chain" + "M" + "cpUrl"
     for record in raw.get("chainRecords") or []:
         if not isinstance(record, dict):
             continue
-        record.pop(legacy_transport_url_key, None)
+        legacy_url = record.pop(legacy_transport_url_key, None)
+        if "chainHttpUrl" not in record and legacy_url is not None:
+            record["chainHttpUrl"] = legacy_url
+        if "chainHttpUrl" not in record:
+            record["chainHttpUrl"] = DEFAULT_CHAIN_HTTP_URL
         legacy_result = record.pop("toolResult", None)
         if "actionResult" not in record and legacy_result is not None:
             record["actionResult"] = legacy_result
@@ -615,11 +629,36 @@ def migrate_ledger_state_payload(raw: Any) -> Any:
     for record in raw.get("settlementRecords") or []:
         if not isinstance(record, dict):
             continue
-        record.pop(legacy_transport_url_key, None)
+        legacy_url = record.pop(legacy_transport_url_key, None)
+        if "settlementHttpUrl" not in record and legacy_url is not None:
+            record["settlementHttpUrl"] = legacy_url
+        if "settlementHttpUrl" not in record:
+            record["settlementHttpUrl"] = DEFAULT_SETTLEMENT_HTTP_URL
         legacy_result = record.pop("toolResult", None)
         if "actionResult" not in record and legacy_result is not None:
             record["actionResult"] = legacy_result
         record.pop("settlementTool", None)
+
+    for collection_name, model_type in (
+        ("accounts", LedgerAccount),
+        ("entries", LedgerEntry),
+        ("escrows", EscrowRecord),
+        ("onrampSessions", OnrampSessionRecord),
+        ("onrampEvents", OnrampEventRecord),
+        ("chainRecords", LedgerChainRecord),
+        ("settlementRecords", LedgerSettlementRecord),
+    ):
+        collection = raw.get(collection_name)
+        if isinstance(collection, list):
+            raw[collection_name] = [
+                clean_model_record(record, model_type)
+                for record in collection
+            ]
+
+    allowed_state_fields = set(LedgerState.model_fields)
+    for key in list(raw):
+        if key not in allowed_state_fields:
+            raw.pop(key, None)
 
     return raw
 
