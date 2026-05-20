@@ -167,16 +167,25 @@ jobs:
           COINBASE_ONRAMP_BEARER_TOKEN: ${{ secrets.COINBASE_ONRAMP_BEARER_TOKEN }}
           COINBASE_API_KEY_ID: ${{ secrets.COINBASE_API_KEY_ID }}
           COINBASE_API_PRIVATE_KEY: ${{ secrets.COINBASE_API_PRIVATE_KEY }}
+          GITHUB_CLIENT_ID: ${{ secrets.GITHUB_CLIENT_ID }}
+          GITHUB_CLIENT_SECRET: ${{ secrets.GITHUB_CLIENT_SECRET }}
+          AUTH_SESSION_SECRET: ${{ secrets.AUTH_SESSION_SECRET }}
+          PUBLIC_BASE_URL: ${{ secrets.PUBLIC_BASE_URL }}
         run: |
           remote="${LIGHTHOUSE_USER}@${LIGHTHOUSE_HOST}"
-          printf 'GHCR_IMAGE_PREFIX=%s\nIMAGE_TAG=%s\nCHIEF_DATA_ROOT=/opt/chief/data\nCLOUDFLARE_TUNNEL_TOKEN=%s\nCOINBASE_ONRAMP_BEARER_TOKEN=%s\nCOINBASE_API_KEY_ID=%s\nCOINBASE_API_PRIVATE_KEY=%s\n' \
-            "${IMAGE_PREFIX}" \
-            "${IMAGE_TAG}" \
-            "${CLOUDFLARE_TUNNEL_TOKEN}" \
-            "${COINBASE_ONRAMP_BEARER_TOKEN}" \
-            "${COINBASE_API_KEY_ID}" \
-            "${COINBASE_API_PRIVATE_KEY}" \
-            | ssh -i ~/.ssh/lighthouse_key "${remote}" 'cat > /opt/chief/.env.deploy'
+          {
+            printf 'GHCR_IMAGE_PREFIX=%s\nIMAGE_TAG=%s\nCHIEF_DATA_ROOT=/opt/chief/data\nCLOUDFLARE_TUNNEL_TOKEN=%s\nCOINBASE_ONRAMP_BEARER_TOKEN=%s\nCOINBASE_API_KEY_ID=%s\nCOINBASE_API_PRIVATE_KEY=%s\n' \
+              "${IMAGE_PREFIX}" \
+              "${IMAGE_TAG}" \
+              "${CLOUDFLARE_TUNNEL_TOKEN}" \
+              "${COINBASE_ONRAMP_BEARER_TOKEN}" \
+              "${COINBASE_API_KEY_ID}" \
+              "${COINBASE_API_PRIVATE_KEY}"
+            if [ -n "${GITHUB_CLIENT_ID}" ]; then printf 'GITHUB_CLIENT_ID=%s\n' "${GITHUB_CLIENT_ID}"; fi
+            if [ -n "${GITHUB_CLIENT_SECRET}" ]; then printf 'GITHUB_CLIENT_SECRET=%s\n' "${GITHUB_CLIENT_SECRET}"; fi
+            if [ -n "${AUTH_SESSION_SECRET}" ]; then printf 'AUTH_SESSION_SECRET=%s\n' "${AUTH_SESSION_SECRET}"; fi
+            if [ -n "${PUBLIC_BASE_URL}" ]; then printf 'PUBLIC_BASE_URL=%s\n' "${PUBLIC_BASE_URL}"; fi
+          } | ssh -i ~/.ssh/lighthouse_key "${remote}" 'cat > /opt/chief/.env.deploy'
 
       - name: Pull and restart services
         env:

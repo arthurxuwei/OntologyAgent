@@ -2149,6 +2149,7 @@ window.LANG_DICT = LANG_DICT;
     const [activeAgentId, setActiveAgentIdState] = React.useState(
       () => readInitialActiveAgent(readInitialAgents())
     );
+    const [authChecked, setAuthChecked] = React.useState(() => !!params.get('seed'));
 
     const writeActiveAgent = React.useCallback((id) => {
       if (id) window.localStorage.setItem(STORAGE_KEYS.activeAgent, id);
@@ -2227,6 +2228,14 @@ window.LANG_DICT = LANG_DICT;
     // pattern; that shim still exists below for any leftover callers.
     const signIn = React.useCallback((user) => {
       if (!user || !user.provider) return;
+      const previousEmail = readInitialUser()?.email || '';
+      const nextEmail = user.email || '';
+      if (previousEmail && nextEmail && previousEmail !== nextEmail) {
+        window.localStorage.removeItem(STORAGE_KEYS.agents);
+        window.localStorage.removeItem(STORAGE_KEYS.activeAgent);
+        setAgentsState([]);
+        setActiveAgentIdState(null);
+      }
       window.localStorage.setItem(STORAGE_KEYS.user, JSON.stringify(user));
       setCurrentUserState(user);
       writeBool(STORAGE_KEYS.registered, true);
@@ -2235,10 +2244,42 @@ window.LANG_DICT = LANG_DICT;
 
     const signOut = React.useCallback(() => {
       window.localStorage.removeItem(STORAGE_KEYS.user);
+      window.localStorage.removeItem(STORAGE_KEYS.agents);
+      window.localStorage.removeItem(STORAGE_KEYS.activeAgent);
       setCurrentUserState(null);
+      setAgentsState([]);
+      setActiveAgentIdState(null);
       writeBool(STORAGE_KEYS.registered, false);
       setRegisteredState(false);
     }, []);
+
+    React.useEffect(() => {
+      if (params.get('seed')) {
+        setAuthChecked(true);
+        return;
+      }
+      let cancelled = false;
+      fetch('/auth/session', { credentials: 'same-origin' })
+        .then((response) => {
+          if (!response.ok) throw new Error(`auth session ${response.status}`);
+          return response.json();
+        })
+        .then((payload) => {
+          if (cancelled) return;
+          if (payload && payload.authenticated && payload.user) {
+            signIn(payload.user);
+          } else {
+            signOut();
+          }
+        })
+        .catch(() => {
+          if (!cancelled) signOut();
+        })
+        .finally(() => {
+          if (!cancelled) setAuthChecked(true);
+        });
+      return () => { cancelled = true; };
+    }, [params, signIn, signOut]);
 
     // Legacy shim — main project's RegistrationScreen (no longer mounted by
     // MVP but still in the bundle) calls setRegistered(true, {email}). Routes
@@ -2357,7 +2398,7 @@ window.LANG_DICT = LANG_DICT;
     const ownerEmail = currentUser?.email || '';
 
     const value = {
-      registered, currentUser, ownerEmail, externalWallet, mockState,
+      authChecked, registered, currentUser, ownerEmail, externalWallet, mockState,
       wallets, defaultWalletId,
       agents, activeAgentId, claimed,
       claimToken, internalMode,
@@ -2804,72 +2845,17 @@ window.MockStateToggle = MockStateToggle;
 
 </script>
 <script type="text/babel" data-src="src/dashboard/Onboarding/GithubAuthScreen.jsx">
-// MVP onboarding · sign-in via GitHub (FAKE high-fidelity).
+// MVP onboarding · sign in via the real GitHub OAuth flow.
 //
-// First screen on a fresh MVP visit. Two visual layers:
-//   1. Sign-in surface — Chief brand + "Continue with GitHub" CTA + soft
-//      "Email sign-in coming soon" hint to telegraph the next provider.
-//   2. Faked GitHub consent modal — opens on CTA click. Visually mimics the
-//      real OAuth consent screen (dark surface, octocat, app-to-app arrow,
-//      scope list, green Authorize button). Clicking Authorize transitions
-//      to a brief "Authorizing…" state, then signs in with a stub user.
-//
-// Why fake: the company isn't incorporated yet, so we can't provision a real
-// GitHub OAuth App. Once we can, the only change is swapping handleAuthorize
-// for a real redirect/callback — the data shape signIn() expects already
-// matches what GitHub's /user endpoint returns.
+// The dashboard does not ask for an email directly. GitHub returns the owner
+// identity to the ledger service, which stores it in an HttpOnly session cookie;
+// MvpAppStateProvider hydrates the browser state from /auth/session.
 
 (function () {
-  // Stub user. login + name + email mirror the canonical "William" persona
-  // used throughout the linear demo + mock data; avatar is CSS-generated to
-  // avoid a network dependency on github.com/identicons.
-  const MOCK_USER = {
-    provider: 'github',
-    login: 'william',
-    name: 'William',
-    email: 'william@example.com',
-    avatar_url: null,
-  };
-
   function MvpGithubAuthScreen() {
     const t = window.useT();
-    const { signIn } = window.useAppState();
-    const [mode, setMode] = React.useState('idle'); // idle | consent | authorizing
-    const [email, setEmail] = React.useState('');
-    const emailValid = /\S+@\S+\.\S+/.test(email.trim());
-
-    React.useEffect(() => {
-      if (mode !== 'consent') return;
-      const onKey = (e) => { if (e.key === 'Escape') setMode('idle'); };
-      document.addEventListener('keydown', onKey);
-      return () => document.removeEventListener('keydown', onKey);
-    }, [mode]);
-
-    const handleContinueClick = () => {
-      if (!emailValid) return;
-      setMode('consent');
-    };
-
-    const handleAuthorize = () => {
-      setMode('authorizing');
-      // Simulated round-trip to GitHub. ~1s matches the perceived latency of
-      // a real OAuth callback after the user clicks "Authorize" on github.com.
-      setTimeout(() => {
-        const normalizedEmail = email.trim();
-        const login = normalizedEmail.split('@')[0] || MOCK_USER.login;
-        signIn({
-          ...MOCK_USER,
-          login,
-          name: login,
-          email: normalizedEmail,
-        });
-      }, 1000);
-    };
-
-    const handleCancel = () => {
-      if (mode === 'authorizing') return;
-      setMode('idle');
-    };
+    const params = React.useMemo(() => new URLSearchParams(window.location.search), []);
+    const authError = params.get('auth_error');
 
     return (
       <div
@@ -2914,70 +2900,43 @@ window.MockStateToggle = MockStateToggle;
             {t('mvp.dash.auth.subhead')}
           </div>
 
-          <div style={{ marginTop: '32px' }}>
-            <label
-              className="smallcaps-mono"
-              style={{ display: 'block', color: 'var(--ink-tertiary)', marginBottom: '8px', fontSize: '10px' }}
-            >
-              EMAIL
-            </label>
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="you@example.com"
-              autoFocus
-              disabled={mode === 'authorizing'}
-              className="font-body"
-              style={{
-                width: '100%',
-                padding: '10px 0',
-                background: 'transparent',
-                border: 'none',
-                borderBottom: '1px solid var(--stroke-rule)',
-                fontSize: '16px',
-                color: 'var(--ink-primary)',
-                outline: 'none',
-              }}
-            />
-          </div>
-
-          <button
-            type="button"
-            onClick={handleContinueClick}
-            disabled={!emailValid}
+          <a
+            href="/auth/github/login"
             className="font-body"
             style={{
-              marginTop: '28px',
+              marginTop: '32px',
               padding: '12px 22px',
-              background: emailValid ? '#1A1A1A' : 'var(--stroke-rule)',
-              color: emailValid ? '#FFFFFF' : 'var(--ink-tertiary)',
-              border: `1px solid ${emailValid ? '#1A1A1A' : 'var(--stroke-rule)'}`,
+              background: '#1A1A1A',
+              color: '#FFFFFF',
+              border: '1px solid #1A1A1A',
               fontSize: '14px',
               fontWeight: 500,
               letterSpacing: '0.02em',
-              cursor: emailValid ? 'pointer' : 'not-allowed',
+              cursor: 'pointer',
               display: 'inline-flex',
               alignItems: 'center',
               gap: '10px',
+              textDecoration: 'none',
             }}
           >
             <OctocatGlyph size={18} fill="#FFFFFF" />
             {t('mvp.dash.auth.github_button')}
-          </button>
+          </a>
 
-          <div
-            className="font-body"
-            style={{
-              marginTop: '18px',
-              fontSize: '12px',
-              color: 'var(--ink-tertiary)',
-              letterSpacing: '0.02em',
-              lineHeight: 1.5,
-            }}
-          >
-            {t('mvp.dash.auth.email_soon')}
-          </div>
+          {authError && (
+            <div
+              className="font-body"
+              style={{
+                marginTop: '18px',
+                fontSize: '12px',
+                color: 'var(--status-negative)',
+                letterSpacing: '0.02em',
+                lineHeight: 1.5,
+              }}
+            >
+              {t('mvp.dash.auth.error')}
+            </div>
+          )}
 
           <div
             className="font-body"
@@ -2992,15 +2951,6 @@ window.MockStateToggle = MockStateToggle;
             {t('mvp.dash.auth.note')}
           </div>
         </div>
-
-        {mode !== 'idle' && (
-          <ConsentModal
-            t={t}
-            authorizing={mode === 'authorizing'}
-            onAuthorize={handleAuthorize}
-            onCancel={handleCancel}
-          />
-        )}
       </div>
     );
   }
@@ -3843,18 +3793,19 @@ window.MockStateToggle = MockStateToggle;
     'mvp.s7.final_button':   { en: 'Restart demo',            zh: '重新播放' },
     'mvp.s7.final_dashboard':{ en: 'Open dashboard →',        zh: '打开 dashboard →' },
 
-    // ── Onboarding · GitHub-style auth and real email ownership ───────────
+    // ── Onboarding · GitHub OAuth and real email ownership ────────────────
     'mvp.dash.auth.slug':                  { en: 'CHIEF · SIGN IN', zh: 'CHIEF · 登录' },
     'mvp.dash.auth.headline':              { en: 'Sign in to your agent wallet.', zh: '登录你的 agent 钱包。' },
     'mvp.dash.auth.subhead': {
-      en: 'Use the email bound to your ledger agents. The GitHub-style consent keeps the MVP prototype flow while the dashboard still scopes data by email.',
-      zh: '使用已绑定 ledger agent 的邮箱。界面保留 GitHub 风格授权流程,数据仍按邮箱隔离。',
+      en: 'Continue with GitHub. Chief uses your verified GitHub email to find the ledger agents assigned to you.',
+      zh: '使用 GitHub 登录。Chief 会用 GitHub 已验证邮箱查找分配给你的 ledger agent。',
     },
     'mvp.dash.auth.github_button':         { en: 'Continue with GitHub',  zh: '用 GitHub 继续' },
-    'mvp.dash.auth.email_soon':            { en: 'Email scopes the ledger data for this MVP.', zh: '这个 MVP 版本用邮箱来限定 ledger 数据。' },
+    'mvp.dash.auth.error':                 { en: 'GitHub authorization was cancelled or failed. Please try again.', zh: 'GitHub 授权已取消或失败,请重试。' },
+    'mvp.dash.auth.checking':              { en: 'CHECKING SESSION',      zh: '正在检查登录状态' },
     'mvp.dash.auth.note': {
-      en: 'We use the email for dashboard ownership checks only.',
-      zh: '这里只用邮箱做 dashboard 所有权校验。',
+      en: 'No email entry here: ownership comes from GitHub OAuth.',
+      zh: '这里不手动输入邮箱: 所有权来自 GitHub OAuth。',
     },
     'mvp.dash.auth.consent_subdomain':     { en: 'authorize',             zh: 'authorize' },
     'mvp.dash.auth.consent_title':         { en: 'Authorize Chief',       zh: '授权 Chief' },
@@ -3863,7 +3814,7 @@ window.MockStateToggle = MockStateToggle;
       zh: 'Chief 请求把这个浏览器会话绑定到你的 ledger 邮箱。',
     },
     'mvp.dash.auth.consent_scope_label':   { en: 'Personal user data',    zh: '个人账号信息' },
-    'mvp.dash.auth.consent_scope_profile': { en: 'Read your public profile (simulated)', zh: '读取公开 profile(模拟)' },
+    'mvp.dash.auth.consent_scope_profile': { en: 'Read your public profile', zh: '读取公开 profile' },
     'mvp.dash.auth.consent_scope_email':   { en: 'Read your email address', zh: '读取你的邮箱地址' },
     'mvp.dash.auth.consent_authorize':     { en: 'Authorize Chief',       zh: '授权 Chief' },
     'mvp.dash.auth.consent_cancel':        { en: 'Cancel',                zh: '取消' },
@@ -3897,7 +3848,7 @@ window.MockStateToggle = MockStateToggle;
 
     // ── Settings · Account card ───────────────────────────────────────────
     'mvp.dash.settings.account_signed_in_via': { en: 'SIGNED IN VIA',     zh: '登录方式' },
-    'mvp.dash.settings.account_provider_github': { en: 'GitHub-style',    zh: 'GitHub 风格' },
+    'mvp.dash.settings.account_provider_github': { en: 'GitHub',          zh: 'GitHub' },
     'mvp.dash.settings.account_provider_email':  { en: 'Email',           zh: '邮箱' },
     'mvp.dash.settings.account_sign_out':        { en: 'Sign out',        zh: '退出登录' },
 
@@ -7238,10 +7189,30 @@ window.MockStateToggle = MockStateToggle;
 
 (function () {
   function DashboardRouter() {
-    const { registered, claimed } = window.useAppState();
+    const { authChecked, registered, claimed } = window.useAppState();
+    if (!authChecked) return <AuthCheckingScreen />;
     if (!registered) return <window.MvpGithubAuthScreen />;
     if (!claimed)    return <window.MvpClaimScreen />;
     return <DashboardSurface />;
+  }
+
+  function AuthCheckingScreen() {
+    const t = window.useT();
+    return (
+      <div
+        style={{
+          minHeight: '100vh',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: '48px',
+        }}
+      >
+        <div className="smallcaps-mono" style={{ color: 'var(--ink-tertiary)' }}>
+          {t('mvp.dash.auth.checking')}
+        </div>
+      </div>
+    );
   }
 
   function DashboardSurface() {
