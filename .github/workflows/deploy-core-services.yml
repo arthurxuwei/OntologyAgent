@@ -167,8 +167,8 @@ jobs:
           COINBASE_ONRAMP_BEARER_TOKEN: ${{ secrets.COINBASE_ONRAMP_BEARER_TOKEN }}
           COINBASE_API_KEY_ID: ${{ secrets.COINBASE_API_KEY_ID }}
           COINBASE_API_PRIVATE_KEY: ${{ secrets.COINBASE_API_PRIVATE_KEY }}
-          GITHUB_CLIENT_ID: ${{ secrets.GITHUB_CLIENT_ID }}
-          GITHUB_CLIENT_SECRET: ${{ secrets.GITHUB_CLIENT_SECRET }}
+          GITHUB_CLIENT_ID: ${{ secrets.CHIEF_GITHUB_CLIENT_ID }}
+          GITHUB_CLIENT_SECRET: ${{ secrets.CHIEF_GITHUB_CLIENT_SECRET }}
           AUTH_SESSION_SECRET: ${{ secrets.AUTH_SESSION_SECRET }}
           PUBLIC_BASE_URL: ${{ secrets.PUBLIC_BASE_URL }}
         run: |
