@@ -16,7 +16,7 @@ from decimal import Decimal, InvalidOperation
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal, Optional
-from urllib.parse import urlencode
+from urllib.parse import parse_qsl, quote, unquote, urlencode, urlsplit, urlunsplit
 
 import httpx
 import jwt
@@ -45,6 +45,7 @@ GITHUB_EMAILS_URL = "https://api.github.com/user/emails"
 DEFAULT_PUBLIC_LEDGER_URL = "https://ledger.curawealth.ai"
 SESSION_COOKIE = "chief_ledger_session"
 OAUTH_STATE_COOKIE = "chief_ledger_oauth_state"
+OAUTH_RETURN_COOKIE = "chief_ledger_oauth_return"
 AUTH_SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 14
 LEDGER_CONSOLE_PATH = Path(__file__).resolve().parent / "web" / "index.html"
 LEDGER_DASHBOARD_PATH = Path(__file__).resolve().parent / "web" / "dashboard.html"
@@ -78,6 +79,26 @@ def public_base_url(request: Request) -> str:
     if host:
         return f"{proto}://{host}".rstrip("/")
     return str(request.base_url).rstrip("/")
+
+
+def safe_dashboard_return_path(value: str | None) -> str:
+    if not value:
+        return "/dashboard"
+    text = unquote(str(value)).strip()
+    parsed = urlsplit(text)
+    if parsed.scheme or parsed.netloc:
+        return "/dashboard"
+    if parsed.path != "/dashboard":
+        return "/dashboard"
+    return urlunsplit(("", "", parsed.path, parsed.query, parsed.fragment))
+
+
+def dashboard_return_path_with_query(value: str | None, updates: dict[str, str]) -> str:
+    safe_path = safe_dashboard_return_path(value)
+    parsed = urlsplit(safe_path)
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    query.update(updates)
+    return urlunsplit(("", "", parsed.path, urlencode(query), parsed.fragment))
 
 
 def configured_public_base_url() -> str:
@@ -2468,9 +2489,16 @@ async def complete_github_callback(
     state: str = "",
     error: str = "",
     stored_state: str | None = None,
+    stored_return: str | None = None,
 ) -> RedirectResponse:
     if error:
-        return RedirectResponse(f"/dashboard?auth_error={error}", status_code=307)
+        response = RedirectResponse(
+            dashboard_return_path_with_query(stored_return, {"auth_error": error}),
+            status_code=307,
+        )
+        response.delete_cookie(OAUTH_STATE_COOKIE)
+        response.delete_cookie(OAUTH_RETURN_COOKIE)
+        return response
     if not code or not state or not stored_state or not hmac.compare_digest(state, stored_state):
         raise HTTPException(status_code=400, detail="Invalid GitHub OAuth state")
     try:
@@ -2479,7 +2507,7 @@ async def complete_github_callback(
     except (RuntimeError, httpx.HTTPError) as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-    response = RedirectResponse("/dashboard", status_code=307)
+    response = RedirectResponse(safe_dashboard_return_path(stored_return), status_code=307)
     response.set_cookie(
         SESSION_COOKIE,
         session_value,
@@ -2489,6 +2517,7 @@ async def complete_github_callback(
         max_age=AUTH_SESSION_MAX_AGE_SECONDS,
     )
     response.delete_cookie(OAUTH_STATE_COOKIE)
+    response.delete_cookie(OAUTH_RETURN_COOKIE)
     return response
 
 
@@ -2499,6 +2528,7 @@ async def ledger_home(
     state: str = "",
     error: str = "",
     stored_state: str | None = Cookie(default=None, alias=OAUTH_STATE_COOKIE),
+    stored_return: str | None = Cookie(default=None, alias=OAUTH_RETURN_COOKIE),
 ) -> RedirectResponse:
     if code or error:
         return await complete_github_callback(
@@ -2507,6 +2537,7 @@ async def ledger_home(
             state=state,
             error=error,
             stored_state=stored_state,
+            stored_return=stored_return,
         )
     return RedirectResponse("/dashboard", status_code=307)
 
@@ -2532,6 +2563,7 @@ async def ledger_dashboard(
     state: str = "",
     error: str = "",
     stored_state: str | None = Cookie(default=None, alias=OAUTH_STATE_COOKIE),
+    stored_return: str | None = Cookie(default=None, alias=OAUTH_RETURN_COOKIE),
 ) -> Response:
     if code or error:
         return await complete_github_callback(
@@ -2540,6 +2572,7 @@ async def ledger_dashboard(
             state=state,
             error=error,
             stored_state=stored_state,
+            stored_return=stored_return,
         )
     return FileResponse(
         LEDGER_DASHBOARD_PATH,
@@ -2557,7 +2590,7 @@ async def auth_session(
 
 
 @app.get("/auth/github/login")
-async def github_login(request: Request) -> RedirectResponse:
+async def github_login(request: Request, returnTo: str = "") -> RedirectResponse:
     try:
         require_env("GITHUB_CLIENT_ID")
         require_env("GITHUB_CLIENT_SECRET")
@@ -2582,6 +2615,14 @@ async def github_login(request: Request) -> RedirectResponse:
         secure=public_base_url(request).startswith("https://"),
         max_age=600,
     )
+    response.set_cookie(
+        OAUTH_RETURN_COOKIE,
+        quote(safe_dashboard_return_path(returnTo), safe="/"),
+        httponly=True,
+        samesite="lax",
+        secure=public_base_url(request).startswith("https://"),
+        max_age=600,
+    )
     return response
 
 
@@ -2593,6 +2634,7 @@ async def github_callback(
     state: str = "",
     error: str = "",
     stored_state: str | None = Cookie(default=None, alias=OAUTH_STATE_COOKIE),
+    stored_return: str | None = Cookie(default=None, alias=OAUTH_RETURN_COOKIE),
 ) -> RedirectResponse:
     return await complete_github_callback(
         request,
@@ -2600,6 +2642,7 @@ async def github_callback(
         state=state,
         error=error,
         stored_state=stored_state,
+        stored_return=stored_return,
     )
 
 

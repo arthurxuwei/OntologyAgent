@@ -207,6 +207,154 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertIn("scope=read%3Auser+user%3Aemail", location)
         self.assertIn("chief_ledger_oauth_state=", response.headers["set-cookie"])
 
+    def test_github_login_accepts_dashboard_return_path(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "GITHUB_CLIENT_ID": "github-client",
+                "GITHUB_CLIENT_SECRET": "github-secret",
+                "AUTH_SESSION_SECRET": "session-secret",
+                "PUBLIC_BASE_URL": "https://ledger.example.test",
+            },
+        ):
+            response = self.client.get(
+                "/auth/github/login?returnTo=/dashboard%3FclaimCode%3Dclm_abc%26agentId%3Dagent_1",
+                follow_redirects=False,
+            )
+
+        self.assertEqual(response.status_code, 307)
+        set_cookie = response.headers["set-cookie"]
+        self.assertIn("chief_ledger_oauth_return=", set_cookie)
+        self.assertIn("/dashboard%3FclaimCode%3Dclm_abc%26agentId%3Dagent_1", set_cookie)
+        self.assertIn("HttpOnly", set_cookie)
+        self.assertIn("SameSite=lax", set_cookie)
+        self.assertIn("Max-Age=600", set_cookie)
+        self.assertIn("Secure", set_cookie)
+
+    def test_github_login_rejects_invalid_dashboard_return_paths(self) -> None:
+        invalid_return_paths = (
+            "/dashboard.evil?claimCode=clm_bad",
+            "/dashboard/../admin?claimCode=clm_bad",
+            "//evil.test/dashboard?claimCode=clm_bad",
+            "https://evil.test/dashboard?claimCode=clm_bad",
+        )
+
+        for return_path in invalid_return_paths:
+            with self.subTest(return_path=return_path), patch.dict(
+                os.environ,
+                {
+                    "GITHUB_CLIENT_ID": "github-client",
+                    "GITHUB_CLIENT_SECRET": "github-secret",
+                    "AUTH_SESSION_SECRET": "session-secret",
+                    "PUBLIC_BASE_URL": "https://ledger.example.test",
+                },
+            ):
+                response = self.client.get(
+                    f"/auth/github/login?returnTo={return_path}",
+                    follow_redirects=False,
+                )
+
+            self.assertEqual(response.status_code, 307)
+            set_cookie = response.headers["set-cookie"]
+            self.assertIn("chief_ledger_oauth_return=", set_cookie)
+            self.assertIn("/dashboard", set_cookie)
+            self.assertNotIn("clm_bad", set_cookie)
+
+    def test_github_callback_redirects_to_stored_claim_return_path(self) -> None:
+        async def fake_fetch_github_user(_code, redirect_uri=None):
+            return {
+                "provider": "github",
+                "login": "octo",
+                "name": "Octo User",
+                "email": "owner@example.com",
+                "avatar_url": None,
+            }
+
+        with patch.dict(os.environ, {"AUTH_SESSION_SECRET": "session-secret"}), patch.object(
+            main,
+            "fetch_github_user",
+            side_effect=fake_fetch_github_user,
+        ):
+            response = self.client.get(
+                "/auth/github/callback?code=abc&state=oauth-state",
+                headers={
+                    "Cookie": (
+                        "chief_ledger_oauth_state=oauth-state; "
+                        "chief_ledger_oauth_return=/dashboard%3FclaimCode%3Dclm_abc%26agentId%3Dagent_1"
+                    )
+                },
+                follow_redirects=False,
+            )
+
+        self.assertEqual(response.status_code, 307)
+        self.assertEqual(
+            response.headers["location"],
+            "/dashboard?claimCode=clm_abc&agentId=agent_1",
+        )
+        self.assertIn("chief_ledger_oauth_return=", response.headers["set-cookie"])
+
+    def test_github_callback_rejects_invalid_stored_return_paths(self) -> None:
+        async def fake_fetch_github_user(_code, redirect_uri=None):
+            return {
+                "provider": "github",
+                "login": "octo",
+                "name": "Octo User",
+                "email": "owner@example.com",
+                "avatar_url": None,
+            }
+
+        invalid_return_paths = (
+            "/dashboard.evil?claimCode=clm_bad",
+            "/dashboard/../admin?claimCode=clm_bad",
+            "//evil.test/dashboard?claimCode=clm_bad",
+            "https://evil.test/dashboard?claimCode=clm_bad",
+        )
+
+        for return_path in invalid_return_paths:
+            with self.subTest(return_path=return_path), patch.dict(
+                os.environ,
+                {"AUTH_SESSION_SECRET": "session-secret"},
+            ), patch.object(
+                main,
+                "fetch_github_user",
+                side_effect=fake_fetch_github_user,
+            ):
+                response = self.client.get(
+                    "/auth/github/callback?code=abc&state=oauth-state",
+                    headers={
+                        "Cookie": (
+                            "chief_ledger_oauth_state=oauth-state; "
+                            f"chief_ledger_oauth_return={return_path}"
+                        )
+                    },
+                    follow_redirects=False,
+                )
+
+            self.assertEqual(response.status_code, 307)
+            self.assertEqual(response.headers["location"], "/dashboard")
+
+    def test_github_callback_error_preserves_stored_claim_return_and_clears_oauth_cookies(self) -> None:
+        response = self.client.get(
+            "/auth/github/callback?error=bad state&state=oauth-state",
+            headers={
+                "Cookie": (
+                    "chief_ledger_oauth_state=oauth-state; "
+                    "chief_ledger_oauth_return=/dashboard%3FclaimCode%3Dclm_abc%26agentId%3Dagent_1"
+                )
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 307)
+        self.assertEqual(
+            response.headers["location"],
+            "/dashboard?claimCode=clm_abc&agentId=agent_1&auth_error=bad+state",
+        )
+        set_cookie = response.headers["set-cookie"]
+        self.assertIn("chief_ledger_oauth_state=", set_cookie)
+        self.assertIn("chief_ledger_oauth_return=", set_cookie)
+        self.assertIn("Max-Age=0", set_cookie)
+
     def test_root_can_receive_github_oauth_callback_error(self) -> None:
         response = self.client.get("/?error=access_denied", follow_redirects=False)
 
