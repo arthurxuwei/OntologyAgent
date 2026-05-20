@@ -2610,6 +2610,9 @@ function AgentSwitcher({ agents, activeAgentId, agentRoster, onSelect, onAddAgen
   if (!agents || agents.length === 0) return null;
 
   const activeMeta = agentRoster[activeAgentId];
+  const activeLabel = activeMeta && activeMeta.agent && activeMeta.agent.name
+    ? activeMeta.agent.name
+    : (activeAgentId || agents[0]);
 
   return (
     <div ref={ref} style={{ position: 'relative' }}>
@@ -2632,7 +2635,9 @@ function AgentSwitcher({ agents, activeAgentId, agentRoster, onSelect, onAddAgen
         aria-haspopup="menu"
         aria-expanded={open}
       >
-        <span>{activeAgentId || agents[0]}</span>
+        <span style={{ maxWidth: '220px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {activeLabel}
+        </span>
         <span style={{ color: 'var(--ink-tertiary)', fontSize: '10px' }}>▾</span>
       </button>
 
@@ -3257,12 +3262,6 @@ window.MockStateToggle = MockStateToggle;
 
     const trimmedCode = code.trim();
     const canValidate = trimmedCode.length > 0;
-    const demoCodes = React.useMemo(() => {
-      return candidates
-        .filter((candidate) => candidate.claimCode && !claimedAgents.includes(candidate.agentId))
-        .map((candidate) => [candidate.claimCode, candidate.agentId]);
-    }, [candidates, claimedAgents]);
-
     const handleValidate = () => {
       if (!canValidate) return;
       if (status === 'loading') {
@@ -3343,7 +3342,6 @@ window.MockStateToggle = MockStateToggle;
         onValidate={handleValidate}
         canValidate={canValidate}
         errorKey={errorKey}
-        demoCodes={demoCodes}
         status={status}
         ownerEmail={ownerEmail}
         mode={mode}
@@ -3352,7 +3350,7 @@ window.MockStateToggle = MockStateToggle;
     );
   }
 
-  function InputStep({ t, code, onCodeChange, onValidate, canValidate, errorKey, demoCodes, status, ownerEmail, mode, onReturnToRegistration }) {
+  function InputStep({ t, code, onCodeChange, onValidate, canValidate, errorKey, status, ownerEmail, mode, onReturnToRegistration }) {
     const handleKey = (e) => { if (e.key === 'Enter' && canValidate) onValidate(); };
     return (
       <>
@@ -3380,9 +3378,6 @@ window.MockStateToggle = MockStateToggle;
             {t('mvp.dash.claim.validate_button')} →
           </button>
         </div>
-        {demoCodes.length > 0 && (
-          <DemoHint t={t} demoCodes={demoCodes} onUse={onCodeChange} />
-        )}
         {status === 'empty' && (
           <div className="font-body" style={{ marginTop: '18px', fontSize: '12px', color: 'var(--ink-tertiary)', lineHeight: 1.5 }}>
             {t('mvp.dash.claim.no_agents')}
@@ -3392,33 +3387,6 @@ window.MockStateToggle = MockStateToggle;
           </div>
         )}
       </>
-    );
-  }
-
-  function DemoHint({ t, demoCodes, onUse }) {
-    return (
-      <div style={{ marginTop: '28px', paddingTop: '18px', borderTop: '1px dashed var(--stroke-rule)' }}>
-        <div className="smallcaps-mono" style={{ fontSize: '10px', color: 'var(--ink-tertiary)', marginBottom: '10px', letterSpacing: '0.08em' }}>
-          {t('mvp.dash.claim.demo_hint_label')}
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-          {demoCodes.map(([claimCode, label]) => (
-            <div key={claimCode} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '8px 12px', background: 'var(--surface-card)', border: '1px solid var(--stroke-hairline)' }}>
-              <div style={{ minWidth: 0, flex: 1 }}>
-                <div className="font-mono" style={{ fontSize: '11px', color: 'var(--ink-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {claimCode}
-                </div>
-                <div className="font-body" style={{ fontSize: '10px', color: 'var(--ink-tertiary)', marginTop: '2px' }}>
-                  {t('mvp.dash.claim.demo_hint_for')} {label}
-                </div>
-              </div>
-              <button type="button" onClick={() => onUse(claimCode)} className="smallcaps-mono" style={{ padding: '4px 10px', background: 'transparent', border: '1px solid var(--stroke-rule)', color: 'var(--ink-secondary)', fontSize: '9px', letterSpacing: '0.08em', cursor: 'pointer', textTransform: 'uppercase', flexShrink: 0 }}>
-                {t('mvp.dash.claim.demo_hint_use')}
-              </button>
-            </div>
-          ))}
-        </div>
-      </div>
     );
   }
 
@@ -3896,9 +3864,6 @@ window.MockStateToggle = MockStateToggle;
     'mvp.dash.claim.error_not_found':        { en: 'Code not recognized. Check for typos.',   zh: '没识别到这串 code,检查一下有没有打错。' },
     'mvp.dash.claim.error_already_claimed':  { en: "You've already claimed this agent.",      zh: '这个 agent 已经认领过了。' },
     'mvp.dash.claim.no_agents':              { en: 'No unclaimed agents available.',          zh: '当前没有可认领的 agent。' },
-    'mvp.dash.claim.demo_hint_label':        { en: 'DEMO CODE · paste any to try the flow',   zh: '演示 CODE · 用任意一个走通流程' },
-    'mvp.dash.claim.demo_hint_for':          { en: 'for',                                     zh: '对应' },
-    'mvp.dash.claim.demo_hint_use':          { en: 'Use',                                     zh: '使用' },
     'mvp.dash.claim.confirm_validated':      { en: 'Code validated',                          zh: '验证通过' },
     'mvp.dash.claim.confirm_agent_label':    { en: 'AGENT',                                  zh: 'AGENT' },
     'mvp.dash.claim.confirm_wallet_label':   { en: 'WALLET',                                 zh: '钱包' },
@@ -3953,6 +3918,15 @@ window.MockStateToggle = MockStateToggle;
     'mvp.dash.funding.slug':                      { en: 'FUNDING',                 zh: '资金' },
     'mvp.dash.funding.balance_label':             { en: 'BALANCE',                 zh: '余额' },
     'mvp.dash.funding.add_label':                 { en: 'ADD FUNDS',               zh: '充值' },
+    'mvp.dash.funding.add_description': {
+      en: "Send USDC to this agent's wallet from any wallet on Base — exchange or self-custody.",
+      zh: '从任意支持 Base 链的钱包(交易所或自管钱包)给这个 agent 发 USDC。',
+    },
+    'mvp.dash.funding.receive_eyebrow': { en: "THIS AGENT'S WALLET · BASE", zh: '本 agent 的收款地址 · BASE' },
+    'mvp.dash.funding.onramp_coming_soon': {
+      en: 'Buying USDC with card or bank transfer is on the way — Coinbase Onramp lands in an upcoming release.',
+      zh: '银行卡 / 银行转账买 USDC 的入口正在路上,会在后续版本里上线。',
+    },
     'mvp.dash.funding.onramp_title':              { en: 'Buy USDC',                 zh: '直接购买' },
     'mvp.dash.funding.onramp_button': { en: 'Open Coinbase onramp', zh: '打开 Coinbase 充值' },
 
@@ -3980,9 +3954,9 @@ window.MockStateToggle = MockStateToggle;
     'mvp.dash.funding.transfer_title':             { en: 'Transfer from exchange', zh: '从交易所转入' },
     'mvp.dash.funding.copy':       { en: 'COPY',     zh: '复制' },
     'mvp.dash.funding.copied':     { en: '✓ COPIED', zh: '✓ 已复制' },
-    'mvp.dash.funding.transfer_step_1': { en: 'Withdraw USDC from your exchange to a Base address.', zh: '去交易所选 USDC,提币到 Base 网络。' },
-    'mvp.dash.funding.transfer_step_2': { en: 'Paste this agent\'s address as the destination.',     zh: '把上方地址粘贴为收款地址。' },
-    'mvp.dash.funding.transfer_step_3': { en: 'Confirm — funds land here within a minute.',          zh: '确认转账,通常一分钟内到账。' },
+    'mvp.dash.funding.transfer_step_1': { en: 'From your wallet or exchange, choose to send USDC on Base.', zh: '在你的钱包或交易所,选择把 USDC 通过 Base 链发出。' },
+    'mvp.dash.funding.transfer_step_2': { en: 'Paste this agent\'s address as the destination.',           zh: '把上方地址粘贴为收款地址。' },
+    'mvp.dash.funding.transfer_step_3': { en: 'Confirm — funds land here within a minute.',                zh: '确认转账,通常一分钟内到账。' },
     'mvp.dash.funding.qr_caption': {
       en: 'Scan from your\nexchange app\nUSDC · Base',
       zh: '用交易所 app\n扫码\nUSDC · Base',
@@ -6073,8 +6047,7 @@ window.MockStateToggle = MockStateToggle;
 <script type="text/babel" data-src="src/dashboard/views/FundingView.jsx">
 // MVP Funding — the closed-loop core. Three blocks:
 //
-//   ADD FUNDS  — two cards side-by-side:
-//                  • Buy USDC via Coinbase onramp (button opens fake URL).
+//   ADD FUNDS  — single receive-card:
 //                  • Transfer from exchange — surfaces this agent's USDC
 //                    receive address with a Copy button + a step-by-step guide.
 //
@@ -6107,10 +6080,6 @@ window.MockStateToggle = MockStateToggle;
     const [localBalance, setLocalBalance] = React.useState(data.balance.available);
     const [localTxs, setLocalTxs]     = React.useState(data.transactions || []);
     const [addAddressOpen, setAddAddressOpen] = React.useState(false);
-    // ?onramp=1 opens the modal on mount (screenshot helper + deep link).
-    const [onrampOpen, setOnrampOpen] = React.useState(() =>
-      new URLSearchParams(window.location.search).get('onramp') === '1'
-    );
 
     // Reset when the agent (data) changes — view key in parent triggers
     // remount, but the safety net is cheap.
@@ -6234,75 +6203,79 @@ window.MockStateToggle = MockStateToggle;
         </div>
 
         {/* ADD FUNDS section */}
-        <Section title={t('mvp.dash.funding.add_label')}>
-          <div className="grid" style={{ gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
-            <Card>
-              <CardTitle>{t('mvp.dash.funding.onramp_title')}</CardTitle>
-              <CardCTA onClick={() => setOnrampOpen(true)} primary>
-                {t('mvp.dash.funding.onramp_button')} →
-              </CardCTA>
-            </Card>
-
-            <Card>
-              <CardTitle>{t('mvp.dash.funding.transfer_title')}</CardTitle>
-
-              {/* Two-column: copyable address (left) + QR (right). QR exists
-                  for the desktop-dashboard + mobile-exchange-app case, which
-                  is common in crypto and otherwise forces the user to type
-                  a 42-char hex string by hand. */}
-              <div className="grid" style={{ gridTemplateColumns: '1fr auto', gap: '16px', alignItems: 'start', marginTop: '14px' }}>
-                <div>
-                  <div
-                    className="font-mono"
-                    style={{
-                      padding: '10px 14px',
-                      background: 'var(--surface-paper)',
-                      border: '1px solid var(--stroke-hairline)',
-                      fontSize: '12px',
-                      color: 'var(--ink-primary)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      gap: '12px',
-                    }}
-                  >
-                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {receiveAddress}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={handleCopyAddr}
-                      className="smallcaps-mono"
-                      style={{
-                        background: 'transparent',
-                        border: '1px solid var(--stroke-rule)',
-                        padding: '2px 8px',
-                        cursor: 'pointer',
-                        color: addrCopied ? 'var(--status-positive)' : 'var(--ink-secondary)',
-                        fontSize: '10px',
-                      }}
-                    >
-                      {addrCopied ? t('mvp.dash.funding.copied') : t('mvp.dash.funding.copy')}
-                    </button>
-                  </div>
-                  <ol
-                    className="font-body"
-                    style={{
-                      marginTop: '14px',
-                      paddingLeft: '20px',
-                      fontSize: '12px',
-                      color: 'var(--ink-secondary)',
-                      lineHeight: 1.6,
-                    }}
-                  >
-                    <li>{t('mvp.dash.funding.transfer_step_1')}</li>
-                    <li>{t('mvp.dash.funding.transfer_step_2')}</li>
-                    <li>{t('mvp.dash.funding.transfer_step_3')}</li>
-                  </ol>
+        <Section
+          title={t('mvp.dash.funding.add_label')}
+          description={t('mvp.dash.funding.add_description')}
+        >
+          <Card>
+            <div className="grid" style={{ gridTemplateColumns: '1fr auto', gap: '28px', alignItems: 'start' }}>
+              <div>
+                <div className="smallcaps-mono" style={{ color: 'var(--ink-tertiary)', marginBottom: '8px' }}>
+                  {t('mvp.dash.funding.receive_eyebrow')}
                 </div>
-                <QrPanel address={receiveAddress} t={t} />
+                <div
+                  className="font-mono"
+                  style={{
+                    padding: '10px 14px',
+                    background: 'var(--surface-paper)',
+                    border: '1px solid var(--stroke-hairline)',
+                    fontSize: '12px',
+                    color: 'var(--ink-primary)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '12px',
+                  }}
+                >
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {receiveAddress}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleCopyAddr}
+                    className="smallcaps-mono"
+                    style={{
+                      background: 'transparent',
+                      border: '1px solid var(--stroke-rule)',
+                      padding: '2px 8px',
+                      cursor: 'pointer',
+                      color: addrCopied ? 'var(--status-positive)' : 'var(--ink-secondary)',
+                      fontSize: '10px',
+                    }}
+                  >
+                    {addrCopied ? t('mvp.dash.funding.copied') : t('mvp.dash.funding.copy')}
+                  </button>
+                </div>
+                <ol
+                  className="font-body"
+                  style={{
+                    marginTop: '14px',
+                    paddingLeft: '20px',
+                    fontSize: '12px',
+                    color: 'var(--ink-secondary)',
+                    lineHeight: 1.7,
+                  }}
+                >
+                  <li>{t('mvp.dash.funding.transfer_step_1')}</li>
+                  <li>{t('mvp.dash.funding.transfer_step_2')}</li>
+                  <li>{t('mvp.dash.funding.transfer_step_3')}</li>
+                </ol>
               </div>
-            </Card>
+              <QrPanel address={receiveAddress} t={t} />
+            </div>
+          </Card>
+
+          <div
+            className="font-body"
+            style={{
+              marginTop: '14px',
+              fontSize: '11px',
+              color: 'var(--ink-tertiary)',
+              letterSpacing: '0.02em',
+              lineHeight: 1.6,
+            }}
+          >
+            {t('mvp.dash.funding.onramp_coming_soon')}
           </div>
         </Section>
 
@@ -6466,15 +6439,6 @@ window.MockStateToggle = MockStateToggle;
           )}
         </Section>
 
-        {/* Real Coinbase hosted onramp session. Settlement and final credit
-            remain backend-driven; the modal only creates and opens the session. */}
-        <window.MvpCoinbaseOnrampModal
-          open={onrampOpen}
-          onClose={() => setOnrampOpen(false)}
-          agentId={data.agent.id}
-          destinationAddress={receiveAddress}
-          t={t}
-        />
         <window.AddAddressModal
           open={addAddressOpen}
           onClose={() => setAddAddressOpen(false)}
@@ -6575,39 +6539,6 @@ window.MockStateToggle = MockStateToggle;
       >
         {children}
       </div>
-    );
-  }
-
-  function CardTitle({ children }) {
-    return (
-      <div
-        className="font-display"
-        style={{ fontSize: '20px', color: 'var(--ink-primary)', letterSpacing: '-0.01em', marginBottom: '6px' }}
-      >
-        {children}
-      </div>
-    );
-  }
-
-  function CardCTA({ children, onClick, primary }) {
-    return (
-      <button
-        type="button"
-        onClick={onClick}
-        className="font-body"
-        style={{
-          marginTop: '14px',
-          padding: '10px 18px',
-          background: primary ? 'var(--ink-primary)' : 'transparent',
-          border: `1px solid ${primary ? 'var(--ink-primary)' : 'var(--stroke-rule)'}`,
-          color: primary ? 'var(--ink-inverse)' : 'var(--ink-primary)',
-          fontSize: '13px',
-          cursor: 'pointer',
-          letterSpacing: '0.02em',
-        }}
-      >
-        {children}
-      </button>
     );
   }
 
