@@ -92,6 +92,57 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "ok")
 
+    def test_ledger_state_loads_legacy_mcp_record_fields(self) -> None:
+        now = main.now_iso()
+        legacy_state = {
+            "accounts": [],
+            "entries": [],
+            "escrows": [],
+            "onrampSessions": [],
+            "onrampEvents": [],
+            "chainRecords": [
+                {
+                    "recordId": "chain_legacy",
+                    "eventType": "credit",
+                    "status": "submitted",
+                    "chainTool": "chain_submit_execution",
+                    "chainMcpUrl": "http://chain.test/mcp/",
+                    "recorderAddress": "0x000000000000000000000000000000000000dEaD",
+                    "toolResult": {"txHash": "0xchain"},
+                    "createdAt": now,
+                    "updatedAt": now,
+                }
+            ],
+            "settlementRecords": [
+                {
+                    "recordId": "settle_legacy",
+                    "eventType": "withdrawal",
+                    "status": "submitted",
+                    "settlementTool": "agent_wallet_withdraw",
+                    "chainMcpUrl": "http://circle.test/mcp/",
+                    "fromAgentId": "agent_sender",
+                    "amountAtomic": "1000000",
+                    "toolResult": {"transactionHash": "0xsettle"},
+                    "createdAt": now,
+                    "updatedAt": now,
+                }
+            ],
+        }
+        Path(self.state_path).write_text(json.dumps(legacy_state), encoding="utf-8")
+
+        state = main.get_store().load()
+
+        self.assertEqual(state.chainRecords[0].chainHttpUrl, "http://chain.test/mcp/")
+        self.assertEqual(state.chainRecords[0].actionResult, {"txHash": "0xchain"})
+        self.assertEqual(
+            state.settlementRecords[0].settlementHttpUrl,
+            "http://circle.test/mcp/",
+        )
+        self.assertEqual(
+            state.settlementRecords[0].actionResult,
+            {"transactionHash": "0xsettle"},
+        )
+
     def test_route_payment_intent_is_served_by_rest(self) -> None:
         response = self.client.post(
             "/ledger/payment/route",
@@ -476,18 +527,37 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertIn("if (!registered) return <window.MvpGithubAuthScreen />", html)
         self.assertIn("if (!claimed)    return <window.MvpClaimScreen />", html)
         self.assertIn("window.ClaimForm = ClaimForm", html)
-        self.assertIn("fetch(`/dashboard/claimable-agents?", html)
+        self.assertIn("fetch(`/dashboard/claimable-agents?claimed=${claimed}`)", html)
+        self.assertNotIn("email=${email}", html)
         self.assertIn("t('mvp.dash.claim.code_label')", html)
+        self.assertIn("const canValidate = trimmedCode.length > 0", html)
         self.assertIn("candidate.claimCode", html)
+        self.assertIn("{t('mvp.dash.claim.validate_button')} →", html)
+        self.assertNotIn("DEMO CODE · paste any to try the flow", html)
+        self.assertNotIn("function DemoHint", html)
+        self.assertNotIn("demo_hint", html)
+        self.assertIn("clm_…", html)
+        self.assertIn("candidate.dashboard.agent.role", html)
+        self.assertIn("const activeLabel = activeMeta && activeMeta.agent && activeMeta.agent.name", html)
+        self.assertIn("{activeLabel}", html)
         self.assertNotIn("agent id / name", html)
+        self.assertNotIn("{t('mvp.dash.claim.validate_button')} ->", html)
+        self.assertNotIn("function ClaimStatusCard", html)
+        self.assertNotIn("Looking up agents", html)
         self.assertNotIn("function CandidateButton", html)
         self.assertIn("window.localStorage.getItem(STORAGE_KEYS.mockState) || 'day1'", html)
         self.assertNotIn('type="email"', html)
         self.assertNotIn('placeholder="you@example.com"', html)
         self.assertNotIn("<window.MockStateToggle />", html)
-        self.assertIn("fetch(`/dashboard/data${emailQuery}`)", html)
+        self.assertIn("fetch('/dashboard/data')", html)
+        self.assertNotIn("const emailQuery = ownerEmail", html)
         self.assertIn("fetch('/onramp/sessions'", html)
         self.assertIn("fullWalletAddress", html)
+        self.assertIn("mvp.dash.funding.add_description", html)
+        self.assertIn("mvp.dash.funding.receive_eyebrow", html)
+        self.assertIn("mvp.dash.funding.onramp_coming_soon", html)
+        self.assertNotIn("<CardTitle>{t('mvp.dash.funding.onramp_title')}</CardTitle>", html)
+        self.assertNotIn("setOnrampOpen(true)", html)
         self.assertIn("const qrAddress = String(address || '').trim();", html)
         self.assertIn("qr.addData(qrAddress);", html)
         self.assertIn("data-qr-address={qrAddress}", html)
@@ -515,9 +585,9 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertIn("returnTo=${encodeURIComponent(window.location.pathname + window.location.search)}", html)
         self.assertIn("function DeepLinkClaimRunner()", html)
         self.assertIn("const consumedRef = React.useRef(false);", html)
-        self.assertIn("authChecked, claimToken, deepLinkAgentId, currentUser, ownerEmail,", html)
+        self.assertIn("authChecked, claimToken, deepLinkAgentId, currentUser,", html)
         self.assertIn("!authChecked || consumedRef.current", html)
-        self.assertIn("fetch(`/dashboard/claimable-agents?email=${email}&claimed=${claimed}`)", html)
+        self.assertIn("fetch(`/dashboard/claimable-agents?claimed=${claimed}`)", html)
         self.assertIn("const normalizedDeepLinkAgentId = deepLinkAgentId.trim();", html)
         self.assertIn("String(candidate.agentId || '').trim() === normalizedDeepLinkAgentId", html)
         self.assertIn("window.history.replaceState({}, '', cleanUrl.toString())", html)
@@ -753,6 +823,27 @@ class LedgerServiceTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["detail"], "email is required")
+
+    def test_dashboard_claimable_agents_can_load_without_chief_email(self) -> None:
+        store = main.get_store()
+        store.bind_account_wallet(
+            agent_id="agent_eigenflux",
+            agent_name="EigenFlux Worker",
+            email="agent-bound@example.com",
+            wallet_address="0x4444444444444444444444444444444444444444",
+            circle_wallet_id="circle-eigenflux",
+        )
+
+        response = self.client.get("/dashboard/claimable-agents")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertIsNone(payload["email"])
+        self.assertEqual(len(payload["agents"]), 1)
+        candidate = payload["agents"][0]
+        self.assertEqual(candidate["agentId"], "agent_eigenflux")
+        self.assertEqual(candidate["ownerEmail"], "agent-bound@example.com")
+        self.assertTrue(candidate["claimCode"].startswith("clm_"))
 
     def test_management_page_helpers_render_and_call_ledger_api(self) -> None:
         if shutil.which("node") is None:
