@@ -19,6 +19,8 @@ from urllib.parse import urlencode
 
 import httpx
 import jwt
+from chain_client import ChainHttpClient
+from circle_client import CircleHttpClient
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, RedirectResponse
@@ -33,6 +35,7 @@ from mcp_tools import (
     build_mcp_app,
     route_payment_intent_tool,
 )
+from payment_router import PaymentIntent, route_payment_intent
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
 
 
@@ -41,9 +44,9 @@ DEFAULT_LEDGER_STATE_PATH = "ledger/data/offchain_ledger.json"
 DEFAULT_COINBASE_API_BASE_URL = "https://api.developer.coinbase.com"
 DEFAULT_COINBASE_TOKEN_PATH = "/onramp/v1/token"
 DEFAULT_COINBASE_HOSTED_URL = "https://pay.coinbase.com/buy/select-asset"
-DEFAULT_CHAIN_MCP_URL = "http://chain-mcp:8091/mcp/"
-DEFAULT_SETTLEMENT_MCP_URL = "http://circle-mcp:8093/mcp/"
-DEFAULT_WALLET_MCP_URL = "http://circle-mcp:8093/mcp/"
+DEFAULT_CHAIN_HTTP_URL = "http://chain:8091"
+DEFAULT_SETTLEMENT_HTTP_URL = "http://circle:8093"
+DEFAULT_WALLET_HTTP_URL = "http://circle:8093"
 DEFAULT_CHAIN_RECORDER_ADDRESS = "0x000000000000000000000000000000000000dEaD"
 LEDGER_CONSOLE_PATH = Path(__file__).resolve().parent / "web" / "index.html"
 LEDGER_DASHBOARD_PATH = Path(__file__).resolve().parent / "web" / "dashboard.html"
@@ -930,18 +933,20 @@ class LedgerChainRecorder:
         self,
         *,
         enabled: bool,
-        chain_mcp_url: str,
+        chain_http_url: str,
         recorder_address: str,
         timeout_seconds: float,
         max_payload_bytes: int,
         require_success: bool,
+        transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.enabled = enabled
-        self.chain_mcp_url = chain_mcp_url
+        self.chain_http_url = chain_http_url
         self.recorder_address = recorder_address
         self.timeout_seconds = timeout_seconds
         self.max_payload_bytes = max_payload_bytes
         self.require_success = require_success
+        self.transport = transport
 
     async def submit(
         self,
@@ -964,7 +969,7 @@ class LedgerChainRecorder:
         base_record = {
             "recordId": f"chainrec_{uuid.uuid4().hex}",
             "eventType": event_type,
-            "chainMcpUrl": self.chain_mcp_url,
+            "chainMcpUrl": self.chain_http_url,
             "recorderAddress": self.recorder_address,
             "escrowId": escrow.escrowId if escrow is not None else None,
             "entryIds": [entry.entryId for entry in entries],
@@ -975,10 +980,7 @@ class LedgerChainRecorder:
 
         try:
             data = encode_ledger_record_payload(payload, self.max_payload_bytes)
-            result = await self._call_chain_submit_execution(data)
-            structured = result.get("structuredContent")
-            if not isinstance(structured, dict):
-                raise RuntimeError("chain MCP response did not include structuredContent")
+            structured = await self._call_chain_submit_execution(data)
             error_payload = structured.get("error")
             if isinstance(error_payload, dict):
                 message = error_payload.get("message")
@@ -996,7 +998,7 @@ class LedgerChainRecorder:
                     tx_hash = identifier
                 mode = mode or settlement.get("mode")
             if not isinstance(tx_hash, str) or not tx_hash.startswith("0x"):
-                raise RuntimeError("chain MCP response did not include a transaction hash")
+                raise RuntimeError("chain REST response did not include a transaction hash")
             return LedgerChainRecord(
                 **base_record,
                 status="submitted",
@@ -1015,39 +1017,16 @@ class LedgerChainRecorder:
             return record
 
     async def _call_chain_submit_execution(self, data: str) -> dict[str, Any]:
-        request = {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "tools/call",
-            "params": {
-                "name": "chain_submit_execution",
-                "arguments": {
-                    "to": self.recorder_address,
-                    "valueEth": "0",
-                    "data": data,
-                },
-            },
-        }
-        async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
-            response = await client.post(
-                self.chain_mcp_url,
-                headers={
-                    "Content-Type": "application/json",
-                    "Accept": "application/json, text/event-stream",
-                },
-                json=request,
-            )
-        if response.status_code >= 400:
-            raise RuntimeError(f"chain MCP request failed: HTTP {response.status_code} {response.text}")
-        payload = response.json()
-        if not isinstance(payload, dict):
-            raise RuntimeError("chain MCP response was not a JSON object")
-        if "error" in payload:
-            raise RuntimeError(f"chain MCP returned error: {payload['error']}")
-        result = payload.get("result")
-        if not isinstance(result, dict):
-            raise RuntimeError("chain MCP response did not include result")
-        return result
+        client = ChainHttpClient(
+            base_url=self.chain_http_url,
+            timeout_seconds=self.timeout_seconds,
+            transport=self.transport,
+        )
+        return await client.submit_execution(
+            to=self.recorder_address,
+            value_eth="0",
+            data=data,
+        )
 
 
 class LedgerChainRecordError(RuntimeError):
@@ -1061,14 +1040,16 @@ class LedgerSettlementClient:
         self,
         *,
         enabled: bool,
-        settlement_mcp_url: str,
+        settlement_http_url: str,
         timeout_seconds: float,
         require_success: bool,
+        transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.enabled = enabled
-        self.settlement_mcp_url = settlement_mcp_url
+        self.settlement_http_url = settlement_http_url
         self.timeout_seconds = timeout_seconds
         self.require_success = require_success
+        self.transport = transport
 
     async def submit_release(self, escrow: EscrowRecord) -> Optional[LedgerSettlementRecord]:
         if not self.enabled:
@@ -1078,7 +1059,7 @@ class LedgerSettlementClient:
         base_record = {
             "recordId": f"settle_{uuid.uuid4().hex}",
             "eventType": "escrow_release",
-            "chainMcpUrl": self.settlement_mcp_url,
+            "chainMcpUrl": self.settlement_http_url,
             "escrowId": escrow.escrowId,
             "fromAgentId": escrow.buyerAgentId,
             "toAgentId": escrow.sellerAgentId,
@@ -1094,7 +1075,7 @@ class LedgerSettlementClient:
                 amount_atomic=escrow.amountAtomic,
                 ref_id=f"{escrow.escrowId}:release",
             )
-            transfer = self._extract_tool_content(result)
+            transfer = result
             if transfer.get("error") is not None:
                 raise RuntimeError(json.dumps(transfer["error"], sort_keys=True))
             return LedgerSettlementRecord(
@@ -1134,7 +1115,7 @@ class LedgerSettlementClient:
         base_record = {
             "recordId": f"settle_{uuid.uuid4().hex}",
             "eventType": "agent_transfer",
-            "chainMcpUrl": self.settlement_mcp_url,
+            "chainMcpUrl": self.settlement_http_url,
             "transferId": ref_id,
             "fromAgentId": from_agent_id,
             "toAgentId": to_agent_id,
@@ -1157,7 +1138,7 @@ class LedgerSettlementClient:
                 amount_atomic=amount_atomic,
                 ref_id=ref_id,
             )
-            transfer = self._extract_tool_content(result)
+            transfer = result
             if transfer.get("error") is not None:
                 raise RuntimeError(json.dumps(transfer["error"], sort_keys=True))
             return LedgerSettlementRecord(
@@ -1198,7 +1179,7 @@ class LedgerSettlementClient:
         base_record = {
             "recordId": f"settle_{uuid.uuid4().hex}",
             "eventType": "withdrawal",
-            "chainMcpUrl": self.settlement_mcp_url,
+            "chainMcpUrl": self.settlement_http_url,
             "transferId": ref_id,
             "fromAgentId": from_agent_id,
             "toAddress": destination,
@@ -1221,7 +1202,7 @@ class LedgerSettlementClient:
                 amount_atomic=amount_atomic,
                 ref_id=ref_id,
             )
-            transfer = self._extract_tool_content(result)
+            transfer = result
             if transfer.get("error") is not None:
                 raise RuntimeError(json.dumps(transfer["error"], sort_keys=True))
             return LedgerSettlementRecord(
@@ -1257,67 +1238,22 @@ class LedgerSettlementClient:
         to_address: Optional[str] = None,
         amount_atomic: str,
         ref_id: str,
-        tool_name: str = "agent_wallet_settle_ledger_transfer",
     ) -> dict[str, Any]:
-        arguments: dict[str, Any] = {
+        payload: dict[str, Any] = {
             "fromAgentId": from_agent_id,
             "amountAtomic": amount_atomic,
             "refId": ref_id,
         }
         if to_agent_id is not None:
-            arguments["toAgentId"] = to_agent_id
+            payload["toAgentId"] = to_agent_id
         if to_address is not None:
-            arguments["toAddress"] = to_address
-        request = {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "tools/call",
-            "params": {
-                "name": tool_name,
-                "arguments": arguments,
-            },
-        }
-        async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
-            response = await client.post(
-                self.settlement_mcp_url,
-                headers={
-                    "Content-Type": "application/json",
-                    "Accept": "application/json, text/event-stream",
-                },
-                json=request,
-            )
-        if response.status_code >= 400:
-            raise RuntimeError(
-                f"settlement MCP request failed: HTTP {response.status_code} {response.text}"
-            )
-        payload = response.json()
-        if not isinstance(payload, dict):
-            raise RuntimeError("settlement MCP response was not a JSON object")
-        if "error" in payload:
-            raise RuntimeError(f"settlement MCP returned error: {payload['error']}")
-        result = payload.get("result")
-        if isinstance(result, dict) and result.get("isError") is True:
-            content = self._extract_tool_content(payload)
-            if content.get("error") is not None:
-                raise RuntimeError(json.dumps(content["error"], sort_keys=True))
-            raise RuntimeError("settlement MCP tool returned isError=true")
-        return payload
-
-    @staticmethod
-    def _extract_tool_content(result: dict[str, Any]) -> dict[str, Any]:
-        content = result.get("result", {}).get("content", [])
-        if not isinstance(content, list) or not content:
-            return {}
-        first = content[0]
-        if not isinstance(first, dict):
-            return {}
-        text = first.get("text")
-        if not isinstance(text, str):
-            return {}
-        parsed = json.loads(text)
-        if not isinstance(parsed, dict):
-            return {}
-        return parsed
+            payload["toAddress"] = to_address
+        client = CircleHttpClient(
+            base_url=self.settlement_http_url,
+            timeout_seconds=self.timeout_seconds,
+            transport=self.transport,
+        )
+        return await client.settle(payload)
 
 
 class LedgerSettlementError(RuntimeError):
@@ -1327,13 +1263,24 @@ class LedgerSettlementError(RuntimeError):
 
 
 class LedgerWalletClient:
-    def __init__(self, *, wallet_mcp_url: str, timeout_seconds: float) -> None:
-        self.wallet_mcp_url = wallet_mcp_url
+    def __init__(
+        self,
+        *,
+        wallet_http_url: str,
+        timeout_seconds: float,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
+        self.wallet_http_url = wallet_http_url
         self.timeout_seconds = timeout_seconds
+        self.transport = transport
 
     async def get_or_create(self, request: AgentWalletRequest) -> dict[str, Any]:
-        payload = await self._call_wallet_tool(
-            "agent_wallet_get_or_create",
+        client = CircleHttpClient(
+            base_url=self.wallet_http_url,
+            timeout_seconds=self.timeout_seconds,
+            transport=self.transport,
+        )
+        wallet = await client.get_or_create_wallet(
             {
                 "agentName": request.agentName,
                 "agentId": request.agentId,
@@ -1343,9 +1290,8 @@ class LedgerWalletClient:
                 "agentDescription": request.agentDescription,
             },
         )
-        wallet = self._extract_tool_content(payload)
         if not wallet:
-            raise RuntimeError("wallet MCP response did not include wallet content")
+            raise RuntimeError("wallet REST response did not include wallet content")
         return wallet
 
     async def status(
@@ -1354,104 +1300,53 @@ class LedgerWalletClient:
         wallet_address: Optional[str],
         circle_wallet_id: Optional[str],
     ) -> dict[str, Any]:
-        payload = await self._call_wallet_tool(
-            "agent_wallet_status",
-            {
-                "walletAddress": wallet_address,
-                "circleWalletId": circle_wallet_id,
-            },
+        client = CircleHttpClient(
+            base_url=self.wallet_http_url,
+            timeout_seconds=self.timeout_seconds,
+            transport=self.transport,
         )
-        wallet = self._extract_tool_content(payload)
+        wallet = await client.wallet_status(
+            wallet_address=wallet_address,
+            circle_wallet_id=circle_wallet_id,
+        )
         if not wallet:
-            raise RuntimeError("wallet MCP response did not include wallet status content")
+            raise RuntimeError("wallet REST response did not include wallet status content")
         return wallet
 
     async def gateway_deposit(self, request: GatewayDepositRequest) -> dict[str, Any]:
-        payload = await self._call_wallet_tool(
-            "agent_wallet_gateway_deposit",
+        client = CircleHttpClient(
+            base_url=self.wallet_http_url,
+            timeout_seconds=self.timeout_seconds,
+            transport=self.transport,
+        )
+        deposit = await client.gateway_deposit(
             {
                 "agentId": request.agentId,
                 "amountAtomic": request.amountAtomic,
                 "refId": request.refId,
             },
         )
-        deposit = self._extract_tool_content(payload)
         if not deposit:
-            raise RuntimeError("wallet MCP response did not include Gateway deposit content")
+            raise RuntimeError("wallet REST response did not include Gateway deposit content")
         return deposit
 
     async def gateway_withdraw(self, request: GatewayWithdrawalRequest) -> dict[str, Any]:
-        arguments: dict[str, Any] = {
+        payload: dict[str, Any] = {
             "agentId": request.agentId,
             "amountAtomic": request.amountAtomic,
             "refId": request.refId,
         }
         if request.recipientAddress is not None:
-            arguments["recipientAddress"] = request.recipientAddress
-        payload = await self._call_wallet_tool(
-            "agent_wallet_gateway_withdraw",
-            arguments,
+            payload["recipientAddress"] = request.recipientAddress
+        client = CircleHttpClient(
+            base_url=self.wallet_http_url,
+            timeout_seconds=self.timeout_seconds,
+            transport=self.transport,
         )
-        withdrawal = self._extract_tool_content(payload)
+        withdrawal = await client.gateway_withdraw(payload)
         if not withdrawal:
-            raise RuntimeError("wallet MCP response did not include Gateway withdrawal content")
+            raise RuntimeError("wallet REST response did not include Gateway withdrawal content")
         return withdrawal
-
-    async def _call_wallet_tool(self, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        request = {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "tools/call",
-            "params": {
-                "name": tool_name,
-                "arguments": {
-                    key: value
-                    for key, value in arguments.items()
-                    if value is not None
-                },
-            },
-        }
-        async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
-            response = await client.post(
-                self.wallet_mcp_url,
-                headers={
-                    "Content-Type": "application/json",
-                    "Accept": "application/json, text/event-stream",
-                },
-                json=request,
-            )
-        if response.status_code >= 400:
-            raise RuntimeError(
-                f"wallet MCP request failed: HTTP {response.status_code} {response.text}"
-            )
-        payload = response.json()
-        if not isinstance(payload, dict):
-            raise RuntimeError("wallet MCP response was not a JSON object")
-        if "error" in payload:
-            raise RuntimeError(f"wallet MCP returned error: {payload['error']}")
-        result = payload.get("result")
-        if isinstance(result, dict) and result.get("isError") is True:
-            content = self._extract_tool_content(payload)
-            if content.get("error") is not None:
-                raise RuntimeError(json.dumps(content["error"], sort_keys=True))
-            raise RuntimeError("wallet MCP tool returned isError=true")
-        return payload
-
-    @staticmethod
-    def _extract_tool_content(result: dict[str, Any]) -> dict[str, Any]:
-        content = result.get("result", {}).get("content", [])
-        if not isinstance(content, list) or not content:
-            return {}
-        first = content[0]
-        if not isinstance(first, dict):
-            return {}
-        text = first.get("text")
-        if not isinstance(text, str):
-            return {}
-        parsed = json.loads(text)
-        if not isinstance(parsed, dict):
-            return {}
-        return parsed
 
 
 def encode_ledger_record_payload(payload: dict[str, Any], max_payload_bytes: int) -> str:
@@ -2125,7 +2020,7 @@ def get_chain_recorder() -> LedgerChainRecorder:
     return LedgerChainRecorder(
         enabled=os.getenv("LEDGER_CHAIN_RECORD_ENABLED", "false").lower()
         in {"1", "true", "yes", "on"},
-        chain_mcp_url=os.getenv("LEDGER_CHAIN_MCP_URL", DEFAULT_CHAIN_MCP_URL),
+        chain_http_url=os.getenv("LEDGER_CHAIN_HTTP_URL", DEFAULT_CHAIN_HTTP_URL),
         recorder_address=os.getenv("LEDGER_CHAIN_RECORDER_ADDRESS", DEFAULT_CHAIN_RECORDER_ADDRESS),
         timeout_seconds=float(os.getenv("LEDGER_CHAIN_RECORD_TIMEOUT_SECONDS", "30")),
         max_payload_bytes=int(os.getenv("LEDGER_CHAIN_RECORD_MAX_BYTES", "2048")),
@@ -2139,7 +2034,7 @@ def get_ledger_settlement_client() -> LedgerSettlementClient:
     return LedgerSettlementClient(
         enabled=os.getenv("LEDGER_SETTLEMENT_ENABLED", "false").lower()
         in {"1", "true", "yes", "on"},
-        settlement_mcp_url=os.getenv("LEDGER_SETTLEMENT_MCP_URL", DEFAULT_SETTLEMENT_MCP_URL),
+        settlement_http_url=os.getenv("LEDGER_SETTLEMENT_HTTP_URL", DEFAULT_SETTLEMENT_HTTP_URL),
         timeout_seconds=float(os.getenv("LEDGER_SETTLEMENT_TIMEOUT_SECONDS", "60")),
         require_success=os.getenv("LEDGER_SETTLEMENT_REQUIRE_SUCCESS", "false").lower()
         in {"1", "true", "yes", "on"},
@@ -2149,7 +2044,7 @@ def get_ledger_settlement_client() -> LedgerSettlementClient:
 @lru_cache(maxsize=1)
 def get_ledger_wallet_client() -> LedgerWalletClient:
     return LedgerWalletClient(
-        wallet_mcp_url=os.getenv("LEDGER_WALLET_MCP_URL", DEFAULT_WALLET_MCP_URL),
+        wallet_http_url=os.getenv("LEDGER_WALLET_HTTP_URL", DEFAULT_WALLET_HTTP_URL),
         timeout_seconds=float(os.getenv("LEDGER_WALLET_TIMEOUT_SECONDS", "60")),
     )
 
@@ -2441,6 +2336,11 @@ async def get_ledger_state(agentId: str = "") -> dict[str, Any]:
     )
 
 
+@app.post("/ledger/payment/route")
+def route_ledger_payment_intent(intent: PaymentIntent) -> dict[str, Any]:
+    return route_payment_intent(intent)
+
+
 @app.get("/dashboard/data")
 async def dashboard_data(email: str = "") -> dict[str, Any]:
     return build_dashboard_data(
@@ -2623,10 +2523,12 @@ async def withdraw_agent_wallet_from_gateway(request: GatewayWithdrawalRequest) 
 async def withdraw_agent_wallet(request: WithdrawalRequest) -> dict[str, Any]:
     withdrawal_id = f"withdrawal_{uuid.uuid4().hex}"
     try:
-        route = await route_payment_intent_tool(
-            purpose="withdraw Agent Wallet USDC to an external Base address",
-            deliveryMode="withdrawal",
-            externalService=True,
+        route = route_payment_intent(
+            PaymentIntent(
+                purpose="withdraw Agent Wallet USDC to an external Base address",
+                deliveryMode="withdrawal",
+                externalService=True,
+            )
         )
         if "agent_wallet_settle_ledger_transfer" not in route.get("allowedTools", []):
             raise ValueError("withdrawal route did not allow Circle settlement")

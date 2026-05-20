@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import json
 import os
 import shutil
 import unittest
@@ -8,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import jwt
+import httpx
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from fastapi.testclient import TestClient
 
@@ -34,8 +36,8 @@ class LedgerServiceTests(unittest.TestCase):
         self.previous_settlement_require_success = os.environ.get(
             "LEDGER_SETTLEMENT_REQUIRE_SUCCESS"
         )
-        self.previous_settlement_mcp_url = os.environ.get("LEDGER_SETTLEMENT_MCP_URL")
-        self.previous_wallet_mcp_url = os.environ.get("LEDGER_WALLET_MCP_URL")
+        self.previous_settlement_http_url = os.environ.get("LEDGER_SETTLEMENT_HTTP_URL")
+        self.previous_wallet_http_url = os.environ.get("LEDGER_WALLET_HTTP_URL")
         os.environ["LEDGER_STATE_PATH"] = self.state_path
         os.environ["LEDGER_CHAIN_RECORD_ENABLED"] = "false"
         os.environ["LEDGER_CHAIN_RECORD_REQUIRE_SUCCESS"] = "false"
@@ -72,8 +74,8 @@ class LedgerServiceTests(unittest.TestCase):
             "LEDGER_SETTLEMENT_REQUIRE_SUCCESS",
             self.previous_settlement_require_success,
         )
-        self._restore_env("LEDGER_SETTLEMENT_MCP_URL", self.previous_settlement_mcp_url)
-        self._restore_env("LEDGER_WALLET_MCP_URL", self.previous_wallet_mcp_url)
+        self._restore_env("LEDGER_SETTLEMENT_HTTP_URL", self.previous_settlement_http_url)
+        self._restore_env("LEDGER_WALLET_HTTP_URL", self.previous_wallet_http_url)
         main.get_coinbase_onramp_client.cache_clear()
         main.get_chain_recorder.cache_clear()
         main.get_ledger_settlement_client.cache_clear()
@@ -90,6 +92,95 @@ class LedgerServiceTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "ok")
+
+    def test_route_payment_intent_is_served_by_rest(self) -> None:
+        response = self.client.post(
+            "/ledger/payment/route",
+            json={
+                "purpose": "buy async service",
+                "deliveryMode": "async_task",
+                "requiresAcceptance": True,
+                "externalService": False,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["method"], "ledger_escrow")
+        self.assertEqual(
+            payload["allowedTools"],
+            [
+                "agent_wallet_create_escrow",
+                "agent_wallet_release_escrow",
+                "agent_wallet_refund_escrow",
+            ],
+        )
+
+    def test_chain_recorder_posts_rest_execution(self) -> None:
+        calls = []
+
+        async def handler(request):
+            calls.append(
+                (
+                    request.url.path,
+                    request.headers.get("content-type"),
+                    json.loads(request.content.decode("utf-8")),
+                )
+            )
+            return httpx.Response(
+                200,
+                json={
+                    "execution": {"txHash": "0xabc123", "mode": "mock"},
+                    "settlement": {"kind": "submitted"},
+                },
+            )
+
+        recorder = main.LedgerChainRecorder(
+            enabled=True,
+            chain_http_url="http://chain.test",
+            recorder_address="0x000000000000000000000000000000000000dEaD",
+            timeout_seconds=30,
+            max_payload_bytes=2048,
+            require_success=True,
+            transport=httpx.MockTransport(handler),
+        )
+
+        entry = main.LedgerEntry(
+            entryId="entry_1",
+            entryType="credit",
+            agentId="agentA",
+            availableDeltaAtomic="100",
+            createdAt=main.now_iso(),
+        )
+        record = asyncio.run(
+            recorder.submit(
+                event_type="credit",
+                escrow=None,
+                entries=[entry],
+                payload={"eventType": "credit"},
+            )
+        )
+
+        self.assertEqual(calls[0][0], "/chain/executions")
+        self.assertEqual(calls[0][2]["to"], "0x000000000000000000000000000000000000dEaD")
+        self.assertEqual(record.status, "submitted")
+        self.assertEqual(record.txHash, "0xabc123")
+
+    def test_wallet_client_uses_circle_rest_status(self) -> None:
+        async def handler(request):
+            self.assertEqual(request.url.path, "/circle/wallets/status")
+            self.assertEqual(request.url.params["walletAddress"], "0xabc")
+            return httpx.Response(200, json={"balances": {"USDC": "1.23"}})
+
+        client = main.LedgerWalletClient(
+            wallet_http_url="http://circle.test",
+            timeout_seconds=30,
+            transport=httpx.MockTransport(handler),
+        )
+
+        status = asyncio.run(client.status(wallet_address="0xabc", circle_wallet_id=None))
+
+        self.assertEqual(status["balances"]["USDC"], "1.23")
 
     def test_coinbase_auth_supports_cdp_key_id_and_base64_private_key(self) -> None:
         private_key = ed25519.Ed25519PrivateKey.generate()
@@ -1410,15 +1501,15 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertEqual(accounts["agent_sender"].availableAtomic, "5000000")
         self.assertEqual(accounts["agent_receiver"].availableAtomic, "0")
 
-    def test_settlement_client_uses_dedicated_circle_mcp_url(self) -> None:
+    def test_settlement_client_uses_dedicated_circle_http_url(self) -> None:
         os.environ["LEDGER_SETTLEMENT_ENABLED"] = "true"
-        os.environ["LEDGER_SETTLEMENT_MCP_URL"] = "http://circle.test/mcp/"
+        os.environ["LEDGER_SETTLEMENT_HTTP_URL"] = "http://circle.test"
         main.get_ledger_settlement_client.cache_clear()
 
         client = main.get_ledger_settlement_client()
 
         self.assertTrue(client.enabled)
-        self.assertEqual(client.settlement_mcp_url, "http://circle.test/mcp/")
+        self.assertEqual(client.settlement_http_url, "http://circle.test")
 
     def test_required_settlement_failure_blocks_release(self) -> None:
         class FakeSettlementClient:
