@@ -88,10 +88,6 @@ def public_base_url(request: Request) -> str:
     return str(request.base_url).rstrip("/")
 
 
-def github_redirect_uri(request: Request) -> str:
-    return f"{public_base_url(request)}/auth/github/callback"
-
-
 def sign_auth_session(user: dict[str, Any]) -> str:
     secret = require_env("AUTH_SESSION_SECRET").encode("utf-8")
     payload = json.dumps(user, separators=(",", ":"), sort_keys=True).encode("utf-8")
@@ -125,19 +121,21 @@ def verify_auth_session(value: str | None) -> dict[str, Any] | None:
     return parsed
 
 
-async def fetch_github_user(code: str, redirect_uri: str) -> dict[str, Any]:
+async def fetch_github_user(code: str, redirect_uri: str | None = None) -> dict[str, Any]:
     client_id = require_env("GITHUB_CLIENT_ID")
     client_secret = require_env("GITHUB_CLIENT_SECRET")
+    token_request = {
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "code": code,
+    }
+    if redirect_uri:
+        token_request["redirect_uri"] = redirect_uri
     async with httpx.AsyncClient(timeout=20) as client:
         token_response = await client.post(
             GITHUB_TOKEN_URL,
             headers={"Accept": "application/json"},
-            data={
-                "client_id": client_id,
-                "client_secret": client_secret,
-                "code": code,
-                "redirect_uri": redirect_uri,
-            },
+            data=token_request,
         )
         token_response.raise_for_status()
         token_payload = token_response.json()
@@ -2528,8 +2526,53 @@ def health() -> dict[str, Any]:
     return {"service": "chief-ledger", "status": "ok"}
 
 
+async def complete_github_callback(
+    request: Request,
+    *,
+    code: str = "",
+    state: str = "",
+    error: str = "",
+    stored_state: str | None = None,
+) -> RedirectResponse:
+    if error:
+        return RedirectResponse(f"/dashboard?auth_error={error}", status_code=307)
+    if not code or not state or not stored_state or not hmac.compare_digest(state, stored_state):
+        raise HTTPException(status_code=400, detail="Invalid GitHub OAuth state")
+    try:
+        user = await fetch_github_user(code)
+        session_value = sign_auth_session(user)
+    except (RuntimeError, httpx.HTTPError) as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    response = RedirectResponse("/dashboard", status_code=307)
+    response.set_cookie(
+        SESSION_COOKIE,
+        session_value,
+        httponly=True,
+        samesite="lax",
+        secure=public_base_url(request).startswith("https://"),
+        max_age=AUTH_SESSION_MAX_AGE_SECONDS,
+    )
+    response.delete_cookie(OAUTH_STATE_COOKIE)
+    return response
+
+
 @app.get("/")
-def ledger_home() -> RedirectResponse:
+async def ledger_home(
+    request: Request,
+    code: str = "",
+    state: str = "",
+    error: str = "",
+    stored_state: str | None = Cookie(default=None, alias=OAUTH_STATE_COOKIE),
+) -> RedirectResponse:
+    if code or error:
+        return await complete_github_callback(
+            request,
+            code=code,
+            state=state,
+            error=error,
+            stored_state=stored_state,
+        )
     return RedirectResponse("/dashboard", status_code=307)
 
 
@@ -2548,7 +2591,21 @@ async def get_admin_ledger_state() -> dict[str, Any]:
 
 
 @app.get("/dashboard")
-def ledger_dashboard() -> FileResponse:
+async def ledger_dashboard(
+    request: Request,
+    code: str = "",
+    state: str = "",
+    error: str = "",
+    stored_state: str | None = Cookie(default=None, alias=OAUTH_STATE_COOKIE),
+) -> Response:
+    if code or error:
+        return await complete_github_callback(
+            request,
+            code=code,
+            state=state,
+            error=error,
+            stored_state=stored_state,
+        )
     return FileResponse(
         LEDGER_DASHBOARD_PATH,
         media_type="text/html",
@@ -2574,11 +2631,9 @@ async def github_login(request: Request) -> RedirectResponse:
         raise HTTPException(status_code=500, detail=str(error)) from error
 
     state = secrets.token_urlsafe(24)
-    redirect_uri = github_redirect_uri(request)
     query = urlencode(
         {
             "client_id": os.getenv("GITHUB_CLIENT_ID", ""),
-            "redirect_uri": redirect_uri,
             "scope": "read:user user:email",
             "state": state,
         }
@@ -2603,27 +2658,13 @@ async def github_callback(
     error: str = "",
     stored_state: str | None = Cookie(default=None, alias=OAUTH_STATE_COOKIE),
 ) -> RedirectResponse:
-    if error:
-        return RedirectResponse(f"/dashboard?auth_error={error}", status_code=307)
-    if not code or not state or not stored_state or not hmac.compare_digest(state, stored_state):
-        raise HTTPException(status_code=400, detail="Invalid GitHub OAuth state")
-    try:
-        user = await fetch_github_user(code, github_redirect_uri(request))
-        session_value = sign_auth_session(user)
-    except (RuntimeError, httpx.HTTPError) as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-
-    response = RedirectResponse("/dashboard", status_code=307)
-    response.set_cookie(
-        SESSION_COOKIE,
-        session_value,
-        httponly=True,
-        samesite="lax",
-        secure=public_base_url(request).startswith("https://"),
-        max_age=AUTH_SESSION_MAX_AGE_SECONDS,
+    return await complete_github_callback(
+        request,
+        code=code,
+        state=state,
+        error=error,
+        stored_state=stored_state,
     )
-    response.delete_cookie(OAUTH_STATE_COOKIE)
-    return response
 
 
 @app.post("/auth/logout")

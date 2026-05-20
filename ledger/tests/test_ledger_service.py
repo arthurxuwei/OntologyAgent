@@ -113,9 +113,21 @@ class LedgerServiceTests(unittest.TestCase):
         location = response.headers["location"]
         self.assertTrue(location.startswith("https://github.com/login/oauth/authorize?"))
         self.assertIn("client_id=github-client", location)
-        self.assertIn("redirect_uri=https%3A%2F%2Fledger.example.test%2Fauth%2Fgithub%2Fcallback", location)
+        self.assertNotIn("redirect_uri=", location)
         self.assertIn("scope=read%3Auser+user%3Aemail", location)
         self.assertIn("chief_ledger_oauth_state=", response.headers["set-cookie"])
+
+    def test_root_can_receive_github_oauth_callback_error(self) -> None:
+        response = self.client.get("/?error=access_denied", follow_redirects=False)
+
+        self.assertEqual(response.status_code, 307)
+        self.assertEqual(response.headers["location"], "/dashboard?auth_error=access_denied")
+
+    def test_dashboard_can_receive_github_oauth_callback_error(self) -> None:
+        response = self.client.get("/dashboard?error=access_denied", follow_redirects=False)
+
+        self.assertEqual(response.status_code, 307)
+        self.assertEqual(response.headers["location"], "/dashboard?auth_error=access_denied")
 
     def test_github_login_requires_oauth_config(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
