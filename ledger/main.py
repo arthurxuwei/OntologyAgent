@@ -239,6 +239,9 @@ class LedgerEntry(BaseModel):
         "escrow_refund",
         "agent_transfer",
         "withdrawal",
+        "pending_settlement",
+        "pending_inbound",
+        "withdrawal_submitted",
     ]
     agentId: str
     asset: str = DEFAULT_ASSET
@@ -547,6 +550,15 @@ def parse_positive_atomic(value: str) -> int:
     return int(value)
 
 
+def parse_dashboard_amount_atomic(entry: dict[str, Any], fallback: Decimal) -> Decimal:
+    metadata = entry.get("metadata")
+    if isinstance(metadata, dict):
+        explicit = metadata.get("amountAtomic")
+        if explicit is not None:
+            return abs(atomic_decimal(explicit))
+    return fallback
+
+
 def parse_nonnegative_atomic(value: str) -> int:
     if not value.isdigit():
         raise ValueError("amountAtomic must be an integer string")
@@ -755,12 +767,15 @@ def dashboard_transaction(
     entry_type = str(entry.get("entryType") or "ledger")
     available_delta = atomic_decimal(entry.get("availableDeltaAtomic"))
     locked_delta = atomic_decimal(entry.get("lockedDeltaAtomic"))
+    metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
+    dashboard_status = metadata.get("dashboardStatus")
     escrow = escrow_by_id.get(str(entry.get("escrowId") or ""))
-    amount_atomic = (
+    base_amount_atomic = (
         atomic_decimal(escrow.get("amountAtomic"))
         if escrow
         else max(abs(available_delta), abs(locked_delta))
     )
+    amount_atomic = parse_dashboard_amount_atomic(entry, base_amount_atomic)
     agent_id = entry.get("agentId")
     direction = "out" if available_delta < 0 or locked_delta > 0 else "in"
     if entry_type == "escrow_release" and escrow and agent_id == escrow.get("buyerAgentId"):
@@ -772,6 +787,16 @@ def dashboard_transaction(
         status = "refunded"
     elif "onramp" in entry_type or entry_type == "credit":
         status = "onramp"
+    if isinstance(dashboard_status, str) and dashboard_status.strip():
+        status = dashboard_status.strip()
+    elif entry_type == "pending_settlement":
+        status = "pending_settle"
+    elif entry_type == "pending_inbound":
+        status = "pending_inbound_chain"
+    elif entry_type == "withdrawal_submitted":
+        status = "withdraw_submitted"
+    elif entry_type == "withdrawal":
+        status = metadata.get("dashboardStatus", "withdrawn")
     role = "payer" if direction == "out" else "payee"
     if entry_type == "withdrawal":
         role = "withdrawal"
@@ -779,15 +804,32 @@ def dashboard_transaction(
         role = "deposit"
     elif status == "refunded":
         role = "refund"
-    return {
+    transaction = {
         "id": entry.get("entryId") or entry.get("escrowId") or "ledger_entry",
         "counterparty": dashboard_counterparty(entry, escrow_by_id),
         "amount": atomic_to_usdc(amount_atomic),
+        "amountAtomic": str(int(amount_atomic)),
         "direction": direction,
         "role": role,
         "status": status,
         "timestamp": entry.get("createdAt") or "ledger",
     }
+    for key in (
+        "destinationAddress",
+        "network",
+        "txHash",
+        "gasFeeAtomic",
+        "gasFee",
+        "netAmountAtomic",
+        "netAmount",
+        "failureReason",
+        "gatewayStage",
+        "linkedEntryId",
+    ):
+        value = metadata.get(key)
+        if value is not None:
+            transaction[key] = value
+    return transaction
 
 
 def empty_dashboard_agent(account: dict[str, Any]) -> dict[str, Any]:
@@ -868,6 +910,17 @@ def build_dashboard_data(
             for entry in agent_entries
             if atomic_decimal(entry.get("availableDeltaAtomic")) < 0
         )
+        pending_settlement_atomic = sum(
+            parse_dashboard_amount_atomic(
+                entry,
+                max(
+                    abs(atomic_decimal(entry.get("availableDeltaAtomic"))),
+                    abs(atomic_decimal(entry.get("lockedDeltaAtomic"))),
+                ),
+            )
+            for entry in agent_entries
+            if dashboard_transaction(entry, escrow_by_id)["status"] == "pending_settle"
+        )
         wallet_address = (
             account.get("walletAddress")
             or account.get("circleWalletAddress")
@@ -892,6 +945,8 @@ def build_dashboard_data(
                 "locked": atomic_to_usdc(account.get("lockedAtomic")),
                 "lifetimeIn": round(lifetime_in, 6),
                 "lifetimeOut": round(lifetime_out, 6),
+                "pendingSettlement": atomic_to_usdc(pending_settlement_atomic),
+                "pendingSettlementAtomic": str(int(pending_settlement_atomic)),
             },
             "transactions": [
                 dashboard_transaction(entry, escrow_by_id)
@@ -1764,7 +1819,7 @@ class OffchainLedgerStore:
         reason: Optional[str],
         metadata: dict[str, Any],
     ) -> tuple[LedgerAccount, LedgerEntry]:
-        amount = parse_positive_atomic(amount_atomic)
+        amount = parse_nonnegative_atomic(amount_atomic)
 
         def mutate(state: LedgerState) -> tuple[LedgerAccount, LedgerEntry]:
             account, account_index = self._account_for_update(state, agent_id, create=True)

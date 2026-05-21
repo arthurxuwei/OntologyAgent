@@ -700,6 +700,55 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertNotEqual(alpha["transactions"][0]["counterparty"], "remark should not render")
         self.assertEqual(alpha["transactions"][0]["status"], "released")
 
+    def test_dashboard_transaction_exposes_pending_settlement_and_gas_metadata(self) -> None:
+        store = main.get_store()
+        store.bind_account_wallet(
+            agent_id="receiver",
+            agent_name="Receiver Agent",
+            email="receiver@example.com",
+            wallet_address="0x1111111111111111111111111111111111111111",
+            circle_wallet_id="circle-receiver",
+        )
+        store.credit(
+            agent_id="receiver",
+            amount_atomic="0",
+            reason="nanopayment pending",
+            metadata={
+                "dashboardStatus": "pending_settle",
+                "amountAtomic": "1000",
+                "counterpartyEmail": "payer@example.com",
+            },
+        )
+        store.credit(
+            agent_id="receiver",
+            amount_atomic="0",
+            reason="withdrawal submitted",
+            metadata={
+                "dashboardStatus": "withdraw_submitted",
+                "amountAtomic": "1000000",
+                "gasFeeAtomic": "3000",
+                "netAmountAtomic": "997000",
+                "destinationAddress": "0x2222222222222222222222222222222222222222",
+                "network": "Base",
+                "txHash": "0xsubmitted",
+            },
+        )
+
+        state = main.build_dashboard_data(
+            main.get_store().load().model_dump(),
+            owner_email="receiver@example.com",
+        )
+
+        data = state["agents"]["receiver"]
+        self.assertEqual(data["balance"]["pendingSettlement"], 0.001)
+        statuses = [tx["status"] for tx in data["transactions"]]
+        self.assertIn("pending_settle", statuses)
+        self.assertIn("withdraw_submitted", statuses)
+        submitted = next(tx for tx in data["transactions"] if tx["status"] == "withdraw_submitted")
+        self.assertEqual(submitted["gasFeeAtomic"], "3000")
+        self.assertEqual(submitted["netAmountAtomic"], "997000")
+        self.assertEqual(submitted["txHash"], "0xsubmitted")
+
     def test_dashboard_claimable_agents_come_from_unclaimed_email_accounts(self) -> None:
         store = main.get_store()
         store.bind_account_wallet(
