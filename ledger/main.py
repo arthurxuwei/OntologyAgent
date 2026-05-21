@@ -220,6 +220,7 @@ class LedgerAccount(BaseModel):
     email: Optional[str] = None
     walletAddress: Optional[str] = None
     circleWalletId: Optional[str] = None
+    accountType: Optional[str] = None
     asset: str = DEFAULT_ASSET
     availableAtomic: str = "0"
     lockedAtomic: str = "0"
@@ -439,6 +440,7 @@ class ClaimLinkResponse(BaseModel):
     agentUrl: str
     walletAddress: Optional[str] = None
     circleWalletId: Optional[str] = None
+    accountType: Optional[str] = None
 
 
 class GatewayDepositRequest(BaseModel):
@@ -556,6 +558,13 @@ def normalize_email(value: Optional[str]) -> Optional[str]:
         return None
     normalized = value.strip().lower()
     return normalized or None
+
+
+def normalize_wallet_account_type(value: Any) -> Optional[str]:
+    text = str(value or "").strip().upper()
+    if text in {"EOA", "SCA"}:
+        return text
+    return None
 
 
 def add_atomic(left: str, delta: int) -> str:
@@ -1029,6 +1038,13 @@ def build_claimable_agents(
         account_email = normalize_email(account.get("email"))
         if normalized_email and account_email != normalized_email:
             continue
+        account_type = normalize_wallet_account_type(account.get("accountType"))
+        has_circle_wallet = bool(
+            str(account.get("walletAddress") or "").strip()
+            or str(account.get("circleWalletId") or "").strip()
+        )
+        if has_circle_wallet and account_type != "EOA":
+            continue
         seen.add(agent_id)
         wallet_address = (
             account.get("walletAddress")
@@ -1045,6 +1061,7 @@ def build_claimable_agents(
                 "walletAddress": str(wallet_address),
                 "displayWalletAddress": short_address(wallet_address),
                 "circleWalletId": account.get("circleWalletId"),
+                "accountType": account_type,
                 "claimStatus": "unclaimed",
                 "dashboard": dashboard_agent,
             }
@@ -1658,6 +1675,7 @@ class OffchainLedgerStore:
         email: Optional[str] = None,
         wallet_address: Optional[str],
         circle_wallet_id: Optional[str],
+        account_type: Optional[str] = None,
     ) -> LedgerAccount:
         def mutate(state: LedgerState) -> LedgerAccount:
             account, account_index = self._account_for_update(
@@ -1672,6 +1690,8 @@ class OffchainLedgerStore:
                 updates["walletAddress"] = wallet_address
             if circle_wallet_id is not None:
                 updates["circleWalletId"] = circle_wallet_id
+            if account_type is not None:
+                updates["accountType"] = account_type
             updated = account.model_copy(update=updates)
             state.accounts[account_index] = updated
             return updated
@@ -2582,15 +2602,21 @@ async def get_or_create_agent_wallet(request: AgentWalletRequest) -> dict[str, A
 
     wallet_address = wallet.get("walletAddress")
     circle_wallet_id = wallet.get("circleWalletId")
+    account_type = normalize_wallet_account_type(wallet.get("accountType"))
     if isinstance(binding, dict):
         wallet_address = wallet_address or binding.get("walletAddress")
         circle_wallet_id = circle_wallet_id or binding.get("circleWalletId")
+        account_type = account_type or normalize_wallet_account_type(
+            binding.get("accountType")
+        )
     wallet_address = (
         wallet_address if isinstance(wallet_address, str) and wallet_address else None
     )
     circle_wallet_id = (
         circle_wallet_id if isinstance(circle_wallet_id, str) and circle_wallet_id else None
     )
+    if (wallet_address is not None or circle_wallet_id is not None) and account_type != "EOA":
+        raise ValueError("claim wallet must be an EOA Circle wallet")
     if wallet_address is not None or circle_wallet_id is not None:
         account = get_store().bind_account_wallet(
             agent_id=request.agentId,
@@ -2598,6 +2624,7 @@ async def get_or_create_agent_wallet(request: AgentWalletRequest) -> dict[str, A
             email=request.email,
             wallet_address=wallet_address,
             circle_wallet_id=circle_wallet_id,
+            account_type=account_type,
         )
     else:
         account = get_store().bind_account_wallet(
@@ -2606,6 +2633,7 @@ async def get_or_create_agent_wallet(request: AgentWalletRequest) -> dict[str, A
             email=request.email,
             wallet_address=None,
             circle_wallet_id=None,
+            account_type=account_type,
         )
     return {
         "wallet": wallet,
@@ -3228,6 +3256,9 @@ async def create_claim_link(request: ClaimLinkRequest) -> dict[str, Any]:
             if account.get("circleWalletId") or wallet.get("circleWalletId")
             else None
         ),
+        accountType=normalize_wallet_account_type(
+            account.get("accountType") or wallet.get("accountType")
+        ),
     )
     return response.model_dump()
 
@@ -3276,6 +3307,9 @@ async def ledger_state_with_circle_balances() -> dict[str, Any]:
         except Exception as error:
             account["circleBalanceError"] = str(error)
             continue
+        account_type = normalize_wallet_account_type(status.get("accountType"))
+        if account_type is not None:
+            account["accountType"] = account_type
         balances = status.get("balances")
         if isinstance(balances, dict):
             usdc_balance = balances.get(DEFAULT_ASSET)

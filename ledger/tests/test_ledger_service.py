@@ -706,6 +706,7 @@ class LedgerServiceTests(unittest.TestCase):
             email="owner@example.com",
             wallet_address="0x1111111111111111111111111111111111111111",
             circle_wallet_id="circle-alpha",
+            account_type="EOA",
         )
         store.bind_account_wallet(
             agent_id="agent_beta",
@@ -713,6 +714,7 @@ class LedgerServiceTests(unittest.TestCase):
             email="owner@example.com",
             wallet_address="0x2222222222222222222222222222222222222222",
             circle_wallet_id="circle-beta",
+            account_type="EOA",
         )
         store.bind_account_wallet(
             agent_id="agent_other",
@@ -720,6 +722,15 @@ class LedgerServiceTests(unittest.TestCase):
             email="other@example.com",
             wallet_address="0x3333333333333333333333333333333333333333",
             circle_wallet_id="circle-other",
+            account_type="EOA",
+        )
+        store.bind_account_wallet(
+            agent_id="agent_sca",
+            agent_name="SCA Research",
+            email="owner@example.com",
+            wallet_address="0x4444444444444444444444444444444444444444",
+            circle_wallet_id="circle-sca",
+            account_type="SCA",
         )
         store.credit(
             agent_id="agent_beta",
@@ -741,6 +752,7 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertEqual(candidate["agentId"], "agent_beta")
         self.assertEqual(candidate["agentName"], "Beta Research")
         self.assertEqual(candidate["ownerEmail"], "owner@example.com")
+        self.assertEqual(candidate["accountType"], "EOA")
         self.assertEqual(candidate["claimStatus"], "unclaimed")
         self.assertTrue(candidate["claimCode"].startswith("clm_"))
         self.assertNotEqual(candidate["claimCode"], "agent_beta")
@@ -752,6 +764,7 @@ class LedgerServiceTests(unittest.TestCase):
                 return {
                     "circleWalletId": "circle-wallet-1",
                     "walletAddress": "0x1111111111111111111111111111111111111111",
+                    "accountType": "EOA",
                     "mode": "circle",
                     "binding": {
                         "agentName": request.agentName,
@@ -761,6 +774,7 @@ class LedgerServiceTests(unittest.TestCase):
                         "circleWalletSetId": "circle-wallet-set",
                         "blockchain": "BASE-SEPOLIA",
                         "mode": "circle",
+                        "accountType": "EOA",
                         "updatedAt": main.now_iso(),
                     },
                 }
@@ -794,6 +808,7 @@ class LedgerServiceTests(unittest.TestCase):
         )
         self.assertEqual(payload["walletAddress"], "0x1111111111111111111111111111111111111111")
         self.assertEqual(payload["circleWalletId"], "circle-wallet-1")
+        self.assertEqual(payload["accountType"], "EOA")
 
     def test_claim_link_endpoint_persists_claimable_account_without_wallet_ids(self) -> None:
         class FakeWalletClient:
@@ -836,6 +851,41 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertEqual(len(claimable["agents"]), 1)
         self.assertEqual(claimable["agents"][0]["agentId"], "312586087945994240")
 
+    def test_claim_link_endpoint_rejects_non_eoa_wallets(self) -> None:
+        class FakeWalletClient:
+            async def get_or_create(self, request):
+                return {
+                    "circleWalletId": "circle-wallet-sca",
+                    "walletAddress": "0x1111111111111111111111111111111111111111",
+                    "accountType": "SCA",
+                    "mode": "circle",
+                    "binding": {
+                        "agentName": request.agentName,
+                        "agentId": request.agentId,
+                        "walletAddress": "0x1111111111111111111111111111111111111111",
+                        "circleWalletId": "circle-wallet-sca",
+                        "circleWalletSetId": "circle-wallet-set",
+                        "blockchain": "BASE-SEPOLIA",
+                        "mode": "circle",
+                        "accountType": "SCA",
+                        "updatedAt": main.now_iso(),
+                    },
+                }
+
+        with patch.object(main, "get_ledger_wallet_client", return_value=FakeWalletClient()):
+            response = self.client.post(
+                "/ledger/claims/link",
+                json={
+                    "agentId": "312586087945994240",
+                    "agentName": "OpenClaw OntologyAgent",
+                    "email": "owner@example.com",
+                },
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["detail"], "claim wallet must be an EOA Circle wallet")
+        self.assertEqual(self.client.get("/ledger/state").json()["accounts"], [])
+
     def test_claim_link_endpoint_requires_profile_identity(self) -> None:
         response = self.client.post(
             "/ledger/claims/link",
@@ -869,6 +919,7 @@ class LedgerServiceTests(unittest.TestCase):
             email="agent-bound@example.com",
             wallet_address="0x4444444444444444444444444444444444444444",
             circle_wallet_id="circle-eigenflux",
+            account_type="EOA",
         )
 
         response = self.client.get("/dashboard/claimable-agents")
@@ -880,6 +931,7 @@ class LedgerServiceTests(unittest.TestCase):
         candidate = payload["agents"][0]
         self.assertEqual(candidate["agentId"], "agent_eigenflux")
         self.assertEqual(candidate["ownerEmail"], "agent-bound@example.com")
+        self.assertEqual(candidate["accountType"], "EOA")
         self.assertTrue(candidate["claimCode"].startswith("clm_"))
 
     def test_management_page_helpers_render_and_call_ledger_api(self) -> None:
@@ -1024,6 +1076,7 @@ class LedgerServiceTests(unittest.TestCase):
                 return {
                     "circleWalletId": "circle-wallet-1",
                     "walletAddress": "0x1111111111111111111111111111111111111111",
+                    "accountType": "EOA",
                     "mode": "circle",
                     "binding": {
                         "agentName": request.agentName,
@@ -1034,6 +1087,7 @@ class LedgerServiceTests(unittest.TestCase):
                         "circleWalletSetId": "circle-wallet-set",
                         "blockchain": "BASE-SEPOLIA",
                         "mode": "circle",
+                        "accountType": "EOA",
                         "updatedAt": main.now_iso(),
                     },
                 }
@@ -1056,6 +1110,7 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertEqual(payload["account"]["agentId"], "agent_research")
         self.assertEqual(payload["account"]["agentName"], "Research Agent")
         self.assertEqual(payload["account"]["email"], "agent@example.com")
+        self.assertEqual(payload["account"]["accountType"], "EOA")
         self.assertEqual(payload["account"]["availableAtomic"], "0")
         self.assertEqual(payload["account"]["lockedAtomic"], "0")
 
@@ -1069,6 +1124,7 @@ class LedgerServiceTests(unittest.TestCase):
             "0x1111111111111111111111111111111111111111",
         )
         self.assertEqual(state["accounts"][0]["circleWalletId"], "circle-wallet-1")
+        self.assertEqual(state["accounts"][0]["accountType"], "EOA")
         self.assertEqual(state["entries"], [])
 
     def test_gateway_deposit_proxies_to_wallet_rest_client(self) -> None:
@@ -1707,12 +1763,47 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertEqual(response.json()["detail"], "circle wallet binding agentId mismatch")
         self.assertEqual(self.client.get("/ledger/state").json()["accounts"], [])
 
+    def test_wallet_get_or_create_rejects_non_eoa_circle_wallets(self) -> None:
+        class FakeWalletClient:
+            async def get_or_create(self, request):
+                return {
+                    "circleWalletId": "circle-wallet-sca",
+                    "walletAddress": "0x1111111111111111111111111111111111111111",
+                    "accountType": "SCA",
+                    "mode": "circle",
+                    "binding": {
+                        "agentName": request.agentName,
+                        "agentId": request.agentId,
+                        "walletAddress": "0x1111111111111111111111111111111111111111",
+                        "circleWalletId": "circle-wallet-sca",
+                        "circleWalletSetId": "circle-wallet-set",
+                        "blockchain": "BASE-SEPOLIA",
+                        "mode": "circle",
+                        "accountType": "SCA",
+                        "updatedAt": main.now_iso(),
+                    },
+                }
+
+        with patch.object(main, "get_ledger_wallet_client", return_value=FakeWalletClient()):
+            response = self.client.post(
+                "/ledger/wallets/get-or-create",
+                json={
+                    "agentName": "Research Agent",
+                    "agentId": "agent_research",
+                },
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["detail"], "claim wallet must be an EOA Circle wallet")
+        self.assertEqual(self.client.get("/ledger/state").json()["accounts"], [])
+
     def test_wallet_get_or_create_rest_route_creates_ledger_account(self) -> None:
         class FakeWalletClient:
             async def get_or_create(self, request):
                 return {
                     "circleWalletId": "circle-wallet-1",
                     "walletAddress": "0x1111111111111111111111111111111111111111",
+                    "accountType": "EOA",
                     "mode": "circle",
                     "binding": {
                         "agentName": request.agentName,
@@ -1722,6 +1813,7 @@ class LedgerServiceTests(unittest.TestCase):
                         "circleWalletSetId": "circle-wallet-set",
                         "blockchain": "BASE-SEPOLIA",
                         "mode": "circle",
+                        "accountType": "EOA",
                         "updatedAt": main.now_iso(),
                     },
                 }
