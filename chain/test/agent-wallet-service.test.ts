@@ -172,6 +172,53 @@ test("AgentWalletService stores agent identity binding when reusing an existing 
   );
 });
 
+test("AgentWalletService treats null optional wallet fields as absent", async () => {
+  await withTempStateFile(
+    {
+      wallets: [],
+      agentWalletBindings: [],
+    },
+    async (statePath) => {
+      const config = loadConfig({
+        CHAIN_MOCK: "true",
+        AGENT_WALLET_STATE_PATH: statePath,
+      });
+      let createCalls = 0;
+      const circleWalletService = {
+        createWallet: async () => {
+          createCalls += 1;
+          return {
+            circleWalletId: "new-wallet",
+            circleWalletSetId: "new-wallet-set",
+            blockchain: "BASE-SEPOLIA" as const,
+            walletAddress: "0x2222222222222222222222222222222222222222",
+            mode: "mock" as const,
+          };
+        },
+      } as unknown as CircleWalletService;
+      const service = new AgentWalletService(
+        config,
+        fakeX402FetchService(baseX402Result()),
+        circleWalletService,
+      );
+
+      const result = await service.getOrCreate({
+        agentName: "Debug Agent",
+        agentId: "debug-agent",
+        email: "debug@example.com",
+        walletAddress: null,
+        circleWalletId: null,
+        agentDescription: null,
+      } as any);
+
+      assert.equal(createCalls, 1);
+      assert.equal(result.reused, false);
+      assert.equal(result.circleWalletId, "new-wallet");
+      assert.equal(result.binding?.agentId, "debug-agent");
+    },
+  );
+});
+
 test("AgentWalletService allows multiple agent bindings to share one wallet address", async () => {
   await withTempStateFile(
     {

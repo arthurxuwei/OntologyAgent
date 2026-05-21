@@ -815,8 +815,8 @@ export class AgentWalletService {
   }
 }
 
-function hasNonEmptyValue(value: string | undefined): value is string {
-  return value !== undefined && value.trim().length > 0;
+function hasNonEmptyValue(value: string | null | undefined): value is string {
+  return typeof value === "string" && value.trim().length > 0;
 }
 
 function normalizeAgentName(agentName: string): string {
