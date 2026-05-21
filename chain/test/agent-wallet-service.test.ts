@@ -1413,6 +1413,10 @@ test("AgentWalletService withdraws USDC from Circle wallet without Gateway balan
       assert.equal(result.amount, "5");
       assert.equal(result.amountEth, null);
       assert.equal(result.amountAtomic, "5000000");
+      assert.equal(result.estimatedGasFeeAtomic, "3000");
+      assert.equal(result.estimatedGasFee, "0.003");
+      assert.equal(result.netAmountAtomic, "4997000");
+      assert.equal(result.netAmount, "4.997");
       assert.equal(result.tokenId, "circle-usdc-token");
       assert.equal(result.transactionId, "circle-withdrawal-1");
       assert.equal(result.transactionHash, "0xwithdrawal");

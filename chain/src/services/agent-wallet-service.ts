@@ -399,6 +399,10 @@ export class AgentWalletService {
 
     const amount = atomicUsdcToDecimal(command.amountAtomic);
     const amountAtomic = parsePositiveBigInt(command.amountAtomic ?? "", "amountAtomic");
+    const estimatedGasFeeAtomic = 3000n;
+    const netAmountAtomic = amountAtomic > estimatedGasFeeAtomic
+      ? amountAtomic - estimatedGasFeeAtomic
+      : 0n;
     const tokenAddress = normalizeRequestAddress(
       this.config.x402.usdcAssetAddress,
       "X402_USDC_ASSET_ADDRESS",
@@ -425,6 +429,10 @@ export class AgentWalletService {
       amount,
       amountEth: null,
       amountAtomic: amountAtomic.toString(),
+      estimatedGasFeeAtomic: estimatedGasFeeAtomic.toString(),
+      estimatedGasFee: atomicUsdcToDecimal(estimatedGasFeeAtomic.toString()),
+      netAmountAtomic: netAmountAtomic.toString(),
+      netAmount: atomicUsdcToDecimal(netAmountAtomic.toString()),
       tokenId,
       tokenAddress,
       blockchain: "BASE-SEPOLIA",

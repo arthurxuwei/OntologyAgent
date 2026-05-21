@@ -6216,7 +6216,16 @@ window.MockStateToggle = MockStateToggle;
     const canConfirm  = destValid && amountValid && stage === 'idle';
     const belowMin    = !Number.isNaN(amountNum) && amountNum > 0 && amountNum < MIN_WITHDRAW;
     const overBalance = !Number.isNaN(amountNum) && amountNum > localBalance;
-    const pendingDeposits = localTxs.filter((tx) => tx.status === 'pending_inbound_chain');
+    const creditedLinkedEntryIds = new Set(
+      localTxs
+        .filter((tx) => tx.status === 'credited')
+        .map((tx) => tx.linkedEntryId || (tx.metadata && tx.metadata.linkedEntryId))
+        .filter(Boolean)
+    );
+    const pendingDeposits = localTxs.filter((tx) => {
+      if (tx.status !== 'pending_inbound_chain') return false;
+      return !creditedLinkedEntryIds.has(tx.id);
+    });
 
     const usdcToAtomic = (value) => {
       const raw = String(value || '').trim();

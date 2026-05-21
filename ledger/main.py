@@ -806,10 +806,17 @@ def dashboard_transaction(
         status = "withdraw_submitted"
     elif entry_type == "withdrawal":
         status = "withdrawn"
+    withdrawal_lifecycle = status in {"withdraw_submitted", "withdrawn"} or (
+        entry_type == "withdrawal_submitted" and status == "failed"
+    )
+    if withdrawal_lifecycle:
+        direction = "out"
+    if entry_type == "credit" and status == "credited":
+        direction = "in"
     role = "payer" if direction == "out" else "payee"
-    if entry_type == "withdrawal":
+    if withdrawal_lifecycle:
         role = "withdrawal"
-    elif status == "onramp":
+    elif status in {"onramp", "credited"} and entry_type == "credit":
         role = "deposit"
     elif status == "refunded":
         role = "refund"
@@ -3813,6 +3820,7 @@ async def withdraw_agent_wallet(request: WithdrawalRequest) -> dict[str, Any]:
                     "linkedEntryId": submitted_entry.entryId,
                     "failureReason": error.record.error,
                     "destinationAddress": destination_address,
+                    "counterparty": f"External · {short_address(destination_address)}",
                     "network": "Base",
                 },
             )

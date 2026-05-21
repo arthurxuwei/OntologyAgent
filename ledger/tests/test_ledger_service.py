@@ -614,7 +614,9 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertIn("PENDING TOP-UP", html)
         self.assertIn("Base confirming", html)
         self.assertIn("Crediting Gateway Wallet", html)
-        self.assertIn("localTxs.filter((tx) => tx.status === 'pending_inbound_chain')", html)
+        self.assertIn("const creditedLinkedEntryIds = new Set(", html)
+        self.assertIn("tx.linkedEntryId || (tx.metadata && tx.metadata.linkedEntryId)", html)
+        self.assertIn("return !creditedLinkedEntryIds.has(tx.id);", html)
         self.assertIn("overflowWrap: 'anywhere'", html)
         self.assertLess(
             html.index("{pendingDeposits.length > 0 && ("),
@@ -795,9 +797,81 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertIn("pending_settle", statuses)
         self.assertIn("withdraw_submitted", statuses)
         submitted = next(tx for tx in data["transactions"] if tx["status"] == "withdraw_submitted")
+        self.assertEqual(submitted["direction"], "out")
+        self.assertEqual(submitted["role"], "withdrawal")
+        self.assertEqual(submitted["amountAtomic"], "1000000")
         self.assertEqual(submitted["gasFeeAtomic"], "3000")
         self.assertEqual(submitted["netAmountAtomic"], "997000")
         self.assertEqual(submitted["txHash"], "0xsubmitted")
+
+    def test_dashboard_withdrawal_lifecycle_rows_are_outgoing_withdrawals(self) -> None:
+        submitted = main.dashboard_transaction(
+            {
+                "entryId": "entry_withdrawal_submitted",
+                "entryType": "withdrawal_submitted",
+                "agentId": "receiver",
+                "availableDeltaAtomic": "0",
+                "lockedDeltaAtomic": "0",
+                "reason": "withdrawal submitted",
+                "metadata": {
+                    "dashboardStatus": "withdraw_submitted",
+                    "amountAtomic": "1250000",
+                    "counterparty": "External · 0x222222...222222",
+                    "destinationAddress": "0x2222222222222222222222222222222222222222",
+                },
+                "createdAt": main.now_iso(),
+            },
+            {},
+        )
+        failed = main.dashboard_transaction(
+            {
+                "entryId": "entry_withdrawal_failed",
+                "entryType": "withdrawal_submitted",
+                "agentId": "receiver",
+                "availableDeltaAtomic": "0",
+                "lockedDeltaAtomic": "0",
+                "reason": "Circle withdrawal failed",
+                "metadata": {
+                    "dashboardStatus": "failed",
+                    "amountAtomic": "1250000",
+                    "counterparty": "External · 0x222222...222222",
+                    "destinationAddress": "0x2222222222222222222222222222222222222222",
+                    "failureReason": "Circle withdrawal failed",
+                },
+                "createdAt": main.now_iso(),
+            },
+            {},
+        )
+
+        for tx in (submitted, failed):
+            self.assertEqual(tx["direction"], "out")
+            self.assertEqual(tx["role"], "withdrawal")
+            self.assertEqual(tx["amountAtomic"], "1250000")
+            self.assertEqual(tx["counterparty"], "External · 0x222222...222222")
+
+    def test_dashboard_credited_gateway_rows_are_deposits(self) -> None:
+        tx = main.dashboard_transaction(
+            {
+                "entryId": "entry_gateway_credit",
+                "entryType": "credit",
+                "agentId": "receiver",
+                "availableDeltaAtomic": "2500000",
+                "lockedDeltaAtomic": "0",
+                "reason": "Gateway Wallet credited",
+                "metadata": {
+                    "dashboardStatus": "credited",
+                    "amountAtomic": "2500000",
+                    "counterparty": "External wallet",
+                },
+                "createdAt": main.now_iso(),
+            },
+            {},
+        )
+
+        self.assertEqual(tx["direction"], "in")
+        self.assertEqual(tx["role"], "deposit")
+        self.assertEqual(tx["status"], "credited")
+        self.assertEqual(tx["amountAtomic"], "2500000")
 
     def test_dashboard_withdrawal_status_ignores_blank_or_non_string_dashboard_status(self) -> None:
         for dashboard_status in ("", "   ", None, False):
@@ -2862,6 +2936,10 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertEqual(
             failed_entry.metadata["destinationAddress"],
             main.normalize_evm_address("0x2222222222222222222222222222222222222222"),
+        )
+        self.assertEqual(
+            failed_entry.metadata["counterparty"],
+            "External · 0x22222222...222222",
         )
 
     def test_agent_transfer_requires_real_circle_settlement_enabled(self) -> None:

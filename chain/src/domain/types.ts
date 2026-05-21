@@ -330,6 +330,10 @@ export type AgentWalletTransferResult = {
   amount: string;
   amountEth: string | null;
   amountAtomic: string | null;
+  estimatedGasFeeAtomic?: string;
+  estimatedGasFee?: string;
+  netAmountAtomic?: string;
+  netAmount?: string;
   tokenId: string | null;
   tokenAddress: string;
   blockchain: "BASE-SEPOLIA";
