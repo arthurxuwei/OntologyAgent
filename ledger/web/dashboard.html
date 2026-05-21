@@ -536,6 +536,14 @@ function TransactionRow({
     : netAmountAtomic !== undefined
       ? window.formatAmount(atomicToUsdc(netAmountAtomic))
       : null;
+  const withdrawalLike =
+    role === 'withdrawal' ||
+    status === 'withdraw_submitted' ||
+    status === 'withdrawn' ||
+    Boolean(gasDisplay || netDisplay);
+  const shortTxHash = txHash && txHash.length > 14
+    ? `${txHash.slice(0, 6)}…${txHash.slice(-4)}`
+    : txHash;
 
   return (
     <div
@@ -657,7 +665,7 @@ function TransactionRow({
             ✓ verified
           </span>
         )}
-        {role === 'withdrawal' && (gasDisplay || netDisplay) && (
+        {withdrawalLike && (gasDisplay || netDisplay) && (
           <span className="font-mono text-[11px]" style={{ color: 'var(--ink-tertiary)' }}>
             {gasDisplay ? `Gas ~$${gasDisplay}` : ''}
             {gasDisplay && netDisplay ? ' · ' : ''}
@@ -666,8 +674,12 @@ function TransactionRow({
           </span>
         )}
         {txHash && (
-          <span className="font-mono text-[11px]" style={{ color: 'var(--ink-tertiary)' }}>
-            {txHash}
+          <span
+            className="font-mono text-[11px]"
+            style={{ color: 'var(--ink-tertiary)', whiteSpace: 'nowrap' }}
+            title={txHash}
+          >
+            {shortTxHash}
           </span>
         )}
       </div>
