@@ -347,11 +347,31 @@ function useTween(target, duration = 400) {
 // USDC's native 6-decimal precision instead of being rounded to "0.00".
 const fmt = (n) => window.formatAmount(n);
 
+function PendingBalanceLine({ amount = 0, label = 'Settling', size = 'lg' }) {
+  if (!amount || amount <= 0) return null;
+  return (
+    <div
+      className="font-mono"
+      style={{
+        marginTop: size === 'sm' ? '8px' : '12px',
+        fontSize: size === 'sm' ? '11px' : '13px',
+        color: 'var(--accent-amber)',
+        letterSpacing: '0.04em',
+      }}
+    >
+      +${window.formatAmount(amount)} {label}
+    </div>
+  );
+}
+
+window.PendingBalanceLine = PendingBalanceLine;
+
 function AgentCard({
   agentName,
   agentRole,
   balance = 0,
   escrowed = 0,
+  pendingSettlement = 0,
   status = 'unclaimed',
   walletAddress,
   ownerEmail,
@@ -434,6 +454,11 @@ function AgentCard({
         </span>
         <span className="font-mono text-sm" style={{ color: 'var(--ink-secondary)' }}>USDC</span>
       </div>
+      <window.PendingBalanceLine
+        amount={pendingSettlement}
+        label="Settling"
+        size={isMini ? 'sm' : 'lg'}
+      />
 
       {escrowed > 0 && (
         <div className="font-mono mt-2" style={{ fontSize: '12px', letterSpacing: '0.04em', color: 'var(--accent-amber)' }}>
@@ -4291,6 +4316,7 @@ window.MockStateToggle = MockStateToggle;
                 key={id}
                 id={id}
                 data={effectiveRoster[id]}
+                pendingSettlement={effectiveRoster[id].balance?.pendingSettlement || 0}
                 onSelect={() => onSelectAgent(id)}
                 t={t}
               />
@@ -4301,7 +4327,7 @@ window.MockStateToggle = MockStateToggle;
     );
   }
 
-  function AgentCard({ id, data, onSelect, t }) {
+  function AgentCard({ id, data, pendingSettlement = 0, onSelect, t }) {
     if (!data) return null;
     const { agent, balance, transactions } = data;
     const txCount = transactions ? transactions.length : 0;
@@ -4347,6 +4373,11 @@ window.MockStateToggle = MockStateToggle;
             USDC
           </span>
         </div>
+        <window.PendingBalanceLine
+          amount={pendingSettlement}
+          label="Settling"
+          size="sm"
+        />
         <div
           className="font-mono"
           style={{
@@ -4402,6 +4433,10 @@ window.MockStateToggle = MockStateToggle;
           ${window.formatAmount(balance.available)}
           <span style={{ fontSize: '18px', color: 'var(--ink-tertiary)', marginLeft: '12px', letterSpacing: '0.04em' }}>USDC</span>
         </div>
+        <window.PendingBalanceLine
+          amount={balance.pendingSettlement || 0}
+          label="Settling"
+        />
 
         {/* KPI row — 2-up (escrow dropped: MVP has no lock state) */}
         <div
@@ -6176,6 +6211,7 @@ window.MockStateToggle = MockStateToggle;
     const canConfirm  = destValid && amountValid && stage === 'idle';
     const belowMin    = !Number.isNaN(amountNum) && amountNum > 0 && amountNum < MIN_WITHDRAW;
     const overBalance = !Number.isNaN(amountNum) && amountNum > localBalance;
+    const pendingDeposits = localTxs.filter((tx) => tx.status === 'pending_inbound_chain');
 
     const usdcToAtomic = (value) => {
       const raw = String(value || '').trim();
@@ -6273,6 +6309,14 @@ window.MockStateToggle = MockStateToggle;
           <span style={{ fontSize: '16px', color: 'var(--ink-tertiary)', marginLeft: '12px', letterSpacing: '0.04em' }}>USDC</span>
         </div>
 
+        {pendingDeposits.length > 0 && (
+          <Section title="PENDING TOP-UP">
+            {pendingDeposits.map((tx) => (
+              <PendingDepositCard key={tx.id} tx={tx} t={t} />
+            ))}
+          </Section>
+        )}
+
         {/* ADD FUNDS section */}
         <Section
           title={t('mvp.dash.funding.add_label')}
@@ -6282,7 +6326,7 @@ window.MockStateToggle = MockStateToggle;
             <div className="grid" style={{ gridTemplateColumns: '1fr auto', gap: '28px', alignItems: 'start' }}>
               <div>
                 <div className="smallcaps-mono" style={{ color: 'var(--ink-tertiary)', marginBottom: '8px' }}>
-                  {t('mvp.dash.funding.receive_eyebrow')}
+                  {t('mvp.dash.funding.receive_eyebrow')} · Gateway Wallet
                 </div>
                 <div
                   className="font-mono"
@@ -6335,6 +6379,10 @@ window.MockStateToggle = MockStateToggle;
               <QrPanel address={receiveAddress} t={t} />
             </div>
           </Card>
+
+          <div className="font-body" style={{ marginTop: '14px', fontSize: '12px', color: 'var(--ink-secondary)', lineHeight: 1.55 }}>
+            Deposits may take a few minutes while Base confirms and Chief credits the Gateway Wallet.
+          </div>
 
           <div
             className="font-body"
@@ -6515,6 +6563,24 @@ window.MockStateToggle = MockStateToggle;
           onClose={() => setAddAddressOpen(false)}
         />
       </div>
+    );
+  }
+
+  function PendingDepositCard({ tx, t }) {
+    return (
+      <Card>
+        <div className="smallcaps-mono" style={{ color: 'var(--accent-amber)', marginBottom: '10px' }}>
+          PENDING TOP-UP
+        </div>
+        <div className="font-body" style={{ color: 'var(--ink-primary)', fontSize: '13px', marginBottom: '12px' }}>
+          +${window.formatAmount(tx.amount)} USDC · {tx.counterparty}
+        </div>
+        <ol className="font-body" style={{ margin: 0, paddingLeft: '18px', color: 'var(--ink-secondary)', fontSize: '12px', lineHeight: 1.8 }}>
+          <li>Exchange withdrawn</li>
+          <li>Base confirming</li>
+          <li>Crediting Gateway Wallet</li>
+        </ol>
+      </Card>
     );
   }
 
