@@ -1825,7 +1825,7 @@ class OffchainLedgerStore:
         reason: Optional[str],
         metadata: dict[str, Any],
     ) -> tuple[LedgerAccount, LedgerEntry]:
-        amount = parse_nonnegative_atomic(amount_atomic)
+        amount = parse_positive_atomic(amount_atomic)
 
         def mutate(state: LedgerState) -> tuple[LedgerAccount, LedgerEntry]:
             account, account_index = self._account_for_update(state, agent_id, create=True)
@@ -1841,6 +1841,36 @@ class OffchainLedgerStore:
                 entry_type="credit",
                 agent_id=agent_id,
                 available_delta=amount,
+                reason=reason,
+                metadata=metadata,
+            )
+            state.entries.append(entry)
+            return updated, entry
+
+        return self._mutate(mutate)
+
+    def record_dashboard_event(
+        self,
+        *,
+        entry_type: Literal[
+            "pending_settlement",
+            "pending_inbound",
+            "withdrawal_submitted",
+        ],
+        agent_id: str,
+        reason: Optional[str],
+        metadata: dict[str, Any],
+        escrow_id: Optional[str] = None,
+    ) -> tuple[LedgerAccount, LedgerEntry]:
+        def mutate(state: LedgerState) -> tuple[LedgerAccount, LedgerEntry]:
+            account, account_index = self._account_for_update(state, agent_id, create=True)
+            current = now_iso()
+            updated = account.model_copy(update={"updatedAt": current})
+            state.accounts[account_index] = updated
+            entry = self._entry(
+                entry_type=entry_type,
+                agent_id=agent_id,
+                escrow_id=escrow_id,
                 reason=reason,
                 metadata=metadata,
             )
@@ -2387,6 +2417,9 @@ class OffchainLedgerStore:
             "escrow_release",
             "escrow_refund",
             "agent_transfer",
+            "pending_settlement",
+            "pending_inbound",
+            "withdrawal_submitted",
         ],
         agent_id: str,
         available_delta: int = 0,

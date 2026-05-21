@@ -709,9 +709,9 @@ class LedgerServiceTests(unittest.TestCase):
             wallet_address="0x1111111111111111111111111111111111111111",
             circle_wallet_id="circle-receiver",
         )
-        store.credit(
+        store.record_dashboard_event(
+            entry_type="pending_settlement",
             agent_id="receiver",
-            amount_atomic="0",
             reason="nanopayment pending",
             metadata={
                 "dashboardStatus": "pending_settle",
@@ -719,9 +719,9 @@ class LedgerServiceTests(unittest.TestCase):
                 "counterpartyEmail": "payer@example.com",
             },
         )
-        store.credit(
+        store.record_dashboard_event(
+            entry_type="withdrawal_submitted",
             agent_id="receiver",
-            amount_atomic="0",
             reason="withdrawal submitted",
             metadata={
                 "dashboardStatus": "withdraw_submitted",
@@ -2681,6 +2681,18 @@ class LedgerServiceTests(unittest.TestCase):
         response = self.client.post(
             "/ledger/accounts/agent_buyer/credit",
             json={"amountAtomic": "1.5", "reason": "bad funding"},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.json()["detail"],
+            "amountAtomic must be a positive integer string",
+        )
+
+    def test_credit_rejects_zero_amount(self) -> None:
+        response = self.client.post(
+            "/ledger/accounts/agent_buyer/credit",
+            json={"amountAtomic": "0", "reason": "bad funding"},
         )
 
         self.assertEqual(response.status_code, 400)
