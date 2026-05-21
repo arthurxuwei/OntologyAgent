@@ -207,6 +207,7 @@ export class CircleWalletService {
         idempotencyKey: randomUUID(),
         walletSetId,
         entitySecretCiphertext,
+        accountType: "SCA",
         blockchains: ["BASE-SEPOLIA"],
         count: 1,
         metadata: [

@@ -1420,6 +1420,7 @@ test("CircleWalletService returns normalized successful Circle wallet shape", as
 
   assert.equal(requestBody?.walletSetId, "circle-wallet-set");
   assert.equal(requestBody?.entitySecretCiphertext, "ciphertext-for-entity-secret");
+  assert.equal(requestBody?.accountType, "SCA");
   assert.deepEqual(requestBody?.blockchains, ["BASE-SEPOLIA"]);
   assert.deepEqual(requestBody?.metadata, [
     {
