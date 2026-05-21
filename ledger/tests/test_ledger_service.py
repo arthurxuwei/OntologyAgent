@@ -593,6 +593,12 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertIn("PENDING TOP-UP", html)
         self.assertIn("Base confirming", html)
         self.assertIn("Crediting Gateway Wallet", html)
+        self.assertIn("localTxs.filter((tx) => tx.status === 'pending_inbound_chain')", html)
+        self.assertIn("overflowWrap: 'anywhere'", html)
+        self.assertLess(
+            html.index("{pendingDeposits.length > 0 && ("),
+            html.index("title={t('mvp.dash.funding.add_label')}"),
+        )
         self.assertNotIn("WITHDRAWING", html)
         self.assertNotIn("提现中", html)
         self.assertNotIn("DEMO CODE · paste any to try the flow", html)
