@@ -760,6 +760,19 @@ def dashboard_counterparty(
     return reason or "Ledger"
 
 
+def dashboard_base_amount_atomic(
+    entry: dict[str, Any],
+    escrow_by_id: dict[str, dict[str, Any]],
+) -> Decimal:
+    escrow = escrow_by_id.get(str(entry.get("escrowId") or ""))
+    if escrow:
+        return atomic_decimal(escrow.get("amountAtomic"))
+    return max(
+        abs(atomic_decimal(entry.get("availableDeltaAtomic"))),
+        abs(atomic_decimal(entry.get("lockedDeltaAtomic"))),
+    )
+
+
 def dashboard_transaction(
     entry: dict[str, Any],
     escrow_by_id: dict[str, dict[str, Any]],
@@ -770,11 +783,7 @@ def dashboard_transaction(
     metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
     dashboard_status = metadata.get("dashboardStatus")
     escrow = escrow_by_id.get(str(entry.get("escrowId") or ""))
-    base_amount_atomic = (
-        atomic_decimal(escrow.get("amountAtomic"))
-        if escrow
-        else max(abs(available_delta), abs(locked_delta))
-    )
+    base_amount_atomic = dashboard_base_amount_atomic(entry, escrow_by_id)
     amount_atomic = parse_dashboard_amount_atomic(entry, base_amount_atomic)
     agent_id = entry.get("agentId")
     direction = "out" if available_delta < 0 or locked_delta > 0 else "in"
@@ -796,7 +805,7 @@ def dashboard_transaction(
     elif entry_type == "withdrawal_submitted":
         status = "withdraw_submitted"
     elif entry_type == "withdrawal":
-        status = metadata.get("dashboardStatus", "withdrawn")
+        status = "withdrawn"
     role = "payer" if direction == "out" else "payee"
     if entry_type == "withdrawal":
         role = "withdrawal"
@@ -913,10 +922,7 @@ def build_dashboard_data(
         pending_settlement_atomic = sum(
             parse_dashboard_amount_atomic(
                 entry,
-                max(
-                    abs(atomic_decimal(entry.get("availableDeltaAtomic"))),
-                    abs(atomic_decimal(entry.get("lockedDeltaAtomic"))),
-                ),
+                dashboard_base_amount_atomic(entry, escrow_by_id),
             )
             for entry in agent_entries
             if dashboard_transaction(entry, escrow_by_id)["status"] == "pending_settle"

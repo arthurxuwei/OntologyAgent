@@ -749,6 +749,66 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertEqual(submitted["netAmountAtomic"], "997000")
         self.assertEqual(submitted["txHash"], "0xsubmitted")
 
+    def test_dashboard_withdrawal_status_ignores_blank_or_non_string_dashboard_status(self) -> None:
+        for dashboard_status in ("", "   ", None, False):
+            with self.subTest(dashboard_status=dashboard_status):
+                tx = main.dashboard_transaction(
+                    {
+                        "entryId": "entry_withdrawal",
+                        "entryType": "withdrawal",
+                        "agentId": "receiver",
+                        "availableDeltaAtomic": "-1000000",
+                        "metadata": {"dashboardStatus": dashboard_status},
+                        "createdAt": main.now_iso(),
+                    },
+                    {},
+                )
+
+                self.assertEqual(tx["status"], "withdrawn")
+
+    def test_dashboard_pending_settlement_balance_uses_escrow_amount_fallback(self) -> None:
+        state = main.build_dashboard_data(
+            {
+                "accounts": [
+                    {
+                        "agentId": "receiver",
+                        "agentName": "Receiver Agent",
+                        "email": "receiver@example.com",
+                        "walletAddress": "0x1111111111111111111111111111111111111111",
+                        "availableAtomic": "0",
+                        "lockedAtomic": "0",
+                    }
+                ],
+                "entries": [
+                    {
+                        "entryId": "entry_pending",
+                        "entryType": "pending_settlement",
+                        "agentId": "receiver",
+                        "availableDeltaAtomic": "0",
+                        "lockedDeltaAtomic": "0",
+                        "escrowId": "escrow_pending",
+                        "metadata": {},
+                        "createdAt": main.now_iso(),
+                    }
+                ],
+                "escrows": [
+                    {
+                        "escrowId": "escrow_pending",
+                        "buyerAgentId": "payer",
+                        "sellerAgentId": "receiver",
+                        "amountAtomic": "500000",
+                        "description": "pending task",
+                    }
+                ],
+            },
+            owner_email="receiver@example.com",
+        )
+
+        data = state["agents"]["receiver"]
+        self.assertEqual(data["transactions"][0]["amountAtomic"], "500000")
+        self.assertEqual(data["balance"]["pendingSettlement"], 0.5)
+        self.assertEqual(data["balance"]["pendingSettlementAtomic"], "500000")
+
     def test_dashboard_claimable_agents_come_from_unclaimed_email_accounts(self) -> None:
         store = main.get_store()
         store.bind_account_wallet(
