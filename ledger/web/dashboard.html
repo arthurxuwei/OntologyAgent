@@ -527,7 +527,7 @@ function TransactionRow({
     onramp:            { label: 'ONRAMP',            color: 'var(--ink-secondary)',   bg: 'transparent' },
     pending_settle:       { label: 'SETTLING',         color: 'var(--accent-amber)',    bg: 'transparent' },
     pending_inbound_chain:{ label: 'CREDITING',        color: 'var(--accent-amber)',    bg: 'transparent' },
-    withdraw_submitted:   { label: 'SUBMITTED',        color: 'var(--ink-secondary)',   bg: 'transparent' },
+    withdraw_submitted:   { label: 'Submitted',        color: 'var(--ink-secondary)',   bg: 'transparent' },
     credited:             { label: 'CREDITED',         color: 'var(--status-positive)', bg: 'transparent' },
     withdrawn:            { label: 'WITHDRAWN',        color: 'var(--status-positive)', bg: 'transparent' },
     failed:               { label: 'FAILED',           color: 'var(--status-negative)', bg: 'transparent' },
@@ -6200,6 +6200,7 @@ window.MockStateToggle = MockStateToggle;
 
     const receiveAddress = data.agent.fullWalletAddress || data.agent.walletAddress;
     const MIN_WITHDRAW = 1;
+    const WITHDRAW_GAS_USDC = 0.003;
 
     const selectedWallet = wallets.find((w) => w.id === selectedWalletId);
     const dest = selectedWallet?.address || '';
@@ -6208,6 +6209,7 @@ window.MockStateToggle = MockStateToggle;
     const amountShapeValid = /^\d+(?:\.\d{0,6})?$/.test(amountClean);
     const amountNum   = amountShapeValid ? Number(amountClean) : NaN;
     const amountValid = amountShapeValid && !Number.isNaN(amountNum) && amountNum >= MIN_WITHDRAW && amountNum <= localBalance;
+    const netAmount = amountValid ? Math.max(0, amountNum - WITHDRAW_GAS_USDC) : null;
     const canConfirm  = destValid && amountValid && stage === 'idle';
     const belowMin    = !Number.isNaN(amountNum) && amountNum > 0 && amountNum < MIN_WITHDRAW;
     const overBalance = !Number.isNaN(amountNum) && amountNum > localBalance;
@@ -6265,29 +6267,36 @@ window.MockStateToggle = MockStateToggle;
             : t('mvp.dash.funding.withdraw_failed');
           throw new Error(message);
         }
-        const entry = payload.entry || {};
-        const entryMeta = entry.metadata || {};
-        const settledAmount = Math.abs(
-          atomicToUsdc(entry.availableDeltaAtomic || `-${amountAtomic}`)
-        ) || amountNum;
+        const rows = Array.isArray(payload.entries) ? payload.entries : [payload.entry].filter(Boolean);
+        const settledAmount = rows.reduce((total, row) => {
+          const meta = row.metadata || {};
+          return total + Math.abs(atomicToUsdc(row.availableDeltaAtomic || meta.amountAtomic || 0));
+        }, 0) || amountNum;
+        const nextTxs = rows.map((row) => {
+          const meta = row.metadata || {};
+          return {
+            id: row.entryId || meta.withdrawalId || `wd_${Date.now().toString(36).slice(-5)}`,
+            counterparty: meta.counterparty || `External · ${dest.slice(0, 6)}…${dest.slice(-4)}`,
+            amount: Math.abs(atomicToUsdc(row.availableDeltaAtomic || meta.amountAtomic || amountAtomic)) || amountNum,
+            direction: 'out',
+            role: 'withdrawal',
+            status: meta.dashboardStatus || 'withdrawn',
+            timestamp: t('mvp.ui.just_now'),
+            gasFee: meta.gasFee,
+            gasFeeAtomic: meta.gasFeeAtomic,
+            netAmount: meta.netAmount,
+            netAmountAtomic: meta.netAmountAtomic,
+            txHash: meta.txHash,
+            network: meta.network || 'Base',
+          };
+        });
         setStage('settled');
         setLocalBalance(
           payload.account && payload.account.availableAtomic !== undefined
             ? atomicToUsdc(payload.account.availableAtomic)
             : (b) => b - settledAmount
         );
-        setLocalTxs((prev) => [
-          {
-            id: entry.entryId || payload.withdrawalId || `wd_${Date.now().toString(36).slice(-5)}`,
-            counterparty: entryMeta.counterparty || `External · ${dest.slice(0, 6)}…${dest.slice(-4)}`,
-            amount: settledAmount,
-            direction: 'out',
-            role: 'withdrawal',
-            status: 'released',
-            timestamp: t('mvp.ui.just_now'),
-          },
-          ...prev,
-        ]);
+        setLocalTxs((prev) => [...nextTxs, ...prev]);
       } catch (error) {
         setStage('idle');
         setWithdrawError(error && error.message ? error.message : t('mvp.dash.funding.withdraw_failed'));
@@ -6490,8 +6499,16 @@ window.MockStateToggle = MockStateToggle;
             >
               <TermLabel>{t('mvp.dash.funding.term_network')}</TermLabel>
               <TermValue>{selectedWallet ? `${chainName(selectedWallet.chain)} · USDC` : 'Base · USDC'}</TermValue>
-              <TermLabel>{t('mvp.dash.funding.term_fee')}</TermLabel>
-              <TermValue accent>{t('mvp.dash.funding.fee_covered')}</TermValue>
+              <TermLabel>Network fee</TermLabel>
+              <TermValue>~$0.003 USDC</TermValue>
+              {netAmount !== null && (
+                <>
+                  <TermLabel>Net to destination</TermLabel>
+                  <TermValue accent>${window.formatAmount(netAmount)} USDC</TermValue>
+                </>
+              )}
+              <TermLabel>ETA</TermLabel>
+              <TermValue>Usually under a minute after submission</TermValue>
             </div>
 
             <div className="flex" style={{ gap: '12px', marginTop: '24px' }}>
