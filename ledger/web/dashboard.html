@@ -4051,6 +4051,9 @@ window.MockStateToggle = MockStateToggle;
     'mvp.dash.funding.min_hint':                    { en: 'Min 1 USDC · Network: Base · Est. gas ~$0.01', zh: '最低 1 USDC · 链:Base · 预估 gas ~$0.01' },
     'mvp.dash.funding.term_network':                { en: 'Network',                                      zh: '链' },
     'mvp.dash.funding.term_fee':                    { en: 'Network fee',                                  zh: '链上费用' },
+    'mvp.dash.funding.term_net_destination':        { en: 'Net to destination',                           zh: '目标到账' },
+    'mvp.dash.funding.term_eta':                    { en: 'ETA',                                          zh: '预计时间' },
+    'mvp.dash.funding.eta_under_minute':            { en: 'Usually under a minute after submission',       zh: '提交后通常一分钟内完成' },
     'mvp.dash.funding.fee_covered':                 { en: 'Covered by Chief',                             zh: '由 Chief 承担' },
     'mvp.dash.funding.exceeds_balance':             { en: 'Amount exceeds available balance.',            zh: '金额超过可用余额。' },
     'mvp.dash.funding.confirm':                     { en: 'Confirm withdrawal',                           zh: '确认提款' },
@@ -6229,6 +6232,13 @@ window.MockStateToggle = MockStateToggle;
       return Number.isFinite(parsed) ? parsed / 1000000 : 0;
     };
 
+    const displayAmountAtomic = (row, fallbackAtomic) => {
+      const meta = row.metadata || {};
+      const availableAmount = atomicToUsdc(row.availableDeltaAtomic);
+      const metadataAmount = meta.amountAtomic ? atomicToUsdc(meta.amountAtomic) : 0;
+      return availableAmount > 0 ? row.availableDeltaAtomic : (metadataAmount > 0 ? meta.amountAtomic : fallbackAtomic);
+    };
+
     const handleCopyAddr = () => {
       // navigator.clipboard might be unavailable in some headless contexts;
       // soft-fail to keep the demo from breaking.
@@ -6269,19 +6279,22 @@ window.MockStateToggle = MockStateToggle;
         }
         const rows = Array.isArray(payload.entries) ? payload.entries : [payload.entry].filter(Boolean);
         const settledAmount = rows.reduce((total, row) => {
-          const meta = row.metadata || {};
-          return total + Math.abs(atomicToUsdc(row.availableDeltaAtomic || meta.amountAtomic || 0));
+          const rowDelta = atomicToUsdc(row.availableDeltaAtomic);
+          return total + (rowDelta !== 0 ? Math.abs(rowDelta) : 0);
         }, 0) || amountNum;
-        const nextTxs = rows.map((row) => {
+        const nextTxs = rows.map((row, index) => {
           const meta = row.metadata || {};
+          const txAmountAtomic = displayAmountAtomic(row, amountAtomic);
+          const statusOrder = meta.dashboardStatus === 'withdrawn' ? 2 : meta.dashboardStatus === 'withdraw_submitted' ? 1 : 0;
           return {
             id: row.entryId || meta.withdrawalId || `wd_${Date.now().toString(36).slice(-5)}`,
             counterparty: meta.counterparty || `External · ${dest.slice(0, 6)}…${dest.slice(-4)}`,
-            amount: Math.abs(atomicToUsdc(row.availableDeltaAtomic || meta.amountAtomic || amountAtomic)) || amountNum,
+            amount: Math.abs(atomicToUsdc(txAmountAtomic)) || amountNum,
             direction: 'out',
             role: 'withdrawal',
             status: meta.dashboardStatus || 'withdrawn',
             timestamp: t('mvp.ui.just_now'),
+            sortOrder: (statusOrder * 1000) - index,
             gasFee: meta.gasFee,
             gasFeeAtomic: meta.gasFeeAtomic,
             netAmount: meta.netAmount,
@@ -6289,7 +6302,7 @@ window.MockStateToggle = MockStateToggle;
             txHash: meta.txHash,
             network: meta.network || 'Base',
           };
-        });
+        }).sort((a, b) => b.sortOrder - a.sortOrder);
         setStage('settled');
         setLocalBalance(
           payload.account && payload.account.availableAtomic !== undefined
@@ -6302,6 +6315,8 @@ window.MockStateToggle = MockStateToggle;
         setWithdrawError(error && error.message ? error.message : t('mvp.dash.funding.withdraw_failed'));
       }
     };
+
+    const previewTxs = stage === 'settled' ? localTxs.slice(0, Math.min(2, localTxs.length)) : [];
 
     return (
       <div>
@@ -6499,16 +6514,16 @@ window.MockStateToggle = MockStateToggle;
             >
               <TermLabel>{t('mvp.dash.funding.term_network')}</TermLabel>
               <TermValue>{selectedWallet ? `${chainName(selectedWallet.chain)} · USDC` : 'Base · USDC'}</TermValue>
-              <TermLabel>Network fee</TermLabel>
+              <TermLabel>{t('mvp.dash.funding.term_fee')}</TermLabel>
               <TermValue>~$0.003 USDC</TermValue>
               {netAmount !== null && (
                 <>
-                  <TermLabel>Net to destination</TermLabel>
+                  <TermLabel>{t('mvp.dash.funding.term_net_destination')}</TermLabel>
                   <TermValue accent>${window.formatAmount(netAmount)} USDC</TermValue>
                 </>
               )}
-              <TermLabel>ETA</TermLabel>
-              <TermValue>Usually under a minute after submission</TermValue>
+              <TermLabel>{t('mvp.dash.funding.term_eta')}</TermLabel>
+              <TermValue>{t('mvp.dash.funding.eta_under_minute')}</TermValue>
             </div>
 
             <div className="flex" style={{ gap: '12px', marginTop: '24px' }}>
@@ -6557,20 +6572,30 @@ window.MockStateToggle = MockStateToggle;
           </div>
 
           {/* Live preview of the resulting ledger row when a withdraw has settled. */}
-          {stage === 'settled' && localTxs[0] && (
+          {previewTxs.length > 0 && (
             <div className="fade-up" style={{ marginTop: '40px', maxWidth: '720px' }}>
               <div className="smallcaps-mono" style={{ color: 'var(--ink-tertiary)', marginBottom: '8px' }}>
                 {t('mvp.dash.funding.new_row')}
               </div>
               <div className="rule-t" />
-              <window.TransactionRow
-                receiptId={localTxs[0].id}
-                counterparty={localTxs[0].counterparty}
-                amount={localTxs[0].amount}
-                direction={localTxs[0].direction}
-                status={localTxs[0].status}
-                timestamp={localTxs[0].timestamp}
-              />
+              {previewTxs.map((tx) => (
+                <window.TransactionRow
+                  key={tx.id}
+                  receiptId={tx.id}
+                  counterparty={tx.counterparty}
+                  amount={tx.amount}
+                  direction={tx.direction}
+                  status={tx.status}
+                  timestamp={tx.timestamp}
+                  role={tx.role}
+                  gasFee={tx.gasFee}
+                  gasFeeAtomic={tx.gasFeeAtomic}
+                  netAmount={tx.netAmount}
+                  netAmountAtomic={tx.netAmountAtomic}
+                  txHash={tx.txHash}
+                  network={tx.network}
+                />
+              ))}
             </div>
           )}
         </Section>
