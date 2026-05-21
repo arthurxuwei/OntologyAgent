@@ -424,6 +424,7 @@ test("AgentWalletService imports and assigns an unused Circle wallet before crea
               blockchain: "BASE-SEPOLIA" as const,
               walletAddress: "0x2222222222222222222222222222222222222222",
               mode: "circle" as const,
+              accountType: "SCA" as const,
             },
           ];
         },
@@ -462,6 +463,61 @@ test("AgentWalletService imports and assigns an unused Circle wallet before crea
         state.agentWalletBindings.map((binding) => binding.circleWalletId).sort(),
         ["unused-circle-wallet", "used-circle-wallet"],
       );
+    },
+  );
+});
+
+test("AgentWalletService skips unused non-SCA Circle wallets before creating one", async () => {
+  await withTempStateFile(
+    {
+      wallets: [],
+      agentWalletBindings: [],
+    },
+    async (statePath) => {
+      const config = liveCircleConfig({
+        AGENT_WALLET_STATE_PATH: statePath,
+      });
+      let createCalls = 0;
+      const circleWalletService = {
+        listWallets: async () => [
+          {
+            agentName: "Legacy Spare",
+            circleWalletId: "legacy-eoa-wallet",
+            circleWalletSetId: "circle-wallet-set",
+            blockchain: "BASE-SEPOLIA" as const,
+            walletAddress: "0x1111111111111111111111111111111111111111",
+            mode: "circle" as const,
+            accountType: "EOA" as const,
+          },
+        ],
+        createWallet: async () => {
+          createCalls += 1;
+          return {
+            circleWalletId: "new-sca-wallet",
+            circleWalletSetId: "circle-wallet-set",
+            blockchain: "BASE-SEPOLIA" as const,
+            walletAddress: "0x2222222222222222222222222222222222222222",
+            mode: "circle" as const,
+          };
+        },
+        getWalletBalances: async () => ({}),
+      } as unknown as CircleWalletService;
+      const service = new AgentWalletService(
+        config,
+        fakeX402FetchService(baseX402Result()),
+        circleWalletService,
+      );
+
+      const result = await service.getOrCreate({
+        agentName: "New Agent",
+        agentId: "agent_new",
+        email: "new@example.com",
+      });
+
+      assert.equal(createCalls, 1);
+      assert.equal(result.reused, false);
+      assert.equal(result.circleWalletId, "new-sca-wallet");
+      assert.equal(result.walletAddress, "0x2222222222222222222222222222222222222222");
     },
   );
 });

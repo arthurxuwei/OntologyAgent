@@ -21,6 +21,7 @@ export type CircleWalletCreateResult = {
 export type CircleWalletRecord = Omit<CircleWalletCreateResult, "circleWalletSetId"> & {
   agentName: string;
   circleWalletSetId: string | null;
+  accountType?: "SCA" | "EOA";
 };
 
 type CircleWalletResponseWallet = {
@@ -30,6 +31,7 @@ type CircleWalletResponseWallet = {
   walletSetId?: unknown;
   name?: unknown;
   refId?: unknown;
+  accountType?: unknown;
 };
 
 type CircleWalletTokenBalance = {
@@ -1219,5 +1221,8 @@ function normalizeCircleWalletRecord(
     blockchain: "BASE-SEPOLIA",
     walletAddress: normalizeCircleAddress(wallet.address, payload),
     mode: "circle",
+    ...(wallet.accountType === "SCA" || wallet.accountType === "EOA"
+      ? { accountType: wallet.accountType }
+      : {}),
   };
 }

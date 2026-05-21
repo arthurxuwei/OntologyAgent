@@ -88,6 +88,9 @@ export class AgentWalletStateStore {
       if (boundWalletAddresses.has(normalizeAddress(entry.walletAddress).toLowerCase())) {
         return false;
       }
+      if (entry.mode === "circle" && entry.accountType !== "SCA") {
+        return false;
+      }
       return true;
     });
     return wallet ? toStatusResult(wallet) : null;
@@ -265,6 +268,11 @@ function isWalletRecord(value: unknown): value is CircleWalletRecord {
     (typeof value.circleWalletSetId === "string" || value.circleWalletSetId === null) &&
     value.blockchain === "BASE-SEPOLIA" &&
     typeof value.walletAddress === "string" &&
+    (
+      value.accountType === undefined ||
+      value.accountType === "SCA" ||
+      value.accountType === "EOA"
+    ) &&
     (value.mode === "circle" || value.mode === "mock")
   );
 }
