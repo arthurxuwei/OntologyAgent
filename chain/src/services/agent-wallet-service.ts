@@ -541,6 +541,10 @@ export class AgentWalletService {
     }
 
     const amountAtomic = parsePositiveBigInt(command.amountAtomic, "amountAtomic");
+    const estimatedGasFeeAtomic = 3000n;
+    const netAmountAtomic = amountAtomic > estimatedGasFeeAtomic
+      ? amountAtomic - estimatedGasFeeAtomic
+      : 0n;
     const amount = atomicUsdcToDecimal(command.amountAtomic);
     const sourceAddress = normalizeRequestAddress(walletAddress, "walletAddress");
     const recipientAddressInput = firstNonEmpty(command.recipientAddress, walletAddress);
@@ -611,6 +615,10 @@ export class AgentWalletService {
       asset: "USDC",
       amount,
       amountAtomic: amountAtomic.toString(),
+      estimatedGasFeeAtomic: estimatedGasFeeAtomic.toString(),
+      estimatedGasFee: atomicUsdcToDecimal(estimatedGasFeeAtomic.toString()),
+      netAmountAtomic: netAmountAtomic.toString(),
+      netAmount: atomicUsdcToDecimal(netAmountAtomic.toString()),
       tokenAddress,
       gatewayWallet,
       gatewayMinter,
@@ -618,6 +626,7 @@ export class AgentWalletService {
       gatewayTransferId,
       mintTransactionId: mintTransaction?.id ?? null,
       mintTransactionHash: mintTransaction?.txHash ?? null,
+      transactionHash: mintTransaction?.txHash ?? null,
       mintState: mintTransaction?.state ?? null,
       gatewayBalance: {
         availableAtomic: refreshedGatewayBalance.available.toString(),

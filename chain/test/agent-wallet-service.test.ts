@@ -1678,7 +1678,7 @@ test("AgentWalletService withdraws USDC from Circle Gateway", async () => {
             gatewayMinter: "0x0022222abe238cc2c7bb1f21003f0a260052475b",
             sourceDomain: 6,
             destinationDomain: 6,
-            amountAtomic: "1000",
+            amountAtomic: "1000000",
             refId: "withdraw:test",
           });
           return {
@@ -1692,14 +1692,14 @@ test("AgentWalletService withdraws USDC from Circle Gateway", async () => {
           assert.equal(walletAddress, "0x2222222222222222222222222222222222222222");
           assert.equal(domain, 6);
           return {
-            total: balanceCalls === 1 ? 1000n : 0n,
-            available: balanceCalls === 1 ? 1000n : 0n,
+            total: balanceCalls === 1 ? 1000000n : 0n,
+            available: balanceCalls === 1 ? 1000000n : 0n,
             withdrawing: 0n,
-            withdrawable: balanceCalls === 1 ? 1000n : 0n,
-            formattedTotal: balanceCalls === 1 ? "0.001" : "0",
-            formattedAvailable: balanceCalls === 1 ? "0.001" : "0",
+            withdrawable: balanceCalls === 1 ? 1000000n : 0n,
+            formattedTotal: balanceCalls === 1 ? "1" : "0",
+            formattedAvailable: balanceCalls === 1 ? "1" : "0",
             formattedWithdrawing: "0",
-            formattedWithdrawable: balanceCalls === 1 ? "0.001" : "0",
+            formattedWithdrawable: balanceCalls === 1 ? "1" : "0",
           };
         },
       } as unknown as CircleWalletService;
@@ -1712,12 +1712,17 @@ test("AgentWalletService withdraws USDC from Circle Gateway", async () => {
       const result = await service.withdrawFromGateway({
         agentId: "peer-agent",
         recipientAddress: "0x1111111111111111111111111111111111111111",
-        amountAtomic: "1000",
+        amountAtomic: "1000000",
         refId: "withdraw:test",
       });
 
       assert.equal(result.circleWalletId, "circle-peer");
-      assert.equal(result.amount, "0.001");
+      assert.equal(result.amount, "1");
+      assert.equal(result.estimatedGasFeeAtomic, "3000");
+      assert.equal(result.estimatedGasFee, "0.003");
+      assert.equal(result.netAmountAtomic, "997000");
+      assert.equal(result.netAmount, "0.997");
+      assert.equal(result.transactionHash, "0xmint");
       assert.equal(result.gatewayTransferId, "gateway-transfer-1");
       assert.equal(result.mintTransactionId, "mint-tx");
       assert.equal(result.mintTransactionHash, "0xmint");
