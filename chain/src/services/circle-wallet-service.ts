@@ -45,10 +45,12 @@ export type CircleGatewayBalance = {
   available: bigint;
   withdrawing: bigint;
   withdrawable: bigint;
+  pendingDeposits: bigint;
   formattedTotal: string;
   formattedAvailable: string;
   formattedWithdrawing: string;
   formattedWithdrawable: string;
+  formattedPendingDeposits: string;
 };
 
 type GatewayPaymentPayload = {
@@ -445,6 +447,7 @@ export class CircleWalletService {
         available,
         withdrawing: 0n,
         withdrawable: available,
+        pendingDeposits: 0n,
       });
     }
 
@@ -1097,7 +1100,40 @@ function extractGatewayBalance(payload: unknown): CircleGatewayBalance | null {
     typeof first.withdrawable === "string" ? first.withdrawable : "0",
     payload,
   );
-  return formatGatewayBalance({ available, withdrawing, withdrawable });
+  const pendingDeposits = extractPendingGatewayDeposits(first, payload);
+  return formatGatewayBalance({ available, withdrawing, withdrawable, pendingDeposits });
+}
+
+function extractPendingGatewayDeposits(balance: Record<string, unknown>, payload: unknown): bigint {
+  for (const key of ["pendingDeposits", "pendingDeposit", "pending", "pendingBalance"]) {
+    const value = balance[key];
+    if (typeof value === "string") {
+      return parseGatewayAmount(value, payload);
+    }
+  }
+
+  const pendingDeposits = balance.pendingDeposits;
+  if (Array.isArray(pendingDeposits)) {
+    return pendingDeposits.filter(isRecord).reduce((sum, item) => {
+      const value = typeof item.amount === "string"
+        ? item.amount
+        : typeof item.balance === "string"
+          ? item.balance
+          : "0";
+      return sum + parseGatewayAmount(value, payload);
+    }, 0n);
+  }
+
+  if (isRecord(pendingDeposits)) {
+    const value = typeof pendingDeposits.amount === "string"
+      ? pendingDeposits.amount
+      : typeof pendingDeposits.balance === "string"
+        ? pendingDeposits.balance
+        : "0";
+    return parseGatewayAmount(value, payload);
+  }
+
+  return 0n;
 }
 
 function parseGatewayAmount(value: string, payload: unknown): bigint {
@@ -1120,6 +1156,7 @@ function formatGatewayBalance(parts: {
   available: bigint;
   withdrawing: bigint;
   withdrawable: bigint;
+  pendingDeposits: bigint;
 }): CircleGatewayBalance {
   const total = parts.available + parts.withdrawing;
   return {
@@ -1127,10 +1164,12 @@ function formatGatewayBalance(parts: {
     available: parts.available,
     withdrawing: parts.withdrawing,
     withdrawable: parts.withdrawable,
+    pendingDeposits: parts.pendingDeposits,
     formattedTotal: formatUnits(total, 6),
     formattedAvailable: formatUnits(parts.available, 6),
     formattedWithdrawing: formatUnits(parts.withdrawing, 6),
     formattedWithdrawable: formatUnits(parts.withdrawable, 6),
+    formattedPendingDeposits: formatUnits(parts.pendingDeposits, 6),
   };
 }
 

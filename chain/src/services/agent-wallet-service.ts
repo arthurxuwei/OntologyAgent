@@ -821,9 +821,35 @@ export class AgentWalletService {
     if (this.config.network.mockChain || status.mode !== "circle" || !status.circleWalletId) {
       return status;
     }
-    return {
+    const result: AgentWalletStatusResult = {
       ...status,
       balances: await this.circleWalletService.getWalletBalances(status.circleWalletId),
+    };
+
+    try {
+      const chainConfig = gatewayChainConfig(this.config.x402.network);
+      const gatewayBalance = await this.circleWalletService.getGatewayBalance(
+        normalizeRequestAddress(status.walletAddress, "walletAddress"),
+        chainConfig.domain,
+      );
+      result.gatewayBalance = {
+        availableAtomic: gatewayBalance.available.toString(),
+        totalAtomic: gatewayBalance.total.toString(),
+        withdrawingAtomic: gatewayBalance.withdrawing.toString(),
+        withdrawableAtomic: gatewayBalance.withdrawable.toString(),
+        pendingDepositsAtomic: gatewayBalance.pendingDeposits.toString(),
+        formattedAvailable: gatewayBalance.formattedAvailable,
+        formattedTotal: gatewayBalance.formattedTotal,
+        formattedWithdrawing: gatewayBalance.formattedWithdrawing,
+        formattedWithdrawable: gatewayBalance.formattedWithdrawable,
+        formattedPendingDeposits: gatewayBalance.formattedPendingDeposits,
+      };
+    } catch (error) {
+      result.gatewayBalanceError = error instanceof Error ? error.message : String(error);
+    }
+
+    return {
+      ...result,
     };
   }
 }

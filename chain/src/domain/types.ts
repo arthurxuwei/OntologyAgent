@@ -181,6 +181,19 @@ export type AgentWalletStatusResult = {
   walletAddress: string;
   status: "created" | "available" | "unknown";
   balances: Record<string, string>;
+  gatewayBalance?: {
+    availableAtomic: string;
+    totalAtomic: string;
+    withdrawingAtomic: string;
+    withdrawableAtomic: string;
+    pendingDepositsAtomic: string;
+    formattedAvailable: string;
+    formattedTotal: string;
+    formattedWithdrawing: string;
+    formattedWithdrawable: string;
+    formattedPendingDeposits: string;
+  };
+  gatewayBalanceError?: string;
   mode: "mock" | "circle";
   accountType?: "SCA" | "EOA";
 };

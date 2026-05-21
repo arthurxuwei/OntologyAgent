@@ -3245,6 +3245,36 @@ async def ledger_state_with_circle_balances() -> dict[str, Any]:
                 if circle_available_atomic is not None:
                     account["availableAtomic"] = circle_available_atomic
                     account["balanceSource"] = "circle"
+        gateway_balance = status.get("gatewayBalance")
+        if isinstance(gateway_balance, dict):
+            formatted_available = gateway_balance.get("formattedAvailable")
+            formatted_total = gateway_balance.get("formattedTotal")
+            formatted_withdrawing = gateway_balance.get("formattedWithdrawing")
+            formatted_withdrawable = gateway_balance.get("formattedWithdrawable")
+            formatted_pending_deposits = gateway_balance.get("formattedPendingDeposits")
+            if isinstance(formatted_available, str):
+                account["gatewayUsdcAvailable"] = formatted_available
+            if isinstance(formatted_total, str):
+                account["gatewayUsdcTotal"] = formatted_total
+            if isinstance(formatted_withdrawing, str):
+                account["gatewayUsdcWithdrawing"] = formatted_withdrawing
+            if isinstance(formatted_withdrawable, str):
+                account["gatewayUsdcWithdrawable"] = formatted_withdrawable
+            if isinstance(formatted_pending_deposits, str):
+                account["gatewayUsdcPendingDeposits"] = formatted_pending_deposits
+            for source_key, target_key in {
+                "availableAtomic": "gatewayAvailableAtomic",
+                "totalAtomic": "gatewayTotalAtomic",
+                "withdrawingAtomic": "gatewayWithdrawingAtomic",
+                "withdrawableAtomic": "gatewayWithdrawableAtomic",
+                "pendingDepositsAtomic": "gatewayPendingDepositsAtomic",
+            }.items():
+                value = gateway_balance.get(source_key)
+                if isinstance(value, str):
+                    account[target_key] = value
+        gateway_balance_error = status.get("gatewayBalanceError")
+        if isinstance(gateway_balance_error, str):
+            account["gatewayBalanceError"] = gateway_balance_error
     return state
 
 

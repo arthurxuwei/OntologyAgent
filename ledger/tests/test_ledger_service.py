@@ -548,6 +548,10 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertIn("/ledger/escrows", html)
         self.assertIn("Onramp Sessions", html)
         self.assertIn('{ label: "Email"', html)
+        self.assertIn("Gateway USDC Available", html)
+        self.assertIn("Pending Deposits", html)
+        self.assertIn('{ label: "Gateway Available"', html)
+        self.assertIn('{ label: "Gateway Withdrawable"', html)
 
     def test_dashboard_serves_user_dashboard_page(self) -> None:
         response = self.client.get("/dashboard")
@@ -914,7 +918,7 @@ class LedgerServiceTests(unittest.TestCase):
                 "global.fetch = async (url, options = {}) => {"
                 "fetchCalls.push({ url, method: options.method || 'GET', body: options.body || null });"
                 "if (url === '/admin/ledger/state') return { ok: true, json: async () => ({"
-                "accounts: [{ agentId: 'agent_buyer', email: 'buyer@example.com', walletAddress: '0x1111111111111111111111111111111111111111', circleUsdcBalance: '1.98', availableAtomic: '5000000', lockedAtomic: '3000000' }],"
+                "accounts: [{ agentId: 'agent_buyer', email: 'buyer@example.com', walletAddress: '0x1111111111111111111111111111111111111111', circleUsdcBalance: '1.98', gatewayUsdcAvailable: '0.75', gatewayUsdcTotal: '1.25', gatewayUsdcWithdrawable: '0.5', gatewayUsdcWithdrawing: '0.5', gatewayUsdcPendingDeposits: '2.25', availableAtomic: '5000000', lockedAtomic: '3000000' }],"
                 "entries: [{ entryId: 'entry_1', entryType: 'credit', agentId: 'agent_buyer' }],"
                 "escrows: [{ escrowId: 'escrow_1', buyerAgentId: 'agent_buyer', sellerAgentId: 'agent_seller', amountAtomic: '3000000', status: 'locked' }],"
                 "onrampSessions: [{ sessionId: 'onramp_1', agentId: 'agentA', paymentAmount: '10.00', status: 'created', onrampUrl: 'https://pay.coinbase.com/buy/select-asset?sessionToken=abc' }]"
@@ -960,6 +964,14 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertIn("1", output["stateHtml"])
         self.assertIn("Circle USDC Available", output["stateHtml"])
         self.assertIn("1.98", output["stateHtml"])
+        self.assertIn("Gateway USDC Available", output["stateHtml"])
+        self.assertIn("0.75", output["stateHtml"])
+        self.assertIn("Gateway Total", output["stateHtml"])
+        self.assertIn("1.25", output["stateHtml"])
+        self.assertIn("Gateway Withdrawable", output["stateHtml"])
+        self.assertIn("0.5", output["stateHtml"])
+        self.assertIn("Pending Deposits", output["stateHtml"])
+        self.assertIn("2.25", output["stateHtml"])
         self.assertIn("Ledger Locked", output["stateHtml"])
         self.assertIn("3,000,000", output["stateHtml"])
         self.assertIn("agent_buyer", output["stateHtml"])
@@ -1356,7 +1368,21 @@ class LedgerServiceTests(unittest.TestCase):
         class FakeWalletClient:
             async def status(self, *, wallet_address=None, circle_wallet_id=None):
                 assert circle_wallet_id == "circle-wallet-1"
-                return {"balances": {"USDC": "1.98"}}
+                return {
+                    "balances": {"USDC": "1.98"},
+                    "gatewayBalance": {
+                        "availableAtomic": "750000",
+                        "totalAtomic": "1250000",
+                        "withdrawableAtomic": "500000",
+                        "withdrawingAtomic": "500000",
+                        "pendingDepositsAtomic": "2250000",
+                        "formattedAvailable": "0.75",
+                        "formattedTotal": "1.25",
+                        "formattedWithdrawable": "0.5",
+                        "formattedWithdrawing": "0.5",
+                        "formattedPendingDeposits": "2.25",
+                    },
+                }
 
         store = main.get_store()
         store.bind_account_wallet(
@@ -1369,6 +1395,12 @@ class LedgerServiceTests(unittest.TestCase):
             state = self.client.get("/ledger/state?agentId=agent_research").json()
 
         self.assertEqual(state["accounts"][0]["circleUsdcBalance"], "1.98")
+        self.assertEqual(state["accounts"][0]["gatewayUsdcAvailable"], "0.75")
+        self.assertEqual(state["accounts"][0]["gatewayUsdcTotal"], "1.25")
+        self.assertEqual(state["accounts"][0]["gatewayUsdcWithdrawable"], "0.5")
+        self.assertEqual(state["accounts"][0]["gatewayUsdcWithdrawing"], "0.5")
+        self.assertEqual(state["accounts"][0]["gatewayUsdcPendingDeposits"], "2.25")
+        self.assertEqual(state["accounts"][0]["gatewayPendingDepositsAtomic"], "2250000")
 
     def test_ledger_state_returns_no_data_without_agent_id(self) -> None:
         store = main.get_store()
@@ -1488,7 +1520,21 @@ class LedgerServiceTests(unittest.TestCase):
         class FakeWalletClient:
             async def status(self, *, wallet_address=None, circle_wallet_id=None):
                 assert circle_wallet_id == "circle-wallet-1"
-                return {"balances": {"USDC": "1.98"}}
+                return {
+                    "balances": {"USDC": "1.98"},
+                    "gatewayBalance": {
+                        "availableAtomic": "750000",
+                        "totalAtomic": "1250000",
+                        "withdrawableAtomic": "500000",
+                        "withdrawingAtomic": "500000",
+                        "pendingDepositsAtomic": "2250000",
+                        "formattedAvailable": "0.75",
+                        "formattedTotal": "1.25",
+                        "formattedWithdrawable": "0.5",
+                        "formattedWithdrawing": "0.5",
+                        "formattedPendingDeposits": "2.25",
+                    },
+                }
 
         store = main.get_store()
         store.bind_account_wallet(
@@ -1503,6 +1549,12 @@ class LedgerServiceTests(unittest.TestCase):
 
         account = state["accounts"][0]
         self.assertEqual(account["circleUsdcBalance"], "1.98")
+        self.assertEqual(account["gatewayUsdcAvailable"], "0.75")
+        self.assertEqual(account["gatewayUsdcTotal"], "1.25")
+        self.assertEqual(account["gatewayUsdcWithdrawable"], "0.5")
+        self.assertEqual(account["gatewayUsdcWithdrawing"], "0.5")
+        self.assertEqual(account["gatewayUsdcPendingDeposits"], "2.25")
+        self.assertEqual(account["gatewayPendingDepositsAtomic"], "2250000")
         self.assertEqual(account["availableAtomic"], "1980000")
         self.assertNotIn("ledgerAvailableAtomic", account)
         self.assertEqual(account["balanceSource"], "circle")
@@ -1516,7 +1568,21 @@ class LedgerServiceTests(unittest.TestCase):
         class FakeWalletClient:
             async def status(self, *, wallet_address=None, circle_wallet_id=None):
                 assert circle_wallet_id == "circle-wallet-1"
-                return {"balances": {"USDC": "1.98"}}
+                return {
+                    "balances": {"USDC": "1.98"},
+                    "gatewayBalance": {
+                        "availableAtomic": "750000",
+                        "totalAtomic": "1250000",
+                        "withdrawableAtomic": "500000",
+                        "withdrawingAtomic": "500000",
+                        "pendingDepositsAtomic": "2250000",
+                        "formattedAvailable": "0.75",
+                        "formattedTotal": "1.25",
+                        "formattedWithdrawable": "0.5",
+                        "formattedWithdrawing": "0.5",
+                        "formattedPendingDeposits": "2.25",
+                    },
+                }
 
         store = main.get_store()
         store.bind_account_wallet(
@@ -1529,6 +1595,12 @@ class LedgerServiceTests(unittest.TestCase):
 
         account = state["accounts"][0]
         self.assertEqual(account["circleUsdcBalance"], "1.98")
+        self.assertEqual(account["gatewayUsdcAvailable"], "0.75")
+        self.assertEqual(account["gatewayUsdcTotal"], "1.25")
+        self.assertEqual(account["gatewayUsdcWithdrawable"], "0.5")
+        self.assertEqual(account["gatewayUsdcWithdrawing"], "0.5")
+        self.assertEqual(account["gatewayUsdcPendingDeposits"], "2.25")
+        self.assertEqual(account["gatewayPendingDepositsAtomic"], "2250000")
         self.assertEqual(account["availableAtomic"], "1980000")
         self.assertNotIn("ledgerAvailableAtomic", account)
         self.assertEqual(account["balanceSource"], "circle")
