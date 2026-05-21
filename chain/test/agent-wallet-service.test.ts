@@ -353,7 +353,7 @@ test("AgentWalletService reuses a matching wallet from local Agent Wallet state"
           blockchain: "BASE-SEPOLIA",
           walletAddress: "0x3333333333333333333333333333333333333333",
           mode: "circle",
-          accountType: "SCA",
+          accountType: "EOA",
         },
       ],
     },
@@ -388,18 +388,18 @@ test("AgentWalletService reuses a matching wallet from local Agent Wallet state"
   );
 });
 
-test("AgentWalletService ignores legacy EOA local wallets before creating SCA wallet", async () => {
+test("AgentWalletService ignores legacy SCA local wallets before creating EOA wallet", async () => {
   await withTempStateFile(
     {
       wallets: [
         {
           agentName: "Research Summary",
-          circleWalletId: "legacy-eoa-wallet",
+          circleWalletId: "legacy-sca-wallet",
           circleWalletSetId: "circle-wallet-set",
           blockchain: "BASE-SEPOLIA",
           walletAddress: "0x1111111111111111111111111111111111111111",
           mode: "circle",
-          accountType: "EOA",
+          accountType: "SCA",
         },
       ],
       agentWalletBindings: [],
@@ -414,12 +414,12 @@ test("AgentWalletService ignores legacy EOA local wallets before creating SCA wa
         createWallet: async () => {
           createCalls += 1;
           return {
-            circleWalletId: "new-sca-wallet",
+            circleWalletId: "new-eoa-wallet",
             circleWalletSetId: "circle-wallet-set",
             blockchain: "BASE-SEPOLIA" as const,
             walletAddress: "0x2222222222222222222222222222222222222222",
             mode: "circle" as const,
-            accountType: "SCA" as const,
+            accountType: "EOA" as const,
           };
         },
       } as unknown as CircleWalletService;
@@ -437,25 +437,25 @@ test("AgentWalletService ignores legacy EOA local wallets before creating SCA wa
 
       assert.equal(createCalls, 1);
       assert.equal(result.reused, false);
-      assert.equal(result.circleWalletId, "new-sca-wallet");
-      assert.equal(result.binding?.circleWalletId, "new-sca-wallet");
-      assert.equal(result.binding?.accountType, "SCA");
+      assert.equal(result.circleWalletId, "new-eoa-wallet");
+      assert.equal(result.binding?.circleWalletId, "new-eoa-wallet");
+      assert.equal(result.binding?.accountType, "EOA");
     },
   );
 });
 
-test("AgentWalletService ignores legacy non-SCA bindings before creating SCA wallet", async () => {
+test("AgentWalletService ignores legacy non-EOA bindings before creating EOA wallet", async () => {
   await withTempStateFile(
     {
       wallets: [
         {
           agentName: "Research Summary",
-          circleWalletId: "legacy-eoa-wallet",
+          circleWalletId: "legacy-sca-wallet",
           circleWalletSetId: "circle-wallet-set",
           blockchain: "BASE-SEPOLIA",
           walletAddress: "0x1111111111111111111111111111111111111111",
           mode: "circle",
-          accountType: "EOA",
+          accountType: "SCA",
         },
       ],
       agentWalletBindings: [
@@ -464,10 +464,11 @@ test("AgentWalletService ignores legacy non-SCA bindings before creating SCA wal
           agentId: "agent_research",
           email: "research@example.com",
           walletAddress: "0x1111111111111111111111111111111111111111",
-          circleWalletId: "legacy-eoa-wallet",
+          circleWalletId: "legacy-sca-wallet",
           circleWalletSetId: "circle-wallet-set",
           blockchain: "BASE-SEPOLIA",
           mode: "circle",
+          accountType: "SCA",
           updatedAt: "2026-05-01T00:00:00.000Z",
         },
       ],
@@ -482,12 +483,12 @@ test("AgentWalletService ignores legacy non-SCA bindings before creating SCA wal
         createWallet: async () => {
           createCalls += 1;
           return {
-            circleWalletId: "new-sca-wallet",
+            circleWalletId: "new-eoa-wallet",
             circleWalletSetId: "circle-wallet-set",
             blockchain: "BASE-SEPOLIA" as const,
             walletAddress: "0x2222222222222222222222222222222222222222",
             mode: "circle" as const,
-            accountType: "SCA" as const,
+            accountType: "EOA" as const,
           };
         },
       } as unknown as CircleWalletService;
@@ -505,9 +506,9 @@ test("AgentWalletService ignores legacy non-SCA bindings before creating SCA wal
 
       assert.equal(createCalls, 1);
       assert.equal(result.reused, false);
-      assert.equal(result.circleWalletId, "new-sca-wallet");
-      assert.equal(result.binding?.circleWalletId, "new-sca-wallet");
-      assert.equal(result.binding?.accountType, "SCA");
+      assert.equal(result.circleWalletId, "new-eoa-wallet");
+      assert.equal(result.binding?.circleWalletId, "new-eoa-wallet");
+      assert.equal(result.binding?.accountType, "EOA");
     },
   );
 });
@@ -523,7 +524,7 @@ test("AgentWalletService includes live Circle balances when reusing a local wall
           blockchain: "BASE-SEPOLIA",
           walletAddress: "0x3333333333333333333333333333333333333333",
           mode: "circle",
-          accountType: "SCA",
+          accountType: "EOA",
         },
       ],
     },
@@ -596,7 +597,7 @@ test("AgentWalletService status resolves existing binding before mock fallback",
           blockchain: "BASE-SEPOLIA",
           walletAddress: "0x3333333333333333333333333333333333333333",
           mode: "circle",
-          accountType: "SCA",
+          accountType: "EOA",
           updatedAt: "2026-05-21T00:00:00.000Z",
         },
       ],
@@ -640,6 +641,7 @@ test("AgentWalletService imports and assigns an unused Circle wallet before crea
           circleWalletSetId: "circle-wallet-set",
           blockchain: "BASE-SEPOLIA",
           mode: "circle",
+          accountType: "EOA",
           updatedAt: "2026-05-13T00:00:00.000Z",
         },
       ],
@@ -669,7 +671,7 @@ test("AgentWalletService imports and assigns an unused Circle wallet before crea
               blockchain: "BASE-SEPOLIA" as const,
               walletAddress: "0x2222222222222222222222222222222222222222",
               mode: "circle" as const,
-              accountType: "SCA" as const,
+              accountType: "EOA" as const,
             },
           ];
         },
@@ -712,7 +714,7 @@ test("AgentWalletService imports and assigns an unused Circle wallet before crea
   );
 });
 
-test("AgentWalletService skips unused non-SCA Circle wallets before creating one", async () => {
+test("AgentWalletService skips unused non-EOA Circle wallets before creating one", async () => {
   await withTempStateFile(
     {
       wallets: [],
@@ -727,22 +729,23 @@ test("AgentWalletService skips unused non-SCA Circle wallets before creating one
         listWallets: async () => [
           {
             agentName: "Legacy Spare",
-            circleWalletId: "legacy-eoa-wallet",
+            circleWalletId: "legacy-sca-wallet",
             circleWalletSetId: "circle-wallet-set",
             blockchain: "BASE-SEPOLIA" as const,
             walletAddress: "0x1111111111111111111111111111111111111111",
             mode: "circle" as const,
-            accountType: "EOA" as const,
+            accountType: "SCA" as const,
           },
         ],
         createWallet: async () => {
           createCalls += 1;
           return {
-            circleWalletId: "new-sca-wallet",
+            circleWalletId: "new-eoa-wallet",
             circleWalletSetId: "circle-wallet-set",
             blockchain: "BASE-SEPOLIA" as const,
             walletAddress: "0x2222222222222222222222222222222222222222",
             mode: "circle" as const,
+            accountType: "EOA" as const,
           };
         },
         getWalletBalances: async () => ({}),
@@ -761,7 +764,7 @@ test("AgentWalletService skips unused non-SCA Circle wallets before creating one
 
       assert.equal(createCalls, 1);
       assert.equal(result.reused, false);
-      assert.equal(result.circleWalletId, "new-sca-wallet");
+      assert.equal(result.circleWalletId, "new-eoa-wallet");
       assert.equal(result.walletAddress, "0x2222222222222222222222222222222222222222");
     },
   );
@@ -778,7 +781,7 @@ test("AgentWalletService reuses an existing binding by agent id before importing
           blockchain: "BASE-SEPOLIA",
           walletAddress: "0x1111111111111111111111111111111111111111",
           mode: "circle",
-          accountType: "SCA",
+          accountType: "EOA",
         },
         {
           agentName: "Imported Spare",
@@ -787,7 +790,7 @@ test("AgentWalletService reuses an existing binding by agent id before importing
           blockchain: "BASE-SEPOLIA",
           walletAddress: "0x2222222222222222222222222222222222222222",
           mode: "circle",
-          accountType: "SCA",
+          accountType: "EOA",
         },
       ],
       agentWalletBindings: [
@@ -800,7 +803,7 @@ test("AgentWalletService reuses an existing binding by agent id before importing
           circleWalletSetId: "circle-wallet-set",
           blockchain: "BASE-SEPOLIA",
           mode: "circle",
-          accountType: "SCA",
+          accountType: "EOA",
           updatedAt: "2026-05-13T00:00:00.000Z",
         },
       ],
@@ -856,7 +859,7 @@ test("AgentWalletService reuses an existing binding by agent id before importing
           circleWalletSetId: "circle-wallet-set",
           blockchain: "BASE-SEPOLIA",
           mode: "circle",
-          accountType: "SCA",
+          accountType: "EOA",
           updatedAt: result.binding?.updatedAt,
         },
       ]);
@@ -912,6 +915,7 @@ test("AgentWalletService creates Circle transfer between bound agents", async ()
           circleWalletSetId: "circle-wallet-set",
           blockchain: "BASE-SEPOLIA",
           mode: "circle",
+          accountType: "EOA",
           updatedAt: "2026-05-13T00:00:00.000Z",
         },
         {
@@ -923,6 +927,7 @@ test("AgentWalletService creates Circle transfer between bound agents", async ()
           circleWalletSetId: "circle-wallet-set",
           blockchain: "BASE-SEPOLIA",
           mode: "circle",
+          accountType: "EOA",
           updatedAt: "2026-05-13T00:00:00.000Z",
         },
       ],
@@ -1009,6 +1014,7 @@ test("AgentWalletService settles USDC transfer through Circle Gateway", async ()
           circleWalletSetId: "circle-wallet-set",
           blockchain: "BASE-SEPOLIA",
           mode: "circle",
+          accountType: "EOA",
           updatedAt: "2026-05-13T00:00:00.000Z",
         },
         {
@@ -1020,6 +1026,7 @@ test("AgentWalletService settles USDC transfer through Circle Gateway", async ()
           circleWalletSetId: "circle-wallet-set",
           blockchain: "BASE-SEPOLIA",
           mode: "circle",
+          accountType: "EOA",
           updatedAt: "2026-05-13T00:00:00.000Z",
         },
       ],
@@ -1117,7 +1124,7 @@ test("AgentWalletService settles USDC transfer through Circle Gateway", async ()
   );
 });
 
-test("AgentWalletService uses an EOA delegate for SCA Gateway transfers", async () => {
+test("AgentWalletService uses EOA Gateway batching for Agent Wallet transfers", async () => {
   await withTempStateFile(
     {
       wallets: [],
@@ -1131,7 +1138,135 @@ test("AgentWalletService uses an EOA delegate for SCA Gateway transfers", async 
           circleWalletSetId: "circle-wallet-set",
           blockchain: "BASE-SEPOLIA",
           mode: "circle",
-          accountType: "SCA",
+          accountType: "EOA",
+          updatedAt: "2026-05-13T00:00:00.000Z",
+        },
+        {
+          agentName: "ZeroClaw EigenFlux Peer",
+          agentId: "peer-agent",
+          email: "peer@example.com",
+          walletAddress: "0x2222222222222222222222222222222222222222",
+          circleWalletId: "circle-peer",
+          circleWalletSetId: "circle-wallet-set",
+          blockchain: "BASE-SEPOLIA",
+          mode: "circle",
+          accountType: "EOA",
+          updatedAt: "2026-05-13T00:00:00.000Z",
+        },
+      ],
+    },
+    async (statePath) => {
+      const config = loadConfig({
+        CHAIN_MOCK: "false",
+        AGENT_WALLET_STATE_PATH: statePath,
+        CIRCLE_API_KEY: "circle-api-key",
+        CIRCLE_ENTITY_SECRET: "entity-secret",
+        CIRCLE_WALLET_SET_ID: "circle-wallet-set",
+        X402_FACILITATOR_URL: "https://gateway-api-testnet.circle.com",
+        X402_NETWORK: "eip155:84532",
+        X402_USDC_ASSET_ADDRESS: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+        CIRCLE_USDC_TOKEN_ID: "circle-usdc-token",
+      });
+      let signCalls = 0;
+      let settleCalls = 0;
+      const circleWalletService = {
+        getGatewayBalance: async (walletAddress: string, domain: number) => {
+          assert.equal(walletAddress, "0x2222222222222222222222222222222222222222");
+          assert.equal(domain, 6);
+          return {
+            total: 2_000_000n,
+            available: 2_000_000n,
+            withdrawing: 0n,
+            withdrawable: 2_000_000n,
+            formattedTotal: "2",
+            formattedAvailable: "2",
+            formattedWithdrawing: "0",
+            formattedWithdrawable: "2",
+          };
+        },
+        signTypedData: async (input: { walletId: string; data: unknown; memo?: string }) => {
+          signCalls += 1;
+          assert.equal(input.walletId, "circle-peer");
+          assert.equal(input.memo, "escrow:test:release");
+          assert.equal((input.data as { domain: { name: string } }).domain.name, "GatewayWalletBatched");
+          assert.equal(
+            (input.data as { message: { from: string } }).message.from.toLowerCase(),
+            "0x2222222222222222222222222222222222222222",
+          );
+          return `0x${"11".repeat(65)}`;
+        },
+        settleGatewayPayment: async (input: {
+          paymentPayload: { x402Version: number; payload: unknown };
+          paymentRequirements: { amount: string; payTo: string; network: string; asset: string };
+        }) => {
+          settleCalls += 1;
+          assert.equal(input.paymentPayload.x402Version, 2);
+          assert.equal(input.paymentRequirements.amount, "1250000");
+          assert.equal(input.paymentRequirements.payTo, "0x1111111111111111111111111111111111111111");
+          assert.equal(input.paymentRequirements.network, "eip155:84532");
+          assert.equal(input.paymentRequirements.asset, "0x036cbd53842c5426634e7929541ec2318f3dcf7e");
+          return {
+            verify: {
+              isValid: true,
+              payer: "0x2222222222222222222222222222222222222222",
+            },
+            settle: {
+              success: true,
+              payer: "0x2222222222222222222222222222222222222222",
+              transaction: "0xgatewaysettlement",
+              network: "eip155:84532",
+            },
+          };
+        },
+        createWallet: async () => {
+          throw new Error("createWallet should not be called for EOA Gateway batching");
+        },
+        addGatewayDelegate: async () => {
+          throw new Error("addGatewayDelegate should not be called for EOA Gateway batching");
+        },
+        withdrawFromGateway: async () => {
+          throw new Error("withdrawFromGateway should not be called for EOA Gateway batching");
+        },
+      } as unknown as CircleWalletService;
+      const service = new AgentWalletService(
+        config,
+        fakeX402FetchService(baseX402Result()),
+        circleWalletService,
+      );
+
+      const result = await service.transfer({
+        fromAgentId: "peer-agent",
+        toAgentId: "main-agent",
+        amountAtomic: "1250000",
+        asset: "USDC",
+        refId: "escrow:test:release",
+      });
+
+      assert.equal(result.transactionId, "0xgatewaysettlement");
+      assert.equal(result.transactionHash, "0xgatewaysettlement");
+      assert.equal(result.state, "SETTLED");
+      assert.equal(result.mode, "gateway");
+      assert.equal(signCalls, 1);
+      assert.equal(settleCalls, 1);
+    },
+  );
+});
+
+test("AgentWalletService rejects non-EOA Gateway batching transfers", async () => {
+  await withTempStateFile(
+    {
+      wallets: [],
+      agentWalletBindings: [
+        {
+          agentName: "ZeroClaw Chief Agent",
+          agentId: "main-agent",
+          email: "main@example.com",
+          walletAddress: "0x1111111111111111111111111111111111111111",
+          circleWalletId: "circle-main",
+          circleWalletSetId: "circle-wallet-set",
+          blockchain: "BASE-SEPOLIA",
+          mode: "circle",
+          accountType: "EOA",
           updatedAt: "2026-05-13T00:00:00.000Z",
         },
         {
@@ -1160,91 +1295,19 @@ test("AgentWalletService uses an EOA delegate for SCA Gateway transfers", async 
         X402_USDC_ASSET_ADDRESS: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
         CIRCLE_USDC_TOKEN_ID: "circle-usdc-token",
       });
-      let createDelegateCalls = 0;
-      let addDelegateCalls = 0;
-      let withdrawCalls = 0;
       const circleWalletService = {
-        getGatewayBalance: async (walletAddress: string, domain: number) => {
-          assert.equal(walletAddress, "0x2222222222222222222222222222222222222222");
-          assert.equal(domain, 6);
-          return {
-            total: 2_000_000n,
-            available: 2_000_000n,
-            withdrawing: 0n,
-            withdrawable: 2_000_000n,
-            formattedTotal: "2",
-            formattedAvailable: "2",
-            formattedWithdrawing: "0",
-            formattedWithdrawable: "2",
-          };
-        },
-        createWallet: async (agentName: string, accountType: "SCA" | "EOA") => {
-          createDelegateCalls += 1;
-          assert.equal(agentName, "ZeroClaw EigenFlux Peer Gateway Delegate");
-          assert.equal(accountType, "EOA");
-          return {
-            circleWalletId: "circle-peer-delegate",
-            circleWalletSetId: "circle-wallet-set",
-            blockchain: "BASE-SEPOLIA" as const,
-            walletAddress: "0x3333333333333333333333333333333333333333",
-            mode: "circle" as const,
-            accountType: "EOA" as const,
-          };
-        },
-        addGatewayDelegate: async (input: {
-          walletId: string;
-          tokenAddress: string;
-          gatewayWallet: string;
-          delegateAddress: string;
-          refId?: string;
-        }) => {
-          addDelegateCalls += 1;
-          assert.deepEqual(input, {
-            walletId: "circle-peer",
-            tokenAddress: "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
-            gatewayWallet: "0x0077777d7eba4688bdef3e311b846f25870a19b9",
-            delegateAddress: "0x3333333333333333333333333333333333333333",
-            refId: "gateway-delegate:peer-agent",
-          });
-          return {
-            transaction: { transaction: { id: "delegate-tx", state: "INITIATED" } },
-            transactionFinal: { transaction: { id: "delegate-tx", state: "COMPLETE" } },
-          };
-        },
-        withdrawFromGateway: async (input: {
-          walletId: string;
-          walletAddress: string;
-          signerWalletId?: string;
-          signerAddress?: string;
-          recipientAddress: string;
-          tokenAddress: string;
-          gatewayWallet: string;
-          gatewayMinter: string;
-          sourceDomain: number;
-          destinationDomain: number;
-          amountAtomic: string;
-          refId?: string;
-        }) => {
-          withdrawCalls += 1;
-          assert.deepEqual(input, {
-            walletId: "circle-peer",
-            walletAddress: "0x2222222222222222222222222222222222222222",
-            signerWalletId: "circle-peer-delegate",
-            signerAddress: "0x3333333333333333333333333333333333333333",
-            recipientAddress: "0x1111111111111111111111111111111111111111",
-            tokenAddress: "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
-            gatewayWallet: "0x0077777d7eba4688bdef3e311b846f25870a19b9",
-            gatewayMinter: "0x0022222abe238cc2c7bb1f21003f0a260052475b",
-            sourceDomain: 6,
-            destinationDomain: 6,
-            amountAtomic: "1250000",
-            refId: "escrow:test:release",
-          });
-          return {
-            gatewayTransferId: "gateway-transfer-1",
-            mint: { transaction: { id: "mint-tx", txHash: "0xmint", state: "INITIATED" } },
-            mintFinal: { transaction: { id: "mint-tx", txHash: "0xmint", state: "CONFIRMED" } },
-          };
+        getGatewayBalance: async () => ({
+          total: 2_000_000n,
+          available: 2_000_000n,
+          withdrawing: 0n,
+          withdrawable: 2_000_000n,
+          formattedTotal: "2",
+          formattedAvailable: "2",
+          formattedWithdrawing: "0",
+          formattedWithdrawable: "2",
+        }),
+        signTypedData: async () => {
+          throw new Error("signTypedData should not be called for non-EOA transfers");
         },
       } as unknown as CircleWalletService;
       const service = new AgentWalletService(
@@ -1253,28 +1316,26 @@ test("AgentWalletService uses an EOA delegate for SCA Gateway transfers", async 
         circleWalletService,
       );
 
-      const result = await service.transfer({
-        fromAgentId: "peer-agent",
-        toAgentId: "main-agent",
-        amountAtomic: "1250000",
-        asset: "USDC",
-        refId: "escrow:test:release",
-      });
-
-      assert.equal(result.transactionId, "mint-tx");
-      assert.equal(result.transactionHash, "0xmint");
-      assert.equal(result.state, "CONFIRMED");
-      assert.equal(result.mode, "gateway");
-      assert.equal(createDelegateCalls, 1);
-      assert.equal(addDelegateCalls, 1);
-      assert.equal(withdrawCalls, 1);
-
-      const state = JSON.parse(await readFile(statePath, "utf-8"));
-      const peerBinding = state.agentWalletBindings.find(
-        (binding: { agentId: string }) => binding.agentId === "peer-agent",
+      const error = await assertRejectsWithAppError(
+        () =>
+          service.transfer({
+            fromAgentId: "peer-agent",
+            toAgentId: "main-agent",
+            amountAtomic: "1250000",
+            asset: "USDC",
+            refId: "escrow:test:release",
+          }),
+        {
+          code: "VALIDATION_ERROR",
+          statusCode: 400,
+          message: /Gateway batching transfers require an EOA Circle wallet/,
+        },
       );
-      assert.equal(peerBinding.gatewayDelegateWalletId, "circle-peer-delegate");
-      assert.equal(peerBinding.gatewayDelegateAddress, "0x3333333333333333333333333333333333333333");
+      assert.deepEqual(error.details, {
+        accountType: "SCA",
+        circleWalletId: "circle-peer",
+        walletAddress: "0x2222222222222222222222222222222222222222",
+      });
     },
   );
 });
@@ -1716,6 +1777,7 @@ test("CircleWalletService creates deterministic mock wallets with exact repeatab
     blockchain: "BASE-SEPOLIA",
     walletAddress: first.walletAddress,
     mode: "mock",
+    accountType: "EOA",
   });
   assert.match(first.walletAddress, /^0x[0-9a-fA-F]{40}$/);
 });
@@ -1887,7 +1949,7 @@ test("CircleWalletService returns normalized successful Circle wallet shape", as
 
   assert.equal(requestBody?.walletSetId, "circle-wallet-set");
   assert.equal(requestBody?.entitySecretCiphertext, "ciphertext-for-entity-secret");
-  assert.equal(requestBody?.accountType, "SCA");
+  assert.equal(requestBody?.accountType, "EOA");
   assert.deepEqual(requestBody?.blockchains, ["BASE-SEPOLIA"]);
   assert.deepEqual(requestBody?.metadata, [
     {
@@ -1901,7 +1963,7 @@ test("CircleWalletService returns normalized successful Circle wallet shape", as
     blockchain: "BASE-SEPOLIA",
     walletAddress: "0x3333333333333333333333333333333333333333",
     mode: "circle",
-    accountType: "SCA",
+    accountType: "EOA",
   });
 });
 

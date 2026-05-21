@@ -168,7 +168,7 @@ export class CircleWalletService {
 
   async createWallet(
     agentName: string,
-    accountType: "SCA" | "EOA" = "SCA",
+    accountType: "SCA" | "EOA" = "EOA",
   ): Promise<CircleWalletCreateResult> {
     if (this.config.network.mockChain) {
       return {

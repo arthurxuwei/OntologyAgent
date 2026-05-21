@@ -263,7 +263,7 @@ function toStatusResult(wallet: CircleWalletRecord): AgentWalletStatusResult {
 }
 
 function isUsableWallet(wallet: Pick<CircleWalletRecord, "mode" | "accountType">): boolean {
-  return wallet.mode !== "circle" || wallet.accountType === "SCA";
+  return wallet.mode !== "circle" || wallet.accountType === "EOA";
 }
 
 function dedupeWallets(wallets: CircleWalletRecord[]): CircleWalletRecord[] {
