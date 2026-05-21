@@ -892,6 +892,9 @@ class LedgerServiceTests(unittest.TestCase):
 
     def test_wallet_webhook_records_pending_inbound_before_gateway_credit(self) -> None:
         class FakeWalletClient:
+            async def status(self, *, wallet_address, circle_wallet_id):
+                return {"balances": {"USDC": "2.5"}}
+
             async def gateway_deposit(self, request):
                 return {
                     "mode": "gateway_deposit",
@@ -968,6 +971,9 @@ class LedgerServiceTests(unittest.TestCase):
 
     def test_wallet_webhook_received_replay_completes_missing_entries(self) -> None:
         class FakeWalletClient:
+            async def status(self, *, wallet_address, circle_wallet_id):
+                return {"balances": {"USDC": "2.5"}}
+
             async def gateway_deposit(self, request):
                 return {
                     "mode": "gateway_deposit",
@@ -1753,6 +1759,7 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertEqual(response.json()["status"], "skipped")
         self.assertEqual(response.json()["reason"], "wallet_balance_not_above_gateway_threshold")
         self.assertEqual(fake_client.deposits, [])
+        self.assertEqual(main.get_store().load().entries, [])
 
     def test_circle_wallet_webhook_skips_inbound_before_completion(self) -> None:
         main.get_store().bind_account_wallet(
