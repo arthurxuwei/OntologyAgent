@@ -194,7 +194,7 @@ jobs:
           } | ssh -i ~/.ssh/lighthouse_key "${remote}" 'cat > /opt/chief/.env.deploy'
 
       - name: Clear stored agent wallet bindings
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.clear_agent_wallet_state }}
+        if: ${{ (github.event_name == 'workflow_dispatch' && inputs.clear_agent_wallet_state) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[clear-agent-wallet-state]')) }}
         env:
           LIGHTHOUSE_HOST: ${{ secrets.LIGHTHOUSE_HOST }}
           LIGHTHOUSE_USER: ${{ secrets.LIGHTHOUSE_USER }}
