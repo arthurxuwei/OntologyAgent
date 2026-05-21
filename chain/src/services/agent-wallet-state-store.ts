@@ -21,6 +21,8 @@ export type SaveAgentWalletBindingCommand = {
   walletAddress: string;
   mode: "mock" | "circle";
   accountType?: "SCA" | "EOA";
+  gatewayDelegateWalletId?: string | null;
+  gatewayDelegateAddress?: string | null;
 };
 
 export class AgentWalletStateStore {
@@ -184,6 +186,8 @@ export class AgentWalletStateStore {
     }
 
     const state = await this.read();
+    const gatewayDelegateWalletId = normalizeOptional(command.gatewayDelegateWalletId);
+    const gatewayDelegateAddress = normalizeOptional(command.gatewayDelegateAddress);
     const binding: AgentWalletBinding = {
       agentName: command.agentName.trim(),
       agentId: normalizeOptional(command.agentId),
@@ -195,6 +199,10 @@ export class AgentWalletStateStore {
       mode: command.mode,
       ...(command.accountType === "SCA" || command.accountType === "EOA"
         ? { accountType: command.accountType }
+        : {}),
+      ...(gatewayDelegateWalletId ? { gatewayDelegateWalletId } : {}),
+      ...(gatewayDelegateAddress
+        ? { gatewayDelegateAddress: normalizeAddress(gatewayDelegateAddress).toLowerCase() }
         : {}),
       updatedAt: new Date().toISOString(),
     };
@@ -343,6 +351,16 @@ function isAgentWalletBinding(value: unknown): value is AgentWalletBinding {
       value.accountType === undefined ||
       value.accountType === "SCA" ||
       value.accountType === "EOA"
+    ) &&
+    (
+      value.gatewayDelegateWalletId === undefined ||
+      typeof value.gatewayDelegateWalletId === "string" ||
+      value.gatewayDelegateWalletId === null
+    ) &&
+    (
+      value.gatewayDelegateAddress === undefined ||
+      typeof value.gatewayDelegateAddress === "string" ||
+      value.gatewayDelegateAddress === null
     ) &&
     typeof value.updatedAt === "string"
   );

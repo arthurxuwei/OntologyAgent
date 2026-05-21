@@ -111,6 +111,8 @@ export class AgentWalletService {
           walletAddress: existingBinding.walletAddress,
           mode: existingBinding.mode,
           accountType: existingBinding.accountType,
+          gatewayDelegateWalletId: existingBinding.gatewayDelegateWalletId,
+          gatewayDelegateAddress: existingBinding.gatewayDelegateAddress,
         });
         return {
           ...(await this.withLiveBalances(statusFromBinding(existingBinding))),
@@ -671,6 +673,54 @@ export class AgentWalletService {
       );
     }
 
+    if (input.source.accountType === "SCA") {
+      const delegate = await this.ensureGatewayDelegate(input.source, chainConfig);
+      const raw = await this.circleWalletService.withdrawFromGateway({
+        walletId: input.fromCircleWalletId,
+        walletAddress: fromAddress,
+        signerWalletId: delegate.gatewayDelegateWalletId,
+        signerAddress: delegate.gatewayDelegateAddress,
+        recipientAddress: toAddress,
+        tokenAddress,
+        gatewayWallet: verifyingContract,
+        gatewayMinter: normalizeRequestAddress(
+          chainConfig.gatewayMinter,
+          "Gateway minter contract",
+        ) as `0x${string}`,
+        sourceDomain: chainConfig.domain,
+        destinationDomain: chainConfig.domain,
+        amountAtomic: input.amountAtomic.toString(),
+        refId: input.command.refId,
+      });
+      const mintTransaction = extractTransaction(raw.mintFinal ?? raw.mint);
+      return {
+        fromAgentId: input.source.agentId ?? input.command.fromAgentId ?? null,
+        fromAgentName: input.source.agentName ?? input.command.fromAgentName ?? null,
+        fromCircleWalletId: input.fromCircleWalletId,
+        fromAddress,
+        toAgentId: input.destination?.agentId ?? input.command.toAgentId ?? null,
+        toAgentName: input.destination?.agentName ?? input.command.toAgentName ?? null,
+        toAddress,
+        asset: "USDC",
+        amount: input.amount,
+        amountEth: null,
+        amountAtomic: input.amountAtomic.toString(),
+        tokenId: null,
+        tokenAddress,
+        blockchain: "BASE-SEPOLIA",
+        transactionId: mintTransaction.id,
+        transactionHash: mintTransaction.txHash,
+        state: mintTransaction.state,
+        mode: "gateway",
+        raw: {
+          ...raw,
+          gatewayTransferId: raw.gatewayTransferId,
+          gatewayDelegateWalletId: delegate.gatewayDelegateWalletId,
+          gatewayDelegateAddress: delegate.gatewayDelegateAddress,
+        },
+      };
+    }
+
     const paymentRequirements = {
       scheme: "exact",
       network: this.config.x402.network,
@@ -743,6 +793,74 @@ export class AgentWalletService {
         paymentRequirements,
         paymentPayload,
       },
+    };
+  }
+
+  private async ensureGatewayDelegate(
+    binding: AgentWalletBinding,
+    chainConfig: ReturnType<typeof gatewayChainConfig>,
+  ): Promise<{
+    gatewayDelegateWalletId: string;
+    gatewayDelegateAddress: `0x${string}`;
+  }> {
+    const existingDelegateWalletId = firstNonEmpty(binding.gatewayDelegateWalletId);
+    const existingDelegateAddress = firstNonEmpty(binding.gatewayDelegateAddress);
+    if (existingDelegateWalletId && existingDelegateAddress) {
+      return {
+        gatewayDelegateWalletId: existingDelegateWalletId,
+        gatewayDelegateAddress: normalizeRequestAddress(
+          existingDelegateAddress,
+          "Gateway delegate address",
+        ) as `0x${string}`,
+      };
+    }
+    if (!binding.circleWalletId) {
+      throw new AppError(
+        "VALIDATION_ERROR",
+        "SCA Gateway transfers require a real Circle wallet id",
+        400,
+      );
+    }
+
+    const delegateWallet = await this.circleWalletService.createWallet(
+      `${binding.agentName} Gateway Delegate`,
+      "EOA",
+    );
+    const delegateAddress = normalizeRequestAddress(
+      delegateWallet.walletAddress,
+      "Gateway delegate address",
+    ) as `0x${string}`;
+    await this.circleWalletService.addGatewayDelegate({
+      walletId: binding.circleWalletId,
+      tokenAddress: normalizeRequestAddress(
+        this.config.x402.usdcAssetAddress,
+        "X402_USDC_ASSET_ADDRESS",
+      ),
+      gatewayWallet: normalizeRequestAddress(
+        chainConfig.gatewayWallet,
+        "Gateway verifying contract",
+      ),
+      delegateAddress,
+      refId: `gateway-delegate:${binding.agentId ?? binding.circleWalletId}`,
+    });
+
+    await this.stateStore.saveBinding({
+      agentName: binding.agentName,
+      agentId: binding.agentId ?? undefined,
+      email: binding.email ?? undefined,
+      circleWalletId: binding.circleWalletId,
+      circleWalletSetId: binding.circleWalletSetId,
+      blockchain: binding.blockchain,
+      walletAddress: binding.walletAddress,
+      mode: binding.mode,
+      accountType: binding.accountType,
+      gatewayDelegateWalletId: delegateWallet.circleWalletId,
+      gatewayDelegateAddress: delegateAddress,
+    });
+
+    return {
+      gatewayDelegateWalletId: delegateWallet.circleWalletId,
+      gatewayDelegateAddress: delegateAddress,
     };
   }
 

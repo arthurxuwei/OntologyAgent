@@ -171,6 +171,8 @@ export type AgentWalletBinding = {
   blockchain: "BASE-SEPOLIA";
   mode: "mock" | "circle";
   accountType?: "SCA" | "EOA";
+  gatewayDelegateWalletId?: string | null;
+  gatewayDelegateAddress?: string | null;
   updatedAt: string;
 };
 

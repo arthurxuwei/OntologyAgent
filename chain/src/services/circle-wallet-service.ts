@@ -162,7 +162,10 @@ export class CircleWalletService {
     this.client = options.client;
   }
 
-  async createWallet(agentName: string): Promise<CircleWalletCreateResult> {
+  async createWallet(
+    agentName: string,
+    accountType: "SCA" | "EOA" = "SCA",
+  ): Promise<CircleWalletCreateResult> {
     if (this.config.network.mockChain) {
       return {
         circleWalletId: `mock-circle-wallet-${slug(agentName)}`,
@@ -170,6 +173,7 @@ export class CircleWalletService {
         blockchain: "BASE-SEPOLIA",
         walletAddress: mockAddress(agentName),
         mode: "mock",
+        ...(accountType === "EOA" ? { accountType } : {}),
       };
     }
 
@@ -212,7 +216,7 @@ export class CircleWalletService {
         idempotencyKey: randomUUID(),
         walletSetId,
         entitySecretCiphertext,
-        accountType: "SCA",
+        accountType,
         blockchains: ["BASE-SEPOLIA"],
         count: 1,
         metadata: [
@@ -264,7 +268,7 @@ export class CircleWalletService {
       accountType:
         wallet.accountType === "SCA" || wallet.accountType === "EOA"
           ? wallet.accountType
-          : "SCA",
+          : accountType,
     };
   }
 
@@ -622,9 +626,73 @@ export class CircleWalletService {
     };
   }
 
+  async addGatewayDelegate(command: {
+    walletId: string;
+    tokenAddress: string;
+    gatewayWallet: string;
+    delegateAddress: string;
+    refId?: string;
+  }): Promise<{
+    transaction: unknown;
+    transactionFinal: unknown;
+  }> {
+    if (this.config.network.mockChain) {
+      const tx = mockTransactionHash(
+        "gateway-add-delegate",
+        command.walletId,
+        command.delegateAddress,
+      );
+      return {
+        transaction: { transaction: { id: tx, state: "COMPLETE" } },
+        transactionFinal: { transaction: { id: tx, state: "COMPLETE" } },
+      };
+    }
+
+    const client = this.requireClient();
+    if (typeof client.createContractExecutionTransaction !== "function") {
+      throw new AppError(
+        "CONFIG_ERROR",
+        "Circle contract execution support is required for Gateway delegate setup",
+        500,
+      );
+    }
+
+    const transaction = (
+      await client.createContractExecutionTransaction({
+        walletId: command.walletId,
+        contractAddress: normalizeAddress(command.gatewayWallet),
+        abiFunctionSignature: "addDelegate(address,address)",
+        abiParameters: [
+          normalizeAddress(command.tokenAddress),
+          normalizeAddress(command.delegateAddress),
+        ],
+        refId: appendRef(command.refId, "gateway-add-delegate"),
+        fee: {
+          type: "level",
+          config: {
+            feeLevel: "MEDIUM",
+          },
+        },
+      } as any)
+    ).data;
+    const circleTransaction = extractCircleTransaction(transaction);
+    if (!circleTransaction.id) {
+      throw new AppError(
+        "UPSTREAM_REQUEST_FAILED",
+        "Circle Gateway delegate response did not include a transaction id",
+        502,
+        transaction,
+      );
+    }
+    const transactionFinal = await this.waitForCircleTransaction(circleTransaction.id);
+    return { transaction, transactionFinal };
+  }
+
   async withdrawFromGateway(command: {
     walletId: string;
     walletAddress: string;
+    signerWalletId?: string;
+    signerAddress?: string;
     recipientAddress: string;
     tokenAddress: string;
     gatewayWallet: string;
@@ -671,7 +739,7 @@ export class CircleWalletService {
 
     const burnIntent = createGatewayBurnIntent(command);
     const signature = await this.signTypedData({
-      walletId: command.walletId,
+      walletId: command.signerWalletId ?? command.walletId,
       data: gatewayBurnIntentTypedData(burnIntent),
       memo: appendRef(command.refId, "gateway-withdraw-sign"),
     });
@@ -897,6 +965,7 @@ function stringifyJsonSafe(value: unknown): string {
 
 function createGatewayBurnIntent(command: {
   walletAddress: string;
+  signerAddress?: string;
   recipientAddress: string;
   tokenAddress: string;
   gatewayWallet: string;
@@ -918,7 +987,7 @@ function createGatewayBurnIntent(command: {
       destinationToken: addressToBytes32(command.tokenAddress),
       sourceDepositor: addressToBytes32(command.walletAddress),
       destinationRecipient: addressToBytes32(command.recipientAddress),
-      sourceSigner: addressToBytes32(command.walletAddress),
+      sourceSigner: addressToBytes32(command.signerAddress ?? command.walletAddress),
       destinationCaller: addressToBytes32("0x0000000000000000000000000000000000000000"),
       value: command.amountAtomic,
       salt: `0x${randomBytes(32).toString("hex")}`,

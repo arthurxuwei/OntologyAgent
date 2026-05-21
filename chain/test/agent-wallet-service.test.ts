@@ -1117,6 +1117,168 @@ test("AgentWalletService settles USDC transfer through Circle Gateway", async ()
   );
 });
 
+test("AgentWalletService uses an EOA delegate for SCA Gateway transfers", async () => {
+  await withTempStateFile(
+    {
+      wallets: [],
+      agentWalletBindings: [
+        {
+          agentName: "ZeroClaw Chief Agent",
+          agentId: "main-agent",
+          email: "main@example.com",
+          walletAddress: "0x1111111111111111111111111111111111111111",
+          circleWalletId: "circle-main",
+          circleWalletSetId: "circle-wallet-set",
+          blockchain: "BASE-SEPOLIA",
+          mode: "circle",
+          accountType: "SCA",
+          updatedAt: "2026-05-13T00:00:00.000Z",
+        },
+        {
+          agentName: "ZeroClaw EigenFlux Peer",
+          agentId: "peer-agent",
+          email: "peer@example.com",
+          walletAddress: "0x2222222222222222222222222222222222222222",
+          circleWalletId: "circle-peer",
+          circleWalletSetId: "circle-wallet-set",
+          blockchain: "BASE-SEPOLIA",
+          mode: "circle",
+          accountType: "SCA",
+          updatedAt: "2026-05-13T00:00:00.000Z",
+        },
+      ],
+    },
+    async (statePath) => {
+      const config = loadConfig({
+        CHAIN_MOCK: "false",
+        AGENT_WALLET_STATE_PATH: statePath,
+        CIRCLE_API_KEY: "circle-api-key",
+        CIRCLE_ENTITY_SECRET: "entity-secret",
+        CIRCLE_WALLET_SET_ID: "circle-wallet-set",
+        X402_FACILITATOR_URL: "https://gateway-api-testnet.circle.com",
+        X402_NETWORK: "eip155:84532",
+        X402_USDC_ASSET_ADDRESS: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+        CIRCLE_USDC_TOKEN_ID: "circle-usdc-token",
+      });
+      let createDelegateCalls = 0;
+      let addDelegateCalls = 0;
+      let withdrawCalls = 0;
+      const circleWalletService = {
+        getGatewayBalance: async (walletAddress: string, domain: number) => {
+          assert.equal(walletAddress, "0x2222222222222222222222222222222222222222");
+          assert.equal(domain, 6);
+          return {
+            total: 2_000_000n,
+            available: 2_000_000n,
+            withdrawing: 0n,
+            withdrawable: 2_000_000n,
+            formattedTotal: "2",
+            formattedAvailable: "2",
+            formattedWithdrawing: "0",
+            formattedWithdrawable: "2",
+          };
+        },
+        createWallet: async (agentName: string, accountType: "SCA" | "EOA") => {
+          createDelegateCalls += 1;
+          assert.equal(agentName, "ZeroClaw EigenFlux Peer Gateway Delegate");
+          assert.equal(accountType, "EOA");
+          return {
+            circleWalletId: "circle-peer-delegate",
+            circleWalletSetId: "circle-wallet-set",
+            blockchain: "BASE-SEPOLIA" as const,
+            walletAddress: "0x3333333333333333333333333333333333333333",
+            mode: "circle" as const,
+            accountType: "EOA" as const,
+          };
+        },
+        addGatewayDelegate: async (input: {
+          walletId: string;
+          tokenAddress: string;
+          gatewayWallet: string;
+          delegateAddress: string;
+          refId?: string;
+        }) => {
+          addDelegateCalls += 1;
+          assert.deepEqual(input, {
+            walletId: "circle-peer",
+            tokenAddress: "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+            gatewayWallet: "0x0077777d7eba4688bdef3e311b846f25870a19b9",
+            delegateAddress: "0x3333333333333333333333333333333333333333",
+            refId: "gateway-delegate:peer-agent",
+          });
+          return {
+            transaction: { transaction: { id: "delegate-tx", state: "INITIATED" } },
+            transactionFinal: { transaction: { id: "delegate-tx", state: "COMPLETE" } },
+          };
+        },
+        withdrawFromGateway: async (input: {
+          walletId: string;
+          walletAddress: string;
+          signerWalletId?: string;
+          signerAddress?: string;
+          recipientAddress: string;
+          tokenAddress: string;
+          gatewayWallet: string;
+          gatewayMinter: string;
+          sourceDomain: number;
+          destinationDomain: number;
+          amountAtomic: string;
+          refId?: string;
+        }) => {
+          withdrawCalls += 1;
+          assert.deepEqual(input, {
+            walletId: "circle-peer",
+            walletAddress: "0x2222222222222222222222222222222222222222",
+            signerWalletId: "circle-peer-delegate",
+            signerAddress: "0x3333333333333333333333333333333333333333",
+            recipientAddress: "0x1111111111111111111111111111111111111111",
+            tokenAddress: "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+            gatewayWallet: "0x0077777d7eba4688bdef3e311b846f25870a19b9",
+            gatewayMinter: "0x0022222abe238cc2c7bb1f21003f0a260052475b",
+            sourceDomain: 6,
+            destinationDomain: 6,
+            amountAtomic: "1250000",
+            refId: "escrow:test:release",
+          });
+          return {
+            gatewayTransferId: "gateway-transfer-1",
+            mint: { transaction: { id: "mint-tx", txHash: "0xmint", state: "INITIATED" } },
+            mintFinal: { transaction: { id: "mint-tx", txHash: "0xmint", state: "CONFIRMED" } },
+          };
+        },
+      } as unknown as CircleWalletService;
+      const service = new AgentWalletService(
+        config,
+        fakeX402FetchService(baseX402Result()),
+        circleWalletService,
+      );
+
+      const result = await service.transfer({
+        fromAgentId: "peer-agent",
+        toAgentId: "main-agent",
+        amountAtomic: "1250000",
+        asset: "USDC",
+        refId: "escrow:test:release",
+      });
+
+      assert.equal(result.transactionId, "mint-tx");
+      assert.equal(result.transactionHash, "0xmint");
+      assert.equal(result.state, "CONFIRMED");
+      assert.equal(result.mode, "gateway");
+      assert.equal(createDelegateCalls, 1);
+      assert.equal(addDelegateCalls, 1);
+      assert.equal(withdrawCalls, 1);
+
+      const state = JSON.parse(await readFile(statePath, "utf-8"));
+      const peerBinding = state.agentWalletBindings.find(
+        (binding: { agentId: string }) => binding.agentId === "peer-agent",
+      );
+      assert.equal(peerBinding.gatewayDelegateWalletId, "circle-peer-delegate");
+      assert.equal(peerBinding.gatewayDelegateAddress, "0x3333333333333333333333333333333333333333");
+    },
+  );
+});
+
 test("AgentWalletService withdraws USDC from Circle wallet without Gateway balance", async () => {
   await withTempStateFile(
     {
