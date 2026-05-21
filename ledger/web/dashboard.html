@@ -481,6 +481,12 @@ function TransactionRow({
   verified,
   role,
   agentTag,
+  gasFee,
+  gasFeeAtomic,
+  netAmount,
+  netAmountAtomic,
+  txHash,
+  network,
 }) {
   const t = window.useT();
   const sign = direction === 'out' ? '-' : '+';
@@ -494,6 +500,12 @@ function TransactionRow({
     refunded:          { label: 'REFUNDED',          color: 'var(--ink-secondary)',   bg: 'transparent' },
     pending_approval:  { label: 'PENDING APPROVAL',  color: 'var(--ink-inverse)',     bg: 'var(--accent-amber)' },
     onramp:            { label: 'ONRAMP',            color: 'var(--ink-secondary)',   bg: 'transparent' },
+    pending_settle:       { label: 'SETTLING',         color: 'var(--accent-amber)',    bg: 'transparent' },
+    pending_inbound_chain:{ label: 'CREDITING',        color: 'var(--accent-amber)',    bg: 'transparent' },
+    withdraw_submitted:   { label: 'SUBMITTED',        color: 'var(--ink-secondary)',   bg: 'transparent' },
+    credited:             { label: 'CREDITED',         color: 'var(--status-positive)', bg: 'transparent' },
+    withdrawn:            { label: 'WITHDRAWN',        color: 'var(--status-positive)', bg: 'transparent' },
+    failed:               { label: 'FAILED',           color: 'var(--status-negative)', bg: 'transparent' },
     // Phase 3 batch 1: added for Stage 9 (m4_n1__internal_expired) — quote
     // pill flips to EXPIRED with neutral ink-tertiary color + line-through.
     expired:           { label: 'EXPIRED',           color: 'var(--ink-tertiary)',    bg: 'transparent' },
@@ -509,6 +521,21 @@ function TransactionRow({
   : role === 'deposit'    ? t('dash.tx.role_deposit')
   : role === 'withdrawal' ? t('dash.tx.role_withdrawal')
   : null;
+
+  const atomicToUsdc = (value) => {
+    const parsed = Number(value || 0);
+    return Number.isFinite(parsed) ? parsed / 1000000 : 0;
+  };
+  const gasDisplay = gasFee !== undefined
+    ? gasFee
+    : gasFeeAtomic !== undefined
+      ? window.formatAmount(atomicToUsdc(gasFeeAtomic))
+      : null;
+  const netDisplay = netAmount !== undefined
+    ? netAmount
+    : netAmountAtomic !== undefined
+      ? window.formatAmount(atomicToUsdc(netAmountAtomic))
+      : null;
 
   return (
     <div
@@ -628,6 +655,19 @@ function TransactionRow({
             style={{ color: 'var(--status-positive)', whiteSpace: 'nowrap' }}
           >
             ✓ verified
+          </span>
+        )}
+        {role === 'withdrawal' && (gasDisplay || netDisplay) && (
+          <span className="font-mono text-[11px]" style={{ color: 'var(--ink-tertiary)' }}>
+            {gasDisplay ? `Gas ~$${gasDisplay}` : ''}
+            {gasDisplay && netDisplay ? ' · ' : ''}
+            {netDisplay ? `Net $${netDisplay}` : ''}
+            {(gasDisplay || netDisplay) && network ? ` · ${network}` : ''}
+          </span>
+        )}
+        {txHash && (
+          <span className="font-mono text-[11px]" style={{ color: 'var(--ink-tertiary)' }}>
+            {txHash}
           </span>
         )}
       </div>
@@ -4413,6 +4453,13 @@ window.MockStateToggle = MockStateToggle;
                 direction={tx.direction}
                 status={tx.status}
                 timestamp={tx.timestamp}
+                role={tx.role}
+                gasFee={tx.gasFee}
+                gasFeeAtomic={tx.gasFeeAtomic}
+                netAmount={tx.netAmount}
+                netAmountAtomic={tx.netAmountAtomic}
+                txHash={tx.txHash}
+                network={tx.network}
               />
             ))
           )}
@@ -4481,6 +4528,13 @@ window.MockStateToggle = MockStateToggle;
                 status={tx.status}
                 timestamp={tx.timestamp}
                 countdown={tx.countdown}
+                role={tx.role}
+                gasFee={tx.gasFee}
+                gasFeeAtomic={tx.gasFeeAtomic}
+                netAmount={tx.netAmount}
+                netAmountAtomic={tx.netAmountAtomic}
+                txHash={tx.txHash}
+                network={tx.network}
               />
             ))}
             <div
