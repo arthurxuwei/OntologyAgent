@@ -546,11 +546,13 @@ test("AgentWalletService includes live Circle balances when reusing a local wall
             withdrawing: 500000n,
             withdrawable: 500000n,
             pendingDeposits: 2250000n,
+            pendingBatch: 100000n,
             formattedTotal: "1.25",
             formattedAvailable: "0.75",
             formattedWithdrawing: "0.5",
             formattedWithdrawable: "0.5",
             formattedPendingDeposits: "2.25",
+            formattedPendingBatch: "0.1",
           };
         },
         createWallet: async () => {
@@ -573,11 +575,13 @@ test("AgentWalletService includes live Circle balances when reusing a local wall
         withdrawingAtomic: "500000",
         withdrawableAtomic: "500000",
         pendingDepositsAtomic: "2250000",
+        pendingBatchAtomic: "100000",
         formattedAvailable: "0.75",
         formattedTotal: "1.25",
         formattedWithdrawing: "0.5",
         formattedWithdrawable: "0.5",
         formattedPendingDeposits: "2.25",
+        formattedPendingBatch: "0.1",
       });
     },
   );
@@ -2082,6 +2086,7 @@ test("CircleWalletService returns Gateway balance and pending deposits", async (
                 withdrawing: "0.5",
                 withdrawable: "0.5",
                 pendingDeposits: "2.25",
+                pendingBatch: "0.1",
               },
             ],
           }),
@@ -2104,8 +2109,10 @@ test("CircleWalletService returns Gateway balance and pending deposits", async (
   assert.equal(result.withdrawable.toString(), "500000");
   assert.equal(result.withdrawing.toString(), "500000");
   assert.equal(result.pendingDeposits.toString(), "2250000");
+  assert.equal(result.pendingBatch.toString(), "100000");
   assert.equal(result.formattedAvailable, "1.25");
   assert.equal(result.formattedPendingDeposits, "2.25");
+  assert.equal(result.formattedPendingBatch, "0.1");
 });
 
 test("CircleWalletService serializes bigint typed data and adds EIP712Domain for Circle signing", async () => {

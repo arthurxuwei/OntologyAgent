@@ -853,11 +853,13 @@ export class AgentWalletService {
         withdrawingAtomic: gatewayBalance.withdrawing.toString(),
         withdrawableAtomic: gatewayBalance.withdrawable.toString(),
         pendingDepositsAtomic: gatewayBalance.pendingDeposits.toString(),
+        pendingBatchAtomic: gatewayBalance.pendingBatch.toString(),
         formattedAvailable: gatewayBalance.formattedAvailable,
         formattedTotal: gatewayBalance.formattedTotal,
         formattedWithdrawing: gatewayBalance.formattedWithdrawing,
         formattedWithdrawable: gatewayBalance.formattedWithdrawable,
         formattedPendingDeposits: gatewayBalance.formattedPendingDeposits,
+        formattedPendingBatch: gatewayBalance.formattedPendingBatch,
       };
     } catch (error) {
       result.gatewayBalanceError = error instanceof Error ? error.message : String(error);

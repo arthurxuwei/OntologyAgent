@@ -3326,6 +3326,7 @@ async def ledger_state_with_circle_balances() -> dict[str, Any]:
             formatted_withdrawing = gateway_balance.get("formattedWithdrawing")
             formatted_withdrawable = gateway_balance.get("formattedWithdrawable")
             formatted_pending_deposits = gateway_balance.get("formattedPendingDeposits")
+            formatted_pending_batch = gateway_balance.get("formattedPendingBatch")
             if isinstance(formatted_available, str):
                 account["gatewayUsdcAvailable"] = formatted_available
             if isinstance(formatted_total, str):
@@ -3336,12 +3337,15 @@ async def ledger_state_with_circle_balances() -> dict[str, Any]:
                 account["gatewayUsdcWithdrawable"] = formatted_withdrawable
             if isinstance(formatted_pending_deposits, str):
                 account["gatewayUsdcPendingDeposits"] = formatted_pending_deposits
+            if isinstance(formatted_pending_batch, str):
+                account["gatewayUsdcPendingBatch"] = formatted_pending_batch
             for source_key, target_key in {
                 "availableAtomic": "gatewayAvailableAtomic",
                 "totalAtomic": "gatewayTotalAtomic",
                 "withdrawingAtomic": "gatewayWithdrawingAtomic",
                 "withdrawableAtomic": "gatewayWithdrawableAtomic",
                 "pendingDepositsAtomic": "gatewayPendingDepositsAtomic",
+                "pendingBatchAtomic": "gatewayPendingBatchAtomic",
             }.items():
                 value = gateway_balance.get(source_key)
                 if isinstance(value, str):

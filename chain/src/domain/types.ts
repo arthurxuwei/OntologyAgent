@@ -189,11 +189,13 @@ export type AgentWalletStatusResult = {
     withdrawingAtomic: string;
     withdrawableAtomic: string;
     pendingDepositsAtomic: string;
+    pendingBatchAtomic: string;
     formattedAvailable: string;
     formattedTotal: string;
     formattedWithdrawing: string;
     formattedWithdrawable: string;
     formattedPendingDeposits: string;
+    formattedPendingBatch: string;
   };
   gatewayBalanceError?: string;
   mode: "mock" | "circle";

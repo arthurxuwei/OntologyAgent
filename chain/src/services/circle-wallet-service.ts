@@ -46,11 +46,13 @@ export type CircleGatewayBalance = {
   withdrawing: bigint;
   withdrawable: bigint;
   pendingDeposits: bigint;
+  pendingBatch: bigint;
   formattedTotal: string;
   formattedAvailable: string;
   formattedWithdrawing: string;
   formattedWithdrawable: string;
   formattedPendingDeposits: string;
+  formattedPendingBatch: string;
 };
 
 type GatewayPaymentPayload = {
@@ -456,6 +458,7 @@ export class CircleWalletService {
         withdrawing: 0n,
         withdrawable: available,
         pendingDeposits: 0n,
+        pendingBatch: 0n,
       });
     }
 
@@ -1206,7 +1209,11 @@ function extractGatewayBalance(payload: unknown): CircleGatewayBalance | null {
     payload,
   );
   const pendingDeposits = extractPendingGatewayDeposits(first, payload);
-  return formatGatewayBalance({ available, withdrawing, withdrawable, pendingDeposits });
+  const pendingBatch = parseGatewayAmount(
+    typeof first.pendingBatch === "string" ? first.pendingBatch : "0",
+    payload,
+  );
+  return formatGatewayBalance({ available, withdrawing, withdrawable, pendingDeposits, pendingBatch });
 }
 
 function extractPendingGatewayDeposits(balance: Record<string, unknown>, payload: unknown): bigint {
@@ -1262,6 +1269,7 @@ function formatGatewayBalance(parts: {
   withdrawing: bigint;
   withdrawable: bigint;
   pendingDeposits: bigint;
+  pendingBatch: bigint;
 }): CircleGatewayBalance {
   const total = parts.available + parts.withdrawing;
   return {
@@ -1270,11 +1278,13 @@ function formatGatewayBalance(parts: {
     withdrawing: parts.withdrawing,
     withdrawable: parts.withdrawable,
     pendingDeposits: parts.pendingDeposits,
+    pendingBatch: parts.pendingBatch,
     formattedTotal: formatUnits(total, 6),
     formattedAvailable: formatUnits(parts.available, 6),
     formattedWithdrawing: formatUnits(parts.withdrawing, 6),
     formattedWithdrawable: formatUnits(parts.withdrawable, 6),
     formattedPendingDeposits: formatUnits(parts.pendingDeposits, 6),
+    formattedPendingBatch: formatUnits(parts.pendingBatch, 6),
   };
 }
 

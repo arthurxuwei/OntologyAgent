@@ -553,6 +553,7 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertIn('{ label: "Gateway Available"', html)
         self.assertIn('{ label: "Gateway Withdrawable"', html)
         self.assertIn('{ label: "Pending Deposits Atomic"', html)
+        self.assertIn('{ label: "Pending Batch Atomic"', html)
 
     def test_dashboard_serves_user_dashboard_page(self) -> None:
         response = self.client.get("/dashboard")
@@ -971,7 +972,7 @@ class LedgerServiceTests(unittest.TestCase):
                 "global.fetch = async (url, options = {}) => {"
                 "fetchCalls.push({ url, method: options.method || 'GET', body: options.body || null });"
                 "if (url === '/admin/ledger/state') return { ok: true, json: async () => ({"
-                "accounts: [{ agentId: 'agent_buyer', email: 'buyer@example.com', walletAddress: '0x1111111111111111111111111111111111111111', circleUsdcBalance: '1.98', gatewayUsdcAvailable: '0.75', gatewayUsdcTotal: '1.25', gatewayUsdcWithdrawable: '0.5', gatewayUsdcWithdrawing: '0.5', gatewayUsdcPendingDeposits: '2.25', gatewayPendingDepositsAtomic: '2250000', availableAtomic: '5000000', lockedAtomic: '3000000' }],"
+                "accounts: [{ agentId: 'agent_buyer', email: 'buyer@example.com', walletAddress: '0x1111111111111111111111111111111111111111', circleUsdcBalance: '1.98', gatewayUsdcAvailable: '0.75', gatewayUsdcTotal: '1.25', gatewayUsdcWithdrawable: '0.5', gatewayUsdcWithdrawing: '0.5', gatewayUsdcPendingDeposits: '2.25', gatewayPendingDepositsAtomic: '2250000', gatewayUsdcPendingBatch: '0.1', gatewayPendingBatchAtomic: '100000', availableAtomic: '5000000', lockedAtomic: '3000000' }],"
                 "entries: [{ entryId: 'entry_1', entryType: 'credit', agentId: 'agent_buyer' }],"
                 "escrows: [{ escrowId: 'escrow_1', buyerAgentId: 'agent_buyer', sellerAgentId: 'agent_seller', amountAtomic: '3000000', status: 'locked' }],"
                 "onrampSessions: [{ sessionId: 'onramp_1', agentId: 'agentA', paymentAmount: '10.00', status: 'created', onrampUrl: 'https://pay.coinbase.com/buy/select-asset?sessionToken=abc' }]"
@@ -1027,6 +1028,10 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertIn("2.25", output["stateHtml"])
         self.assertIn("Pending Deposits Atomic", output["stateHtml"])
         self.assertIn("2,250,000", output["stateHtml"])
+        self.assertIn("Pending Batch", output["stateHtml"])
+        self.assertIn("0.1", output["stateHtml"])
+        self.assertIn("Pending Batch Atomic", output["stateHtml"])
+        self.assertIn("100,000", output["stateHtml"])
         self.assertIn("Ledger Locked", output["stateHtml"])
         self.assertIn("3,000,000", output["stateHtml"])
         self.assertIn("agent_buyer", output["stateHtml"])
@@ -1491,11 +1496,13 @@ class LedgerServiceTests(unittest.TestCase):
                         "withdrawableAtomic": "500000",
                         "withdrawingAtomic": "500000",
                         "pendingDepositsAtomic": "2250000",
+                        "pendingBatchAtomic": "100000",
                         "formattedAvailable": "0.75",
                         "formattedTotal": "1.25",
                         "formattedWithdrawable": "0.5",
                         "formattedWithdrawing": "0.5",
                         "formattedPendingDeposits": "2.25",
+                        "formattedPendingBatch": "0.1",
                     },
                 }
 
@@ -1516,6 +1523,8 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertEqual(state["accounts"][0]["gatewayUsdcWithdrawing"], "0.5")
         self.assertEqual(state["accounts"][0]["gatewayUsdcPendingDeposits"], "2.25")
         self.assertEqual(state["accounts"][0]["gatewayPendingDepositsAtomic"], "2250000")
+        self.assertEqual(state["accounts"][0]["gatewayUsdcPendingBatch"], "0.1")
+        self.assertEqual(state["accounts"][0]["gatewayPendingBatchAtomic"], "100000")
 
     def test_ledger_state_returns_no_data_without_agent_id(self) -> None:
         store = main.get_store()
