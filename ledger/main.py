@@ -3011,11 +3011,32 @@ def circle_webhook_event_record(
     )
 
 
+GATEWAY_DEPOSIT_LEDGER_METADATA_FIELDS = (
+    "depositTransactionId",
+    "depositState",
+    "approvalTransactionId",
+    "approvalState",
+    "gatewayBalance",
+    "mode",
+    "blockchain",
+)
+
+
+def gateway_deposit_ledger_metadata(result: Any) -> dict[str, Any]:
+    if not isinstance(result, dict):
+        return {}
+    return {
+        key: result[key]
+        for key in GATEWAY_DEPOSIT_LEDGER_METADATA_FIELDS
+        if key in result and result[key] is not None
+    }
+
+
 async def process_circle_wallet_webhook(payload: dict[str, Any]) -> dict[str, Any]:
     notification_id = circle_webhook_notification_id(payload)
     notification_type = circle_webhook_text(payload.get("notificationType")) or "unknown"
     existing = get_store().get_circle_webhook_event(notification_id)
-    if existing is not None and existing.status in {"processed", "skipped", "received"}:
+    if existing is not None and existing.status == "skipped":
         return {
             "status": "duplicate",
             "notificationId": notification_id,
@@ -3063,110 +3084,184 @@ async def process_circle_wallet_webhook(payload: dict[str, Any]) -> dict[str, An
     if account is None:
         return save_skipped("wallet_not_bound")
 
-    received = get_store().save_circle_webhook_event(
-        circle_webhook_event_record(
-            notification_id=notification_id,
-            notification_type=notification_type,
-            status="received",
-            payload=payload,
-            transaction_id=transaction_id,
-            agent_id=account.agentId,
-            wallet_address=wallet_address,
-            circle_wallet_id=circle_wallet_id,
-            amount_atomic=amount_atomic,
-            reason="gateway_deposit_started",
-        )
-    )
-    _pending_account, pending_entry = get_store().record_dashboard_event(
-        entry_type="pending_inbound",
-        agent_id=account.agentId,
-        reason="external top-up detected",
-        metadata={
+    gateway_ref_id = f"circle-webhook:{notification_id}"
+
+    def matching_entry(entry_type: str, dashboard_status: str) -> Optional[LedgerEntry]:
+        for entry in get_store().load().entries:
+            if entry.entryType != entry_type or entry.agentId != account.agentId:
+                continue
+            metadata = entry.metadata
+            if (
+                metadata.get("dashboardStatus") == dashboard_status
+                and metadata.get("notificationId") == notification_id
+            ):
+                return entry
+        return None
+
+    def pending_metadata() -> dict[str, Any]:
+        return {
             "dashboardStatus": "pending_inbound_chain",
             "amountAtomic": amount_atomic,
             "counterparty": "External wallet",
             "gatewayStage": "gateway_crediting",
             "txHash": transaction_id,
             "network": "Base",
-        },
-    )
+            "circleTransactionId": transaction_id,
+            "notificationId": notification_id,
+            "gatewayRefId": gateway_ref_id,
+        }
 
-    wallet_client = get_ledger_wallet_client()
-    try:
-        wallet_status = await wallet_client.status(
-            wallet_address=wallet_address,
-            circle_wallet_id=circle_wallet_id,
+    def credited_metadata(
+        pending_entry: LedgerEntry,
+        credited_amount_atomic: str,
+        result: Any,
+    ) -> dict[str, Any]:
+        return {
+            "dashboardStatus": "credited",
+            "amountAtomic": credited_amount_atomic,
+            "counterparty": "External wallet",
+            "linkedEntryId": pending_entry.entryId,
+            "txHash": transaction_id,
+            "network": "Base",
+            "circleTransactionId": transaction_id,
+            "notificationId": notification_id,
+            "gatewayRefId": gateway_ref_id,
+            **gateway_deposit_ledger_metadata(result),
+        }
+
+    pending_entry = matching_entry("pending_inbound", "pending_inbound_chain")
+    credited_entry = matching_entry("credit", "credited")
+    if existing is not None and existing.status == "processed" and pending_entry and credited_entry:
+        return {
+            "status": "duplicate",
+            "notificationId": notification_id,
+            "event": existing.model_dump(),
+        }
+
+    if existing is not None and existing.status in {"received", "processed"}:
+        received = existing
+    else:
+        received = get_store().save_circle_webhook_event(
+            circle_webhook_event_record(
+                notification_id=notification_id,
+                notification_type=notification_type,
+                status="received",
+                payload=payload,
+                transaction_id=transaction_id,
+                agent_id=account.agentId,
+                wallet_address=wallet_address,
+                circle_wallet_id=circle_wallet_id,
+                amount_atomic=amount_atomic,
+                reason="gateway_deposit_started",
+            )
         )
-        wallet_balance_atomic = circle_wallet_status_usdc_amount_atomic(wallet_status)
-        if wallet_balance_atomic is None:
-            raise RuntimeError("wallet status did not include a USDC balance")
-        if int(wallet_balance_atomic) <= GATEWAY_SWEEP_MIN_WALLET_BALANCE_ATOMIC:
-            skipped = get_store().save_circle_webhook_event(
+
+    gateway_deposit_result: dict[str, Any] = {}
+    credited_amount_atomic = (
+        existing.amountAtomic
+        if existing is not None and existing.amountAtomic is not None
+        else amount_atomic
+    )
+    if credited_entry is None and existing is not None and existing.status == "processed":
+        if pending_entry is None:
+            _pending_account, pending_entry = get_store().record_dashboard_event(
+                entry_type="pending_inbound",
+                agent_id=account.agentId,
+                reason="external top-up detected",
+                metadata=pending_metadata(),
+            )
+        gateway_deposit_result = existing.gatewayDepositResult
+    elif credited_entry is None:
+        wallet_client = get_ledger_wallet_client()
+        try:
+            wallet_status = await wallet_client.status(
+                wallet_address=wallet_address,
+                circle_wallet_id=circle_wallet_id,
+            )
+            wallet_balance_atomic = circle_wallet_status_usdc_amount_atomic(wallet_status)
+            if wallet_balance_atomic is None:
+                raise RuntimeError("wallet status did not include a USDC balance")
+            if int(wallet_balance_atomic) <= GATEWAY_SWEEP_MIN_WALLET_BALANCE_ATOMIC:
+                skipped = get_store().save_circle_webhook_event(
+                    received.model_copy(
+                        update={
+                            "status": "skipped",
+                            "reason": "wallet_balance_not_above_gateway_threshold",
+                            "gatewayDepositResult": {
+                                "walletBalanceAtomic": wallet_balance_atomic,
+                                "thresholdAtomic": str(GATEWAY_SWEEP_MIN_WALLET_BALANCE_ATOMIC),
+                            },
+                            "updatedAt": now_iso(),
+                        }
+                    )
+                )
+                return {
+                    "status": "skipped",
+                    "notificationId": notification_id,
+                    "reason": "wallet_balance_not_above_gateway_threshold",
+                    "event": skipped.model_dump(),
+                }
+
+            if pending_entry is None:
+                _pending_account, pending_entry = get_store().record_dashboard_event(
+                    entry_type="pending_inbound",
+                    agent_id=account.agentId,
+                    reason="external top-up detected",
+                    metadata=pending_metadata(),
+                )
+
+            result = await wallet_client.gateway_deposit(
+                GatewayDepositRequest(
+                    agentId=account.agentId,
+                    amountAtomic=wallet_balance_atomic,
+                    refId=gateway_ref_id,
+                )
+            )
+        except Exception as error:
+            get_store().save_circle_webhook_event(
                 received.model_copy(
                     update={
-                        "status": "skipped",
-                        "reason": "wallet_balance_not_above_gateway_threshold",
-                        "gatewayDepositResult": {
-                            "walletBalanceAtomic": wallet_balance_atomic,
-                            "thresholdAtomic": str(GATEWAY_SWEEP_MIN_WALLET_BALANCE_ATOMIC),
-                        },
+                        "status": "failed",
+                        "reason": "gateway_deposit_failed",
+                        "error": str(error),
                         "updatedAt": now_iso(),
                     }
                 )
             )
-            return {
-                "status": "skipped",
-                "notificationId": notification_id,
-                "reason": "wallet_balance_not_above_gateway_threshold",
-                "event": skipped.model_dump(),
-            }
+            raise RuntimeError(f"Gateway deposit failed: {error}") from error
+        gateway_deposit_result = result if isinstance(result, dict) else {}
+        credited_amount_atomic = wallet_balance_atomic
 
-        result = await wallet_client.gateway_deposit(
-            GatewayDepositRequest(
-                agentId=account.agentId,
-                amountAtomic=wallet_balance_atomic,
-                refId=f"circle-webhook:{notification_id}",
-            )
+    if pending_entry is None:
+        _pending_account, pending_entry = get_store().record_dashboard_event(
+            entry_type="pending_inbound",
+            agent_id=account.agentId,
+            reason="external top-up detected",
+            metadata=pending_metadata(),
         )
-    except Exception as error:
-        failed = get_store().save_circle_webhook_event(
-            received.model_copy(
-                update={
-                    "status": "failed",
-                    "reason": "gateway_deposit_failed",
-                    "error": str(error),
-                    "updatedAt": now_iso(),
-                }
-            )
+
+    credited_account = get_store().ensure_account(account.agentId)
+    if credited_entry is None:
+        credited_account, credited_entry = get_store().credit(
+            agent_id=account.agentId,
+            amount_atomic=credited_amount_atomic,
+            reason="Gateway Wallet credited",
+            metadata=credited_metadata(
+                pending_entry,
+                credited_amount_atomic,
+                gateway_deposit_result,
+            ),
         )
-        raise RuntimeError(f"Gateway deposit failed: {error}") from error
 
     processed = get_store().save_circle_webhook_event(
         received.model_copy(
             update={
                 "status": "processed",
                 "reason": "gateway_deposit_completed",
-                "gatewayDepositResult": result if isinstance(result, dict) else {},
+                "gatewayDepositResult": gateway_deposit_result,
                 "updatedAt": now_iso(),
             }
         )
-    )
-    gateway_deposit_result = result if isinstance(result, dict) else {}
-    credited_account, credited_entry = get_store().credit(
-        agent_id=account.agentId,
-        amount_atomic=amount_atomic,
-        reason="Gateway Wallet credited",
-        metadata={
-            "dashboardStatus": "credited",
-            "amountAtomic": amount_atomic,
-            "counterparty": "External wallet",
-            "linkedEntryId": pending_entry.entryId,
-            "txHash": transaction_id,
-            "network": "Base",
-            "depositTransactionId": gateway_deposit_result.get("depositTransactionId"),
-            "gatewayBalance": gateway_deposit_result.get("gatewayBalance"),
-            "gatewayDepositResult": gateway_deposit_result,
-        },
     )
     return {
         "status": "processed",

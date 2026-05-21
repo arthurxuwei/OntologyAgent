@@ -773,6 +773,7 @@ class LedgerServiceTests(unittest.TestCase):
                     "mode": "gateway_deposit",
                     "gatewayBalance": {"availableAtomic": request.amountAtomic},
                     "depositTransactionId": "deposit-tx",
+                    "raw": {"provider": "secret"},
                 }
 
         store = main.get_store()
@@ -814,9 +815,21 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertEqual(pending_entry.entryType, "pending_inbound")
         self.assertEqual(pending_entry.availableDeltaAtomic, "0")
         self.assertEqual(pending_entry.metadata["amountAtomic"], "2500000")
+        self.assertEqual(pending_entry.metadata["notificationId"], "notif_topup_1")
+        self.assertEqual(pending_entry.metadata["circleTransactionId"], "circle-tx-1")
+        self.assertEqual(
+            pending_entry.metadata["gatewayRefId"],
+            "circle-webhook:notif_topup_1",
+        )
         self.assertEqual(credited_entry.entryType, "credit")
         self.assertEqual(credited_entry.availableDeltaAtomic, "2500000")
         self.assertEqual(credited_entry.metadata["amountAtomic"], "2500000")
+        self.assertEqual(credited_entry.metadata["notificationId"], "notif_topup_1")
+        self.assertEqual(credited_entry.metadata["circleTransactionId"], "circle-tx-1")
+        self.assertEqual(
+            credited_entry.metadata["gatewayRefId"],
+            "circle-webhook:notif_topup_1",
+        )
         self.assertEqual(
             credited_entry.metadata["linkedEntryId"],
             pending_entry.entryId,
@@ -826,10 +839,129 @@ class LedgerServiceTests(unittest.TestCase):
             credited_entry.metadata["gatewayBalance"],
             {"availableAtomic": "2500000"},
         )
-        self.assertEqual(
-            credited_entry.metadata["gatewayDepositResult"]["depositTransactionId"],
-            "deposit-tx",
+        self.assertNotIn("gatewayDepositResult", credited_entry.metadata)
+        self.assertNotIn("raw", credited_entry.metadata)
+
+    def test_wallet_webhook_received_replay_completes_missing_entries(self) -> None:
+        class FakeWalletClient:
+            async def gateway_deposit(self, request):
+                return {
+                    "mode": "gateway_deposit",
+                    "gatewayBalance": {"availableAtomic": request.amountAtomic},
+                    "depositTransactionId": "deposit-recovered",
+                }
+
+        store = main.get_store()
+        store.bind_account_wallet(
+            agent_id="agent_topup",
+            agent_name="Topup Agent",
+            email="topup@example.com",
+            wallet_address="0x1111111111111111111111111111111111111111",
+            circle_wallet_id="circle-topup",
         )
+        payload = {
+            "notificationId": "notif_topup_received",
+            "notificationType": "transactions.inbound",
+            "notification": {
+                "id": "circle-tx-received",
+                "state": "COMPLETE",
+                "transactionType": "INBOUND",
+                "destinationAddress": "0x1111111111111111111111111111111111111111",
+                "walletId": "circle-topup",
+                "tokenSymbol": "USDC",
+                "amount": "2.5",
+            },
+        }
+        store.save_circle_webhook_event(
+            main.circle_webhook_event_record(
+                notification_id="notif_topup_received",
+                notification_type="transactions.inbound",
+                status="received",
+                payload=payload,
+                transaction_id="circle-tx-received",
+                agent_id="agent_topup",
+                wallet_address="0x1111111111111111111111111111111111111111",
+                circle_wallet_id="circle-topup",
+                amount_atomic="2500000",
+                reason="gateway_deposit_started",
+            )
+        )
+
+        with patch.object(main, "get_ledger_wallet_client", return_value=FakeWalletClient()):
+            result = asyncio.run(main.process_circle_wallet_webhook(payload))
+
+        self.assertEqual(result["status"], "processed")
+        entries = main.get_store().load().entries
+        self.assertEqual(
+            [entry.metadata.get("dashboardStatus") for entry in entries],
+            ["pending_inbound_chain", "credited"],
+        )
+        self.assertEqual(entries[1].metadata["linkedEntryId"], entries[0].entryId)
+        self.assertEqual(entries[1].metadata["depositTransactionId"], "deposit-recovered")
+        self.assertEqual(result["account"]["availableAtomic"], "2500000")
+
+    def test_wallet_webhook_processed_replay_completes_missing_credit(self) -> None:
+        class FakeWalletClient:
+            async def gateway_deposit(self, _request):
+                raise AssertionError("processed webhook replay must not call gateway_deposit")
+
+        store = main.get_store()
+        store.bind_account_wallet(
+            agent_id="agent_topup",
+            agent_name="Topup Agent",
+            email="topup@example.com",
+            wallet_address="0x1111111111111111111111111111111111111111",
+            circle_wallet_id="circle-topup",
+        )
+        payload = {
+            "notificationId": "notif_topup_processed",
+            "notificationType": "transactions.inbound",
+            "notification": {
+                "id": "circle-tx-processed",
+                "state": "COMPLETE",
+                "transactionType": "INBOUND",
+                "destinationAddress": "0x1111111111111111111111111111111111111111",
+                "walletId": "circle-topup",
+                "tokenSymbol": "USDC",
+                "amount": "2.5",
+            },
+        }
+        store.save_circle_webhook_event(
+            main.circle_webhook_event_record(
+                notification_id="notif_topup_processed",
+                notification_type="transactions.inbound",
+                status="processed",
+                payload=payload,
+                transaction_id="circle-tx-processed",
+                agent_id="agent_topup",
+                wallet_address="0x1111111111111111111111111111111111111111",
+                circle_wallet_id="circle-topup",
+                amount_atomic="2500000",
+                reason="gateway_deposit_completed",
+                gateway_deposit_result={
+                    "mode": "gateway_deposit",
+                    "gatewayBalance": {"availableAtomic": "2500000"},
+                    "depositTransactionId": "deposit-processed",
+                    "raw": {"provider": "secret"},
+                },
+            )
+        )
+
+        with patch.object(main, "get_ledger_wallet_client", return_value=FakeWalletClient()):
+            result = asyncio.run(main.process_circle_wallet_webhook(payload))
+            duplicate = asyncio.run(main.process_circle_wallet_webhook(payload))
+
+        self.assertEqual(result["status"], "processed")
+        self.assertEqual(duplicate["status"], "duplicate")
+        entries = main.get_store().load().entries
+        self.assertEqual(len(entries), 2)
+        self.assertEqual(entries[0].entryType, "pending_inbound")
+        self.assertEqual(entries[1].entryType, "credit")
+        self.assertEqual(entries[1].metadata["linkedEntryId"], entries[0].entryId)
+        self.assertEqual(entries[1].metadata["depositTransactionId"], "deposit-processed")
+        self.assertNotIn("raw", entries[1].metadata)
+        self.assertNotIn("gatewayDepositResult", entries[1].metadata)
+        self.assertEqual(result["account"]["availableAtomic"], "2500000")
 
     def test_dashboard_pending_settlement_balance_uses_escrow_amount_fallback(self) -> None:
         state = main.build_dashboard_data(
@@ -2655,10 +2787,27 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertEqual(detail["settlementRecord"]["status"], "failed")
         account = main.get_store().load().accounts[0]
         self.assertEqual(account.availableAtomic, "5000000")
-        settlement_records = main.get_store().load().settlementRecords
+        state = main.get_store().load()
+        settlement_records = state.settlementRecords
         self.assertEqual(len(settlement_records), 1)
         self.assertEqual(settlement_records[0].status, "failed")
-        failed_entry = main.get_store().load().entries[-1]
+        withdrawal_entries = [
+            entry for entry in state.entries if entry.entryType == "withdrawal"
+        ]
+        self.assertEqual(withdrawal_entries, [])
+        lifecycle_entries = [
+            entry
+            for entry in state.entries
+            if entry.entryType == "withdrawal_submitted"
+        ]
+        self.assertEqual(len(lifecycle_entries), 2)
+        submitted_entry, failed_entry = lifecycle_entries
+        self.assertEqual(submitted_entry.availableDeltaAtomic, "0")
+        self.assertEqual(failed_entry.availableDeltaAtomic, "0")
+        self.assertEqual(
+            failed_entry.metadata["linkedEntryId"],
+            submitted_entry.entryId,
+        )
         self.assertEqual(failed_entry.metadata["dashboardStatus"], "failed")
         self.assertEqual(
             failed_entry.metadata["destinationAddress"],
