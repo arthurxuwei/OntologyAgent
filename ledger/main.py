@@ -2036,6 +2036,34 @@ class OffchainLedgerStore:
 
         return self._mutate(mutate)
 
+    def withdrawal_submitted(
+        self,
+        *,
+        agent_id: str,
+        destination_address: str,
+        amount_atomic: str,
+        reason: Optional[str],
+        metadata: dict[str, Any],
+        withdrawal_id: str,
+    ) -> LedgerEntry:
+        amount = parse_positive_atomic(amount_atomic)
+        destination = normalize_evm_address(destination_address)
+        _account, entry = self.record_dashboard_event(
+            entry_type="withdrawal_submitted",
+            agent_id=agent_id,
+            reason=reason or "withdrawal submitted",
+            metadata={
+                **metadata,
+                "dashboardStatus": "withdraw_submitted",
+                "amountAtomic": str(amount),
+                "withdrawalId": withdrawal_id,
+                "destinationAddress": destination,
+                "counterparty": f"External · {short_address(destination)}",
+                "network": "Base",
+            },
+        )
+        return entry
+
     def create_escrow(
         self,
         *,
@@ -2653,7 +2681,6 @@ async def settle_withdrawal(
             ref_id=ref_id,
         )
     except LedgerSettlementError as error:
-        get_store().add_settlement_record(error.record)
         logger.error(
             "withdrawal_settlement_failed %s",
             json.dumps(
@@ -3050,6 +3077,19 @@ async def process_circle_wallet_webhook(payload: dict[str, Any]) -> dict[str, An
             reason="gateway_deposit_started",
         )
     )
+    _pending_account, pending_entry = get_store().record_dashboard_event(
+        entry_type="pending_inbound",
+        agent_id=account.agentId,
+        reason="external top-up detected",
+        metadata={
+            "dashboardStatus": "pending_inbound_chain",
+            "amountAtomic": amount_atomic,
+            "counterparty": "External wallet",
+            "gatewayStage": "gateway_crediting",
+            "txHash": transaction_id,
+            "network": "Base",
+        },
+    )
 
     wallet_client = get_ledger_wallet_client()
     try:
@@ -3111,10 +3151,26 @@ async def process_circle_wallet_webhook(payload: dict[str, Any]) -> dict[str, An
             }
         )
     )
+    credited_account, credited_entry = get_store().credit(
+        agent_id=account.agentId,
+        amount_atomic=amount_atomic,
+        reason="Gateway Wallet credited",
+        metadata={
+            "dashboardStatus": "credited",
+            "amountAtomic": amount_atomic,
+            "counterparty": "External wallet",
+            "linkedEntryId": pending_entry.entryId,
+            "txHash": transaction_id,
+            "network": "Base",
+        },
+    )
     return {
         "status": "processed",
         "notificationId": notification_id,
         "event": processed.model_dump(),
+        "pendingEntry": pending_entry.model_dump(),
+        "creditedEntry": credited_entry.model_dump(),
+        "account": credited_account.model_dump(),
     }
 
 
@@ -3629,18 +3685,62 @@ async def withdraw_agent_wallet(request: WithdrawalRequest) -> dict[str, Any]:
             owner_email=request.ownerEmail,
             available_atomic=available_atomic,
         )
-        settlement_record = await settle_withdrawal(
-            from_agent_id=request.agentId,
-            to_address=request.destinationAddress,
-            amount_atomic=request.amountAtomic,
-            ref_id=withdrawal_id,
-        )
-        account, entry = get_store().withdraw(
+        submitted_entry = get_store().withdrawal_submitted(
             agent_id=request.agentId,
             destination_address=request.destinationAddress,
             amount_atomic=request.amountAtomic,
             reason=request.reason,
             metadata=request.metadata,
+            withdrawal_id=withdrawal_id,
+        )
+        try:
+            settlement_record = await settle_withdrawal(
+                from_agent_id=request.agentId,
+                to_address=request.destinationAddress,
+                amount_atomic=request.amountAtomic,
+                ref_id=withdrawal_id,
+            )
+        except LedgerSettlementError as error:
+            _failed_account, _failed_entry = get_store().record_dashboard_event(
+                entry_type="withdrawal_submitted",
+                agent_id=request.agentId,
+                reason="withdrawal failed",
+                metadata={
+                    **request.metadata,
+                    "dashboardStatus": "failed",
+                    "amountAtomic": request.amountAtomic,
+                    "withdrawalId": withdrawal_id,
+                    "linkedEntryId": submitted_entry.entryId,
+                    "failureReason": error.record.error,
+                    "destinationAddress": request.destinationAddress,
+                    "network": "Base",
+                },
+            )
+            get_store().add_settlement_record(error.record)
+            raise http_error(error) from error
+        action_result = (
+            settlement_record.actionResult
+            if isinstance(settlement_record.actionResult, dict)
+            else {}
+        )
+        withdrawal_metadata = {
+            **request.metadata,
+            "dashboardStatus": "withdrawn",
+            "linkedEntryId": submitted_entry.entryId,
+            "txHash": settlement_record.transactionHash
+            or action_result.get("transactionHash"),
+            "gasFeeAtomic": action_result.get("estimatedGasFeeAtomic"),
+            "gasFee": action_result.get("estimatedGasFee"),
+            "netAmountAtomic": action_result.get("netAmountAtomic"),
+            "netAmount": action_result.get("netAmount"),
+            "network": "Base",
+        }
+        account, entry = get_store().withdraw(
+            agent_id=request.agentId,
+            destination_address=request.destinationAddress,
+            amount_atomic=request.amountAtomic,
+            reason=request.reason,
+            metadata=withdrawal_metadata,
             withdrawal_id=withdrawal_id,
             settlement_record_id=settlement_record.recordId,
             available_atomic=available_atomic,
@@ -3663,6 +3763,7 @@ async def withdraw_agent_wallet(request: WithdrawalRequest) -> dict[str, Any]:
         "withdrawalId": withdrawal_id,
         "account": account.model_dump(),
         "entry": entry.model_dump(),
+        "entries": [submitted_entry.model_dump(), entry.model_dump()],
         "settlementRecord": settlement_record.model_dump(),
         "chainRecord": chain_record.model_dump() if chain_record is not None else None,
         "route": route,

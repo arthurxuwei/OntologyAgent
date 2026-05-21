@@ -766,6 +766,52 @@ class LedgerServiceTests(unittest.TestCase):
 
                 self.assertEqual(tx["status"], "withdrawn")
 
+    def test_wallet_webhook_records_pending_inbound_before_gateway_credit(self) -> None:
+        class FakeWalletClient:
+            async def gateway_deposit(self, request):
+                return {
+                    "mode": "gateway_deposit",
+                    "gatewayBalance": {"availableAtomic": request.amountAtomic},
+                    "depositTransactionId": "deposit-tx",
+                }
+
+        store = main.get_store()
+        store.bind_account_wallet(
+            agent_id="agent_topup",
+            agent_name="Topup Agent",
+            email="topup@example.com",
+            wallet_address="0x1111111111111111111111111111111111111111",
+            circle_wallet_id="circle-topup",
+        )
+        payload = {
+            "notificationId": "notif_topup_1",
+            "notificationType": "transactions.inbound",
+            "notification": {
+                "id": "circle-tx-1",
+                "state": "COMPLETE",
+                "transactionType": "INBOUND",
+                "destinationAddress": "0x1111111111111111111111111111111111111111",
+                "walletId": "circle-topup",
+                "tokenSymbol": "USDC",
+                "amount": "2.5",
+            },
+        }
+
+        with patch.object(main, "get_ledger_wallet_client", return_value=FakeWalletClient()):
+            result = asyncio.run(main.process_circle_wallet_webhook(payload))
+
+        self.assertEqual(result["status"], "processed")
+        entries = main.get_store().load().entries
+        self.assertTrue(
+            any(
+                entry.metadata.get("dashboardStatus") == "pending_inbound_chain"
+                for entry in entries
+            )
+        )
+        self.assertTrue(
+            any(entry.metadata.get("dashboardStatus") == "credited" for entry in entries)
+        )
+
     def test_dashboard_pending_settlement_balance_uses_escrow_amount_fallback(self) -> None:
         state = main.build_dashboard_data(
             {
@@ -2479,6 +2525,66 @@ class LedgerServiceTests(unittest.TestCase):
         )
         self.assertTrue(payload["entry"]["metadata"]["counterparty"].startswith("External"))
         self.assertEqual(payload["route"]["method"], "circle_withdrawal")
+
+    def test_withdrawal_records_submitted_and_withdrawn_entries(self) -> None:
+        class FakeSettlementClient:
+            async def submit_withdrawal(self, **kwargs):
+                return main.LedgerSettlementRecord(
+                    recordId="settle_withdrawal",
+                    eventType="withdrawal",
+                    settlementHttpUrl="http://settlement.test",
+                    transferId=kwargs["ref_id"],
+                    fromAgentId=kwargs["from_agent_id"],
+                    toAddress=kwargs["to_address"],
+                    asset="USDC",
+                    amountAtomic=kwargs["amount_atomic"],
+                    status="submitted",
+                    transactionHash="0xwithdrawal",
+                    actionResult={
+                        "transactionHash": "0xwithdrawal",
+                        "estimatedGasFeeAtomic": "3000",
+                        "estimatedGasFee": "0.003",
+                        "netAmountAtomic": "997000",
+                        "netAmount": "0.997",
+                    },
+                    createdAt=main.now_iso(),
+                    updatedAt=main.now_iso(),
+                )
+
+        store = main.get_store()
+        store.bind_account_wallet(
+            agent_id="agent_withdraw",
+            agent_name="Withdraw Agent",
+            email="owner@example.com",
+            wallet_address="0x1111111111111111111111111111111111111111",
+            circle_wallet_id="circle-withdraw",
+        )
+        store.credit(
+            agent_id="agent_withdraw",
+            amount_atomic="2000000",
+            reason="seed",
+            metadata={},
+        )
+
+        with patch.object(main, "get_ledger_settlement_client", return_value=FakeSettlementClient()):
+            response = self.client.post(
+                "/ledger/withdrawals",
+                json={
+                    "agentId": "agent_withdraw",
+                    "ownerEmail": "owner@example.com",
+                    "destinationAddress": "0x2222222222222222222222222222222222222222",
+                    "amountAtomic": "1000000",
+                    "reason": "dashboard withdrawal",
+                    "metadata": {"source": "dashboard"},
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        statuses = [
+            entry["metadata"].get("dashboardStatus")
+            for entry in response.json()["entries"]
+        ]
+        self.assertEqual(statuses, ["withdraw_submitted", "withdrawn"])
 
     def test_withdrawal_failure_does_not_mutate_ledger_balance(self) -> None:
         class FakeSettlementClient:
