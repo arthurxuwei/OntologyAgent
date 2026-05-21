@@ -489,6 +489,7 @@
               { label: "Gateway Withdrawable", render: (account) => formatDecimal(account.gatewayUsdcWithdrawable) },
               { label: "Gateway Withdrawing", render: (account) => formatDecimal(account.gatewayUsdcWithdrawing) },
               { label: "Pending Deposits", render: (account) => account.gatewayBalanceError ? shortValue(account.gatewayBalanceError) : formatDecimal(account.gatewayUsdcPendingDeposits) },
+              { label: "Pending Deposits Atomic", render: (account) => formatAtomic(account.gatewayPendingDepositsAtomic) },
               { label: "Ledger Locked", render: (account) => formatAtomic(account.lockedAtomic) },
               { label: "Updated", render: (account) => formatDate(account.updatedAt || account.createdAt) },
             ],

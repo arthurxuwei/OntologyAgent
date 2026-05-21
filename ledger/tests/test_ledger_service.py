@@ -552,6 +552,7 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertIn("Pending Deposits", html)
         self.assertIn('{ label: "Gateway Available"', html)
         self.assertIn('{ label: "Gateway Withdrawable"', html)
+        self.assertIn('{ label: "Pending Deposits Atomic"', html)
 
     def test_dashboard_serves_user_dashboard_page(self) -> None:
         response = self.client.get("/dashboard")
@@ -970,7 +971,7 @@ class LedgerServiceTests(unittest.TestCase):
                 "global.fetch = async (url, options = {}) => {"
                 "fetchCalls.push({ url, method: options.method || 'GET', body: options.body || null });"
                 "if (url === '/admin/ledger/state') return { ok: true, json: async () => ({"
-                "accounts: [{ agentId: 'agent_buyer', email: 'buyer@example.com', walletAddress: '0x1111111111111111111111111111111111111111', circleUsdcBalance: '1.98', gatewayUsdcAvailable: '0.75', gatewayUsdcTotal: '1.25', gatewayUsdcWithdrawable: '0.5', gatewayUsdcWithdrawing: '0.5', gatewayUsdcPendingDeposits: '2.25', availableAtomic: '5000000', lockedAtomic: '3000000' }],"
+                "accounts: [{ agentId: 'agent_buyer', email: 'buyer@example.com', walletAddress: '0x1111111111111111111111111111111111111111', circleUsdcBalance: '1.98', gatewayUsdcAvailable: '0.75', gatewayUsdcTotal: '1.25', gatewayUsdcWithdrawable: '0.5', gatewayUsdcWithdrawing: '0.5', gatewayUsdcPendingDeposits: '2.25', gatewayPendingDepositsAtomic: '2250000', availableAtomic: '5000000', lockedAtomic: '3000000' }],"
                 "entries: [{ entryId: 'entry_1', entryType: 'credit', agentId: 'agent_buyer' }],"
                 "escrows: [{ escrowId: 'escrow_1', buyerAgentId: 'agent_buyer', sellerAgentId: 'agent_seller', amountAtomic: '3000000', status: 'locked' }],"
                 "onrampSessions: [{ sessionId: 'onramp_1', agentId: 'agentA', paymentAmount: '10.00', status: 'created', onrampUrl: 'https://pay.coinbase.com/buy/select-asset?sessionToken=abc' }]"
@@ -1024,6 +1025,8 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertIn("0.5", output["stateHtml"])
         self.assertIn("Pending Deposits", output["stateHtml"])
         self.assertIn("2.25", output["stateHtml"])
+        self.assertIn("Pending Deposits Atomic", output["stateHtml"])
+        self.assertIn("2,250,000", output["stateHtml"])
         self.assertIn("Ledger Locked", output["stateHtml"])
         self.assertIn("3,000,000", output["stateHtml"])
         self.assertIn("agent_buyer", output["stateHtml"])
