@@ -1147,6 +1147,54 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertEqual(state["circleWebhookEvents"][0]["status"], "processed")
         self.assertEqual(state["circleWebhookEvents"][0]["transactionId"], "tx-inbound-1")
 
+    def test_circle_wallet_webhook_sweeps_confirmed_inbound_usdc_to_gateway(self) -> None:
+        main.get_store().bind_account_wallet(
+            agent_id="agent_research",
+            agent_name="Research Agent",
+            email="agent@example.com",
+            wallet_address="0x1111111111111111111111111111111111111111",
+            circle_wallet_id="circle-wallet-1",
+        )
+
+        class FakeWalletClient:
+            def __init__(self) -> None:
+                self.requests = []
+
+            async def gateway_deposit(self, request):
+                self.requests.append(request)
+                return {
+                    "agentId": request.agentId,
+                    "amountAtomic": request.amountAtomic,
+                    "mode": "gateway_deposit",
+                }
+
+        fake_client = FakeWalletClient()
+        with patch.object(main, "get_ledger_wallet_client", return_value=fake_client):
+            response = self.client.post(
+                "/circle/webhooks/wallets",
+                json={
+                    "subscriptionId": "subscription-1",
+                    "notificationId": "notification-confirmed",
+                    "notificationType": "transactions.inbound",
+                    "notification": {
+                        "id": "tx-inbound-confirmed",
+                        "state": "CONFIRMED",
+                        "transactionType": "INBOUND",
+                        "walletId": "circle-wallet-1",
+                        "destinationAddress": "0x1111111111111111111111111111111111111111",
+                        "amounts": ["1"],
+                        "tokenId": "bdf128b4-827b-5267-8f9e-243694989b5f",
+                    },
+                    "timestamp": "2026-05-21T06:00:00Z",
+                    "version": 2,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "processed")
+        self.assertEqual(len(fake_client.requests), 1)
+        self.assertEqual(fake_client.requests[0].amountAtomic, "1000000")
+
     def test_circle_wallet_webhook_skips_inbound_before_completion(self) -> None:
         main.get_store().bind_account_wallet(
             agent_id="agent_research",
@@ -1169,7 +1217,7 @@ class LedgerServiceTests(unittest.TestCase):
                     "notificationType": "transactions.inbound",
                     "notification": {
                         "id": "tx-inbound-pending",
-                        "state": "CONFIRMED",
+                        "state": "PENDING",
                         "transactionType": "INBOUND",
                         "walletId": "circle-wallet-1",
                         "amounts": ["1.23"],

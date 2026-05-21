@@ -554,6 +554,50 @@ test("AgentWalletService includes live Circle balances when reusing a local wall
   );
 });
 
+test("AgentWalletService status resolves existing binding before mock fallback", async () => {
+  await withTempStateFile(
+    {
+      wallets: [],
+      agentWalletBindings: [
+        {
+          agentName: "Research Summary",
+          agentId: "agent_research",
+          email: "research@example.com",
+          circleWalletId: "circle-wallet-1",
+          circleWalletSetId: "circle-wallet-set",
+          blockchain: "BASE-SEPOLIA",
+          walletAddress: "0x3333333333333333333333333333333333333333",
+          mode: "circle",
+          accountType: "SCA",
+          updatedAt: "2026-05-21T00:00:00.000Z",
+        },
+      ],
+    },
+    async (statePath) => {
+      const config = liveCircleConfig({
+        AGENT_WALLET_STATE_PATH: statePath,
+      });
+      const circleWalletService = {
+        getWalletBalances: async (circleWalletId: string) => {
+          assert.equal(circleWalletId, "circle-wallet-1");
+          return { USDC: "3" };
+        },
+      } as unknown as CircleWalletService;
+      const service = new AgentWalletService(
+        config,
+        fakeX402FetchService(baseX402Result()),
+        circleWalletService,
+      );
+
+      const result = await service.status({ circleWalletId: "circle-wallet-1" });
+
+      assert.equal(result.mode, "circle");
+      assert.equal(result.circleWalletId, "circle-wallet-1");
+      assert.deepEqual(result.balances, { USDC: "3" });
+    },
+  );
+});
+
 test("AgentWalletService imports and assigns an unused Circle wallet before creating one", async () => {
   await withTempStateFile(
     {

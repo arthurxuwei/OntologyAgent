@@ -71,6 +71,39 @@ export class AgentWalletStateStore {
     return wallet ? toStatusResult(wallet) : null;
   }
 
+  async findBindingByWallet(command: {
+    walletAddress?: string;
+    circleWalletId?: string;
+  }): Promise<AgentWalletBinding | null> {
+    if (!this.statePath) {
+      return null;
+    }
+    const normalizedCircleWalletId = normalizeOptional(command.circleWalletId);
+    let normalizedAddress: string | null = null;
+    if (command.walletAddress !== undefined && command.walletAddress.trim()) {
+      normalizedAddress = normalizeAddress(command.walletAddress).toLowerCase();
+    }
+    if (!normalizedCircleWalletId && !normalizedAddress) {
+      return null;
+    }
+
+    const state = await this.read();
+    return (
+      (state.agentWalletBindings ?? []).find((entry) => {
+        if (!isUsableWallet(entry)) {
+          return false;
+        }
+        if (normalizedCircleWalletId && entry.circleWalletId === normalizedCircleWalletId) {
+          return true;
+        }
+        return (
+          normalizedAddress !== null &&
+          normalizeAddress(entry.walletAddress).toLowerCase() === normalizedAddress
+        );
+      }) ?? null
+    );
+  }
+
   async findUnboundWallet(): Promise<AgentWalletStatusResult | null> {
     if (!this.statePath) {
       return null;

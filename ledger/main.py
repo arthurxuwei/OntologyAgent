@@ -2735,7 +2735,7 @@ def circle_webhook_completed(notification: dict[str, Any]) -> bool:
         or circle_webhook_text(notification.get("status"))
         or ""
     ).upper()
-    return state in {"COMPLETE", "COMPLETED"}
+    return state in {"CONFIRMED", "COMPLETE", "COMPLETED"}
 
 
 def circle_webhook_inbound(payload: dict[str, Any], notification: dict[str, Any]) -> bool:

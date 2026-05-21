@@ -220,6 +220,13 @@ export class AgentWalletService {
     if (localWallet) {
       return this.withLiveBalances(localWallet);
     }
+    const boundWallet = await this.stateStore.findBindingByWallet({
+      walletAddress: command.walletAddress,
+      circleWalletId: command.circleWalletId,
+    });
+    if (boundWallet && isUsableBinding(boundWallet)) {
+      return this.withLiveBalances(statusFromBinding(boundWallet));
+    }
 
     return {
       circleWalletId: hasNonEmptyValue(command.circleWalletId)
