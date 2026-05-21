@@ -2097,6 +2097,102 @@ test("CircleWalletService serializes bigint typed data and adds EIP712Domain for
   assert.equal(signedData.message.value, "1000");
 });
 
+test("CircleWalletService retries Gateway transfer while delegate authorization is indexing", async () => {
+  let transferCalls = 0;
+  const sleepDelays: number[] = [];
+  const contractExecutions: unknown[] = [];
+  const service = new CircleWalletService(
+    liveCircleConfig({ X402_FACILITATOR_URL: "https://gateway-api-testnet.circle.com" }),
+    {
+      sleepImpl: async (ms: number) => {
+        sleepDelays.push(ms);
+      },
+      fetchImpl: async (input, init) => {
+        assert.equal(String(input), "https://gateway-api-testnet.circle.com/v1/transfer");
+        assert.equal(init?.method, "POST");
+        const requests = JSON.parse(String(init?.body));
+        assert.equal(requests[0].burnIntent.spec.sourceDepositor.toLowerCase(), `0x${"0".repeat(24)}${"22".repeat(20)}`);
+        assert.equal(requests[0].burnIntent.spec.sourceSigner.toLowerCase(), `0x${"0".repeat(24)}${"33".repeat(20)}`);
+        transferCalls += 1;
+        if (transferCalls < 3) {
+          return new Response(
+            JSON.stringify({
+              success: false,
+              message: "Signer is not authorized to spend funds from sourceDepositor",
+            }),
+            {
+              status: 400,
+              headers: { "Content-Type": "application/json" },
+            },
+          );
+        }
+        return new Response(
+          JSON.stringify({
+            success: true,
+            id: "gateway-transfer-1",
+            attestation: `0x${"44".repeat(64)}`,
+            signature: `0x${"55".repeat(65)}`,
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      },
+      client: {
+        createTransaction: async () => ({ data: {} }),
+        getTransaction: async () => ({
+          data: {
+            transaction: {
+              id: "circle-mint-tx",
+              txHash: "0xmint",
+              state: "COMPLETE",
+            },
+          },
+        }),
+        requestTestnetTokens: async () => ({}) as never,
+        signTypedData: async () => ({
+          data: {
+            signature: `0x${"66".repeat(65)}`,
+          },
+        }),
+        createContractExecutionTransaction: async (input: unknown) => {
+          contractExecutions.push(input);
+          return {
+            data: {
+              transaction: {
+                id: "circle-mint-tx",
+                txHash: "0xmint",
+                state: "INITIATED",
+              },
+            },
+          };
+        },
+      },
+    },
+  );
+
+  const result = await service.withdrawFromGateway({
+    walletId: "circle-peer",
+    walletAddress: "0x2222222222222222222222222222222222222222",
+    signerWalletId: "circle-peer-delegate",
+    signerAddress: "0x3333333333333333333333333333333333333333",
+    recipientAddress: "0x1111111111111111111111111111111111111111",
+    tokenAddress: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+    gatewayWallet: "0x0077777d7EBA4688BDeF3E311b846F25870A19B9",
+    gatewayMinter: "0x0022222ABE238Cc2C7Bb1f21003F0a260052475B",
+    sourceDomain: 6,
+    destinationDomain: 6,
+    amountAtomic: "10000",
+    refId: "gateway:test",
+  });
+
+  assert.equal(transferCalls, 3);
+  assert.deepEqual(sleepDelays, [5_000, 15_000]);
+  assert.equal(result.gatewayTransferId, "gateway-transfer-1");
+  assert.equal(contractExecutions.length, 1);
+});
+
 test("CircleWalletService wraps direct Gateway payloads with x402 envelope", async () => {
   const requests: Array<{ url: string; body: any }> = [];
   const originalFetch = globalThis.fetch;

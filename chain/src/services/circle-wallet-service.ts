@@ -94,6 +94,7 @@ export type CircleGatewaySettlementResult = {
 };
 
 const MAX_UINT256 = (2n ** 256n - 1n).toString();
+const GATEWAY_TRANSFER_AUTH_RETRY_DELAYS_MS = [5_000, 15_000, 30_000, 60_000] as const;
 
 type GatewayBurnIntent = {
   maxBlockHeight: string;
@@ -133,6 +134,7 @@ type CircleWalletClient =
 export type CircleWalletServiceOptions = {
   createEntitySecretCiphertext?: CircleEntitySecretCiphertextFactory;
   fetchImpl?: typeof fetch;
+  sleepImpl?: (ms: number) => Promise<void>;
   client?: CircleWalletClient | {
     createContractExecutionTransaction?(input: unknown): Promise<any>;
     createTransaction(input: unknown): Promise<any>;
@@ -145,6 +147,7 @@ export type CircleWalletServiceOptions = {
 export class CircleWalletService {
   private readonly createEntitySecretCiphertext?: CircleEntitySecretCiphertextFactory;
   private readonly fetchImpl: typeof fetch;
+  private readonly sleepImpl: (ms: number) => Promise<void>;
   private readonly client?: CircleWalletClient | {
     createContractExecutionTransaction?(input: unknown): Promise<any>;
     createTransaction(input: unknown): Promise<any>;
@@ -159,6 +162,7 @@ export class CircleWalletService {
   ) {
     this.createEntitySecretCiphertext = options.createEntitySecretCiphertext;
     this.fetchImpl = options.fetchImpl ?? fetch;
+    this.sleepImpl = options.sleepImpl ?? sleep;
     this.client = options.client;
   }
 
@@ -743,36 +747,62 @@ export class CircleWalletService {
       data: gatewayBurnIntentTypedData(burnIntent),
       memo: appendRef(command.refId, "gateway-withdraw-sign"),
     });
-    const gatewayResponse = await this.fetchImpl(
-      `${gatewayApiBaseUrl(this.config.x402.facilitatorUrl)}/transfer`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: stringifyJsonSafe([{ burnIntent, signature }]),
-      },
-    );
-    const gatewayTransfer = await parseJsonPayload(gatewayResponse);
-    if (!gatewayResponse.ok) {
+    const gatewayTransferBody = stringifyJsonSafe([{ burnIntent, signature }]);
+    let gatewayTransfer: unknown;
+    let gatewayTransferRecord: Record<string, unknown> | null = null;
+    let gatewayStatus = 0;
+    for (let attempt = 0; ; attempt += 1) {
+      const gatewayResponse = await this.fetchImpl(
+        `${gatewayApiBaseUrl(this.config.x402.facilitatorUrl)}/transfer`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: gatewayTransferBody,
+        },
+      );
+      gatewayStatus = gatewayResponse.status;
+      gatewayTransfer = await parseJsonPayload(gatewayResponse);
+      if (
+        gatewayResponse.ok &&
+        isRecord(gatewayTransfer) &&
+        gatewayTransfer.success !== false &&
+        !gatewayTransfer.error
+      ) {
+        gatewayTransferRecord = gatewayTransfer;
+        break;
+      }
+      const retryDelay = GATEWAY_TRANSFER_AUTH_RETRY_DELAYS_MS[attempt];
+      if (!isGatewaySignerAuthorizationLag(gatewayTransfer) || retryDelay === undefined) {
+        if (!gatewayResponse.ok) {
+          throw new AppError(
+            "UPSTREAM_REQUEST_FAILED",
+            `Circle Gateway transfer request failed with HTTP ${gatewayStatus}`,
+            gatewayStatus,
+            gatewayTransfer,
+          );
+        }
+        throw new AppError(
+          "UPSTREAM_REQUEST_FAILED",
+          `Circle Gateway transfer request failed: ${gatewayTransferErrorMessage(gatewayTransfer)}`,
+          424,
+          gatewayTransfer,
+        );
+      }
+      await this.sleepImpl(retryDelay);
+    }
+    if (!gatewayTransferRecord) {
       throw new AppError(
         "UPSTREAM_REQUEST_FAILED",
-        `Circle Gateway transfer request failed with HTTP ${gatewayResponse.status}`,
-        gatewayResponse.status,
+        "Circle Gateway transfer response was not accepted",
+        502,
         gatewayTransfer,
       );
     }
-    if (!isRecord(gatewayTransfer) || gatewayTransfer.success === false || gatewayTransfer.error) {
-      throw new AppError(
-        "UPSTREAM_REQUEST_FAILED",
-        `Circle Gateway transfer request failed: ${gatewayTransferErrorMessage(gatewayTransfer)}`,
-        424,
-        gatewayTransfer,
-      );
-    }
-    const attestation = typeof gatewayTransfer.attestation === "string"
-      ? gatewayTransfer.attestation
+    const attestation = typeof gatewayTransferRecord.attestation === "string"
+      ? gatewayTransferRecord.attestation
       : null;
-    const attestationSignature = typeof gatewayTransfer.signature === "string"
-      ? gatewayTransfer.signature
+    const attestationSignature = typeof gatewayTransferRecord.signature === "string"
+      ? gatewayTransferRecord.signature
       : null;
     if (!attestation || !attestationSignature) {
       throw new AppError(
@@ -811,8 +841,8 @@ export class CircleWalletService {
 
     return {
       burnIntent,
-      gatewayTransfer,
-      gatewayTransferId: typeof gatewayTransfer.id === "string" ? gatewayTransfer.id : null,
+      gatewayTransfer: gatewayTransferRecord,
+      gatewayTransferId: typeof gatewayTransferRecord.id === "string" ? gatewayTransferRecord.id : null,
       mint,
       mintFinal,
     };
@@ -1047,6 +1077,12 @@ function gatewayTransferErrorMessage(payload: unknown): string {
     return payload.error;
   }
   return stringifyJsonSafe(payload);
+}
+
+function isGatewaySignerAuthorizationLag(payload: unknown): boolean {
+  return gatewayTransferErrorMessage(payload)
+    .toLowerCase()
+    .includes("signer is not authorized to spend funds from sourcedepositor");
 }
 
 function addEip712DomainType(value: unknown): unknown {
