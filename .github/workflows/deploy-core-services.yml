@@ -11,12 +11,6 @@ on:
       - "ledger/**"
       - "chain/**"
   workflow_dispatch:
-    inputs:
-      clear_agent_wallet_state:
-        description: "Backup and clear stored agent wallet bindings/cache before restart"
-        required: false
-        default: false
-        type: boolean
 
 permissions:
   contents: read
@@ -192,37 +186,6 @@ jobs:
             if [ -n "${AUTH_SESSION_SECRET}" ]; then printf 'AUTH_SESSION_SECRET=%s\n' "${AUTH_SESSION_SECRET}"; fi
             if [ -n "${PUBLIC_BASE_URL}" ]; then printf 'PUBLIC_BASE_URL=%s\n' "${PUBLIC_BASE_URL}"; fi
           } | ssh -i ~/.ssh/lighthouse_key "${remote}" 'cat > /opt/chief/.env.deploy'
-
-      - name: Clear stored agent wallet bindings
-        if: ${{ (github.event_name == 'workflow_dispatch' && inputs.clear_agent_wallet_state) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[clear-agent-wallet-state]')) }}
-        env:
-          LIGHTHOUSE_HOST: ${{ secrets.LIGHTHOUSE_HOST }}
-          LIGHTHOUSE_USER: ${{ secrets.LIGHTHOUSE_USER }}
-        run: |
-          remote="${LIGHTHOUSE_USER}@${LIGHTHOUSE_HOST}"
-          ssh -i ~/.ssh/lighthouse_key "${remote}" '
-            set -eu
-            state="/opt/chief/data/chain/agent_wallet_state.json"
-            cd /opt/chief
-            compose_files="-f docker-compose.core.yml"
-            if [ -f .env.deploy ] && grep -q "^CLOUDFLARE_TUNNEL_TOKEN=." .env.deploy; then
-              compose_files="${compose_files} -f docker-compose.cloudflare.yml"
-            fi
-            sudo docker compose --env-file .env --env-file .env.deploy ${compose_files} stop circle || true
-            sudo install -d -o "$USER" -g "$USER" /opt/chief/data/chain
-            if [ -f "$state" ]; then
-              backup="${state}.bak.$(date -u +%Y%m%dT%H%M%SZ)"
-              sudo cp -a "$state" "$backup"
-              echo "Backed up agent wallet state to ${backup}"
-            else
-              echo "No existing agent wallet state file found"
-            fi
-            tmp="$(mktemp)"
-            printf "{\n  \"wallets\": [],\n  \"agentWalletBindings\": []\n}\n" > "$tmp"
-            sudo install -m 664 -o "$USER" -g "$USER" "$tmp" "$state"
-            rm -f "$tmp"
-            echo "Cleared stored agent wallet bindings and wallet cache at ${state}"
-          '
 
       - name: Pull and restart services
         env:
