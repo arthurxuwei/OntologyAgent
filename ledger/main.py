@@ -23,6 +23,9 @@ import jwt
 from chain_client import ChainHttpClient
 from circle_client import CircleHttpClient
 from cryptography.hazmat.primitives.asymmetric import ed25519
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
 from fastapi import Cookie, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, RedirectResponse
 from payment_router import PaymentIntent, route_payment_intent
@@ -38,6 +41,8 @@ DEFAULT_CHAIN_HTTP_URL = "http://chain:8091"
 DEFAULT_SETTLEMENT_HTTP_URL = "http://circle:8093"
 DEFAULT_WALLET_HTTP_URL = "http://circle:8093"
 DEFAULT_CHAIN_RECORDER_ADDRESS = "0x000000000000000000000000000000000000dEaD"
+DEFAULT_CIRCLE_PUBLIC_KEY_BASE_URL = "https://api.circle.com/v2/notifications/publicKey"
+DEFAULT_BASE_SEPOLIA_USDC_ASSET_ADDRESS = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
 GITHUB_AUTHORIZE_URL = "https://github.com/login/oauth/authorize"
 GITHUB_TOKEN_URL = "https://github.com/login/oauth/access_token"
 GITHUB_USER_URL = "https://api.github.com/user"
@@ -362,6 +367,25 @@ class OnrampEventRecord(BaseModel):
     createdAt: str
 
 
+class CircleWebhookEventRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    notificationId: str
+    notificationType: str
+    status: Literal["received", "processed", "skipped", "failed"]
+    transactionId: Optional[str] = None
+    agentId: Optional[str] = None
+    walletAddress: Optional[str] = None
+    circleWalletId: Optional[str] = None
+    amountAtomic: Optional[str] = None
+    reason: Optional[str] = None
+    gatewayDepositResult: dict[str, Any] = Field(default_factory=dict)
+    rawPayload: dict[str, Any] = Field(default_factory=dict)
+    error: Optional[str] = None
+    createdAt: str
+    updatedAt: str
+
+
 class LedgerState(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -370,6 +394,7 @@ class LedgerState(BaseModel):
     escrows: list[EscrowRecord] = Field(default_factory=list)
     onrampSessions: list[OnrampSessionRecord] = Field(default_factory=list)
     onrampEvents: list[OnrampEventRecord] = Field(default_factory=list)
+    circleWebhookEvents: list[CircleWebhookEventRecord] = Field(default_factory=list)
     chainRecords: list[LedgerChainRecord] = Field(default_factory=list)
     settlementRecords: list[LedgerSettlementRecord] = Field(default_factory=list)
 
@@ -645,6 +670,7 @@ def migrate_ledger_state_payload(raw: Any) -> Any:
         ("escrows", EscrowRecord),
         ("onrampSessions", OnrampSessionRecord),
         ("onrampEvents", OnrampEventRecord),
+        ("circleWebhookEvents", CircleWebhookEventRecord),
         ("chainRecords", LedgerChainRecord),
         ("settlementRecords", LedgerSettlementRecord),
     ):
@@ -883,6 +909,7 @@ def scoped_ledger_state(
         state["escrows"] = []
         state["onrampSessions"] = []
         state["onrampEvents"] = []
+        state["circleWebhookEvents"] = []
         state["chainRecords"] = []
         state["settlementRecords"] = []
         return state
@@ -966,6 +993,12 @@ def scoped_ledger_state(
         for event in ledger_state.get("onrampEvents", [])
         if isinstance(event, dict)
         and str(event.get("sessionId") or "").strip() in onramp_session_ids
+    ]
+    state["circleWebhookEvents"] = [
+        event
+        for event in ledger_state.get("circleWebhookEvents", [])
+        if isinstance(event, dict)
+        and str(event.get("agentId") or "").strip() == scoped_agent_id
     ]
     state["chainRecords"] = chain_records
     state["settlementRecords"] = settlement_records
@@ -1641,6 +1674,64 @@ class OffchainLedgerStore:
             updated = account.model_copy(update=updates)
             state.accounts[account_index] = updated
             return updated
+
+        return self._mutate(mutate)
+
+    def find_account_by_wallet(
+        self,
+        *,
+        wallet_address: Optional[str],
+        circle_wallet_id: Optional[str],
+    ) -> Optional[LedgerAccount]:
+        normalized_wallet_address = (
+            wallet_address.strip().lower()
+            if isinstance(wallet_address, str) and wallet_address.strip()
+            else None
+        )
+        normalized_circle_wallet_id = (
+            circle_wallet_id.strip()
+            if isinstance(circle_wallet_id, str) and circle_wallet_id.strip()
+            else None
+        )
+        if normalized_wallet_address is None and normalized_circle_wallet_id is None:
+            return None
+
+        state = self.load()
+        for account in state.accounts:
+            if (
+                normalized_circle_wallet_id is not None
+                and account.circleWalletId == normalized_circle_wallet_id
+            ):
+                return account
+            if (
+                normalized_wallet_address is not None
+                and isinstance(account.walletAddress, str)
+                and account.walletAddress.lower() == normalized_wallet_address
+            ):
+                return account
+        return None
+
+    def get_circle_webhook_event(
+        self,
+        notification_id: str,
+    ) -> Optional[CircleWebhookEventRecord]:
+        state = self.load()
+        for event in state.circleWebhookEvents:
+            if event.notificationId == notification_id:
+                return event
+        return None
+
+    def save_circle_webhook_event(
+        self,
+        event: CircleWebhookEventRecord,
+    ) -> CircleWebhookEventRecord:
+        def mutate(state: LedgerState) -> CircleWebhookEventRecord:
+            for index, existing in enumerate(state.circleWebhookEvents):
+                if existing.notificationId == event.notificationId:
+                    state.circleWebhookEvents[index] = event
+                    return event
+            state.circleWebhookEvents.append(event)
+            return event
 
         return self._mutate(mutate)
 
@@ -2543,6 +2634,328 @@ def http_error(error: Exception) -> HTTPException:
     return HTTPException(status_code=400, detail=str(error))
 
 
+def circle_webhook_signature_required() -> bool:
+    return os.getenv("CIRCLE_WEBHOOK_VERIFY_SIGNATURE", "true").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+
+
+async def verify_circle_webhook_signature(request: Request, body: bytes) -> None:
+    if not circle_webhook_signature_required():
+        return
+
+    signature = request.headers.get("x-circle-signature")
+    key_id = request.headers.get("x-circle-key-id")
+    if not signature or not key_id:
+        raise HTTPException(status_code=401, detail="Circle webhook signature headers are required")
+
+    api_key = os.getenv("CIRCLE_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="CIRCLE_API_KEY is required for Circle webhook verification")
+
+    base_url = os.getenv(
+        "CIRCLE_PUBLIC_KEY_BASE_URL",
+        DEFAULT_CIRCLE_PUBLIC_KEY_BASE_URL,
+    ).rstrip("/")
+    async with httpx.AsyncClient(timeout=10) as client:
+        response = await client.get(
+            f"{base_url}/{key_id}",
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+    if response.status_code >= 400:
+        raise HTTPException(status_code=401, detail="Circle webhook public key lookup failed")
+
+    payload = response.json()
+    payload_data = payload.get("data") if isinstance(payload, dict) else None
+    public_key_text = payload.get("publicKey") if isinstance(payload, dict) else None
+    if not isinstance(public_key_text, str) and isinstance(payload_data, dict):
+        public_key_text = payload_data.get("publicKey")
+    if not isinstance(public_key_text, str) or not public_key_text.strip():
+        raise HTTPException(status_code=401, detail="Circle webhook public key response is invalid")
+
+    try:
+        signature_bytes = base64.b64decode(signature, validate=True)
+    except Exception:
+        try:
+            signature_bytes = bytes.fromhex(signature.removeprefix("0x"))
+        except ValueError as error:
+            raise HTTPException(status_code=401, detail="Circle webhook signature is invalid") from error
+
+    try:
+        public_key_material = public_key_text.strip().encode("utf-8")
+        if public_key_text.strip().startswith("-----BEGIN"):
+            public_key = serialization.load_pem_public_key(public_key_material)
+        else:
+            public_key = serialization.load_der_public_key(
+                base64.b64decode(public_key_material, validate=True)
+            )
+        if not isinstance(public_key, ec.EllipticCurvePublicKey):
+            raise ValueError("Circle webhook public key must be an EC public key")
+        public_key.verify(signature_bytes, body, ec.ECDSA(hashes.SHA256()))
+    except (InvalidSignature, ValueError) as error:
+        raise HTTPException(status_code=401, detail="Circle webhook signature verification failed") from error
+
+
+def circle_webhook_text(value: Any) -> Optional[str]:
+    if isinstance(value, str):
+        text = value.strip()
+        return text or None
+    return None
+
+
+def circle_webhook_nested_text(data: dict[str, Any], *keys: str) -> Optional[str]:
+    current: Any = data
+    for key in keys:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return circle_webhook_text(current)
+
+
+def circle_webhook_notification_id(payload: dict[str, Any]) -> str:
+    notification_id = circle_webhook_text(payload.get("notificationId"))
+    if notification_id is None:
+        raise ValueError("notificationId is required")
+    return notification_id
+
+
+def circle_webhook_notification(payload: dict[str, Any]) -> dict[str, Any]:
+    notification = payload.get("notification")
+    if isinstance(notification, dict):
+        return notification
+    return {}
+
+
+def circle_webhook_completed(notification: dict[str, Any]) -> bool:
+    state = (
+        circle_webhook_text(notification.get("state"))
+        or circle_webhook_text(notification.get("status"))
+        or ""
+    ).upper()
+    return state in {"COMPLETE", "COMPLETED"}
+
+
+def circle_webhook_inbound(payload: dict[str, Any], notification: dict[str, Any]) -> bool:
+    notification_type = (circle_webhook_text(payload.get("notificationType")) or "").lower()
+    transaction_type = (
+        circle_webhook_text(notification.get("transactionType"))
+        or circle_webhook_text(notification.get("type"))
+        or ""
+    ).upper()
+    return notification_type == "transactions.inbound" or transaction_type == "INBOUND"
+
+
+def circle_webhook_transaction_id(notification: dict[str, Any]) -> Optional[str]:
+    return (
+        circle_webhook_text(notification.get("id"))
+        or circle_webhook_text(notification.get("transactionId"))
+    )
+
+
+def circle_webhook_wallet_id(notification: dict[str, Any]) -> Optional[str]:
+    return (
+        circle_webhook_text(notification.get("walletId"))
+        or circle_webhook_text(notification.get("destinationWalletId"))
+        or circle_webhook_nested_text(notification, "destination", "walletId")
+    )
+
+
+def circle_webhook_wallet_address(notification: dict[str, Any]) -> Optional[str]:
+    return (
+        circle_webhook_text(notification.get("destinationAddress"))
+        or circle_webhook_text(notification.get("toAddress"))
+        or circle_webhook_text(notification.get("walletAddress"))
+        or circle_webhook_nested_text(notification, "destination", "address")
+    )
+
+
+def circle_webhook_usdc_amount_atomic(notification: dict[str, Any]) -> Optional[str]:
+    symbol = (
+        circle_webhook_text(notification.get("tokenSymbol"))
+        or circle_webhook_text(notification.get("symbol"))
+        or circle_webhook_text(notification.get("currency"))
+        or circle_webhook_nested_text(notification, "token", "symbol")
+        or circle_webhook_nested_text(notification, "asset", "symbol")
+    )
+    if symbol is not None and symbol.upper() != DEFAULT_ASSET:
+        return None
+
+    token_address = (
+        circle_webhook_text(notification.get("contractAddress"))
+        or circle_webhook_text(notification.get("tokenAddress"))
+        or circle_webhook_text(notification.get("assetAddress"))
+        or circle_webhook_nested_text(notification, "token", "contractAddress")
+        or circle_webhook_nested_text(notification, "asset", "address")
+    )
+    expected_token_address = os.getenv(
+        "X402_USDC_ASSET_ADDRESS",
+        DEFAULT_BASE_SEPOLIA_USDC_ASSET_ADDRESS,
+    ).lower()
+    if token_address is not None and token_address.lower() != expected_token_address:
+        return None
+
+    amounts = notification.get("amounts")
+    amount_value: Any = None
+    if isinstance(amounts, list) and amounts:
+        first_amount = amounts[0]
+        if isinstance(first_amount, dict):
+            amount_value = first_amount.get("amount") or first_amount.get("value")
+        else:
+            amount_value = first_amount
+    if amount_value is None:
+        amount_value = notification.get("amount")
+    if isinstance(amount_value, dict):
+        amount_value = amount_value.get("amount") or amount_value.get("value")
+
+    amount_atomic = decimal_usdc_to_atomic_string(amount_value)
+    if amount_atomic is None or parse_nonnegative_atomic(amount_atomic) <= 0:
+        return None
+    return amount_atomic
+
+
+def circle_webhook_event_record(
+    *,
+    notification_id: str,
+    notification_type: str,
+    status: Literal["received", "processed", "skipped", "failed"],
+    payload: dict[str, Any],
+    transaction_id: Optional[str] = None,
+    agent_id: Optional[str] = None,
+    wallet_address: Optional[str] = None,
+    circle_wallet_id: Optional[str] = None,
+    amount_atomic: Optional[str] = None,
+    reason: Optional[str] = None,
+    gateway_deposit_result: Optional[dict[str, Any]] = None,
+    error: Optional[str] = None,
+) -> CircleWebhookEventRecord:
+    existing = get_store().get_circle_webhook_event(notification_id)
+    current = now_iso()
+    return CircleWebhookEventRecord(
+        notificationId=notification_id,
+        notificationType=notification_type,
+        status=status,
+        transactionId=transaction_id,
+        agentId=agent_id,
+        walletAddress=wallet_address,
+        circleWalletId=circle_wallet_id,
+        amountAtomic=amount_atomic,
+        reason=reason,
+        gatewayDepositResult=gateway_deposit_result or {},
+        rawPayload=payload,
+        error=error,
+        createdAt=existing.createdAt if existing is not None else current,
+        updatedAt=current,
+    )
+
+
+async def process_circle_wallet_webhook(payload: dict[str, Any]) -> dict[str, Any]:
+    notification_id = circle_webhook_notification_id(payload)
+    notification_type = circle_webhook_text(payload.get("notificationType")) or "unknown"
+    existing = get_store().get_circle_webhook_event(notification_id)
+    if existing is not None and existing.status in {"processed", "skipped", "received"}:
+        return {
+            "status": "duplicate",
+            "notificationId": notification_id,
+            "event": existing.model_dump(),
+        }
+
+    notification = circle_webhook_notification(payload)
+    transaction_id = circle_webhook_transaction_id(notification)
+    wallet_address = circle_webhook_wallet_address(notification)
+    circle_wallet_id = circle_webhook_wallet_id(notification)
+
+    def save_skipped(reason: str) -> dict[str, Any]:
+        matched_account = get_store().find_account_by_wallet(
+            wallet_address=wallet_address,
+            circle_wallet_id=circle_wallet_id,
+        )
+        event = get_store().save_circle_webhook_event(
+            circle_webhook_event_record(
+                notification_id=notification_id,
+                notification_type=notification_type,
+                status="skipped",
+                payload=payload,
+                transaction_id=transaction_id,
+                agent_id=matched_account.agentId if matched_account is not None else None,
+                wallet_address=wallet_address,
+                circle_wallet_id=circle_wallet_id,
+                reason=reason,
+            )
+        )
+        return {"status": "skipped", "notificationId": notification_id, "reason": reason, "event": event.model_dump()}
+
+    if not circle_webhook_inbound(payload, notification):
+        return save_skipped("not_inbound_transaction")
+    if not circle_webhook_completed(notification):
+        return save_skipped("transaction_not_complete")
+
+    amount_atomic = circle_webhook_usdc_amount_atomic(notification)
+    if amount_atomic is None:
+        return save_skipped("not_positive_usdc")
+
+    account = get_store().find_account_by_wallet(
+        wallet_address=wallet_address,
+        circle_wallet_id=circle_wallet_id,
+    )
+    if account is None:
+        return save_skipped("wallet_not_bound")
+
+    received = get_store().save_circle_webhook_event(
+        circle_webhook_event_record(
+            notification_id=notification_id,
+            notification_type=notification_type,
+            status="received",
+            payload=payload,
+            transaction_id=transaction_id,
+            agent_id=account.agentId,
+            wallet_address=wallet_address,
+            circle_wallet_id=circle_wallet_id,
+            amount_atomic=amount_atomic,
+            reason="gateway_deposit_started",
+        )
+    )
+
+    try:
+        result = await get_ledger_wallet_client().gateway_deposit(
+            GatewayDepositRequest(
+                agentId=account.agentId,
+                amountAtomic=amount_atomic,
+                refId=f"circle-webhook:{notification_id}",
+            )
+        )
+    except Exception as error:
+        failed = get_store().save_circle_webhook_event(
+            received.model_copy(
+                update={
+                    "status": "failed",
+                    "reason": "gateway_deposit_failed",
+                    "error": str(error),
+                    "updatedAt": now_iso(),
+                }
+            )
+        )
+        raise RuntimeError(f"Gateway deposit failed: {error}") from error
+
+    processed = get_store().save_circle_webhook_event(
+        received.model_copy(
+            update={
+                "status": "processed",
+                "reason": "gateway_deposit_completed",
+                "gatewayDepositResult": result if isinstance(result, dict) else {},
+                "updatedAt": now_iso(),
+            }
+        )
+    )
+    return {
+        "status": "processed",
+        "notificationId": notification_id,
+        "event": processed.model_dump(),
+    }
+
+
 @app.get("/health")
 def health() -> dict[str, Any]:
     return {"service": "chief-ledger", "status": "ok"}
@@ -2935,6 +3348,27 @@ async def credit_agent_balance(agent_id: str, request: CreditRequest) -> dict[st
 async def create_or_reuse_agent_wallet(request: AgentWalletRequest) -> dict[str, Any]:
     try:
         return await get_or_create_agent_wallet(request)
+    except (ValueError, RuntimeError) as error:
+        raise http_error(error) from error
+
+
+@app.head("/circle/webhooks/wallets")
+async def circle_wallet_webhook_head() -> Response:
+    return Response(status_code=200)
+
+
+@app.post("/circle/webhooks/wallets")
+async def circle_wallet_webhook(request: Request) -> dict[str, Any]:
+    body = await request.body()
+    await verify_circle_webhook_signature(request, body)
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except json.JSONDecodeError as error:
+        raise HTTPException(status_code=400, detail="Circle webhook payload must be JSON") from error
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Circle webhook payload must be an object")
+    try:
+        return await process_circle_wallet_webhook(payload)
     except (ValueError, RuntimeError) as error:
         raise http_error(error) from error
 

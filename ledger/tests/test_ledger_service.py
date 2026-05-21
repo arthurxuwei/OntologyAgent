@@ -10,6 +10,8 @@ from unittest.mock import patch
 
 import jwt
 import httpx
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from fastapi.testclient import TestClient
 
@@ -37,11 +39,14 @@ class LedgerServiceTests(unittest.TestCase):
         )
         self.previous_settlement_http_url = os.environ.get("LEDGER_SETTLEMENT_HTTP_URL")
         self.previous_wallet_http_url = os.environ.get("LEDGER_WALLET_HTTP_URL")
+        self.previous_circle_api_key = os.environ.get("CIRCLE_API_KEY")
+        self.previous_circle_webhook_verify = os.environ.get("CIRCLE_WEBHOOK_VERIFY_SIGNATURE")
         os.environ["LEDGER_STATE_PATH"] = self.state_path
         os.environ["LEDGER_CHAIN_RECORD_ENABLED"] = "false"
         os.environ["LEDGER_CHAIN_RECORD_REQUIRE_SUCCESS"] = "false"
         os.environ["LEDGER_SETTLEMENT_ENABLED"] = "false"
         os.environ["LEDGER_SETTLEMENT_REQUIRE_SUCCESS"] = "false"
+        os.environ["CIRCLE_WEBHOOK_VERIFY_SIGNATURE"] = "false"
         main.get_store.cache_clear()
         main.get_coinbase_onramp_client.cache_clear()
         main.get_chain_recorder.cache_clear()
@@ -75,6 +80,8 @@ class LedgerServiceTests(unittest.TestCase):
         )
         self._restore_env("LEDGER_SETTLEMENT_HTTP_URL", self.previous_settlement_http_url)
         self._restore_env("LEDGER_WALLET_HTTP_URL", self.previous_wallet_http_url)
+        self._restore_env("CIRCLE_API_KEY", self.previous_circle_api_key)
+        self._restore_env("CIRCLE_WEBHOOK_VERIFY_SIGNATURE", self.previous_circle_webhook_verify)
         main.get_coinbase_onramp_client.cache_clear()
         main.get_chain_recorder.cache_clear()
         main.get_ledger_settlement_client.cache_clear()
@@ -1080,6 +1087,191 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertEqual(payload["amountAtomic"], "1000")
         self.assertEqual(payload["mode"], "gateway_deposit")
         self.assertEqual(fake_client.request.refId, "deposit:test")
+
+    def test_circle_wallet_webhook_sweeps_inbound_usdc_to_gateway_once(self) -> None:
+        main.get_store().bind_account_wallet(
+            agent_id="agent_research",
+            agent_name="Research Agent",
+            email="agent@example.com",
+            wallet_address="0x1111111111111111111111111111111111111111",
+            circle_wallet_id="circle-wallet-1",
+        )
+
+        class FakeWalletClient:
+            def __init__(self) -> None:
+                self.requests = []
+
+            async def gateway_deposit(self, request):
+                self.requests.append(request)
+                return {
+                    "agentId": request.agentId,
+                    "amountAtomic": request.amountAtomic,
+                    "mode": "gateway_deposit",
+                    "gatewayBalance": {"availableAtomic": request.amountAtomic},
+                }
+
+        fake_client = FakeWalletClient()
+        payload = {
+            "subscriptionId": "subscription-1",
+            "notificationId": "notification-1",
+            "notificationType": "transactions.inbound",
+            "notification": {
+                "id": "tx-inbound-1",
+                "state": "COMPLETE",
+                "transactionType": "INBOUND",
+                "walletId": "circle-wallet-1",
+                "destinationAddress": "0x1111111111111111111111111111111111111111",
+                "amounts": ["1.23"],
+                "tokenSymbol": "USDC",
+                "contractAddress": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+            },
+            "timestamp": "2026-05-21T06:00:00Z",
+            "version": 2,
+        }
+
+        with patch.object(main, "get_ledger_wallet_client", return_value=fake_client):
+            first = self.client.post("/circle/webhooks/wallets", json=payload)
+            second = self.client.post("/circle/webhooks/wallets", json=payload)
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(first.json()["status"], "processed")
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(second.json()["status"], "duplicate")
+        self.assertEqual(len(fake_client.requests), 1)
+        self.assertEqual(fake_client.requests[0].agentId, "agent_research")
+        self.assertEqual(fake_client.requests[0].amountAtomic, "1230000")
+        self.assertEqual(fake_client.requests[0].refId, "circle-webhook:notification-1")
+
+        state = self.client.get("/ledger/state?agentId=agent_research").json()
+        self.assertEqual(len(state["circleWebhookEvents"]), 1)
+        self.assertEqual(state["circleWebhookEvents"][0]["status"], "processed")
+        self.assertEqual(state["circleWebhookEvents"][0]["transactionId"], "tx-inbound-1")
+
+    def test_circle_wallet_webhook_skips_inbound_before_completion(self) -> None:
+        main.get_store().bind_account_wallet(
+            agent_id="agent_research",
+            agent_name="Research Agent",
+            email="agent@example.com",
+            wallet_address="0x1111111111111111111111111111111111111111",
+            circle_wallet_id="circle-wallet-1",
+        )
+
+        class FakeWalletClient:
+            async def gateway_deposit(self, request):
+                raise AssertionError("pending inbound transaction must not be swept")
+
+        with patch.object(main, "get_ledger_wallet_client", return_value=FakeWalletClient()):
+            response = self.client.post(
+                "/circle/webhooks/wallets",
+                json={
+                    "subscriptionId": "subscription-1",
+                    "notificationId": "notification-pending",
+                    "notificationType": "transactions.inbound",
+                    "notification": {
+                        "id": "tx-inbound-pending",
+                        "state": "CONFIRMED",
+                        "transactionType": "INBOUND",
+                        "walletId": "circle-wallet-1",
+                        "amounts": ["1.23"],
+                        "tokenSymbol": "USDC",
+                    },
+                    "timestamp": "2026-05-21T06:00:00Z",
+                    "version": 2,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "skipped")
+        state = self.client.get("/ledger/state?agentId=agent_research").json()
+        self.assertEqual(state["circleWebhookEvents"][0]["status"], "skipped")
+
+    def test_circle_wallet_webhook_accepts_valid_circle_signature(self) -> None:
+        os.environ["CIRCLE_WEBHOOK_VERIFY_SIGNATURE"] = "true"
+        os.environ["CIRCLE_API_KEY"] = "test-circle-api-key"
+        main.get_store().bind_account_wallet(
+            agent_id="agent_research",
+            agent_name="Research Agent",
+            email="agent@example.com",
+            wallet_address="0x1111111111111111111111111111111111111111",
+            circle_wallet_id="circle-wallet-1",
+        )
+
+        private_key = ec.generate_private_key(ec.SECP256R1())
+        public_key_der = private_key.public_key().public_bytes(
+            encoding=serialization.Encoding.DER,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        body = json.dumps(
+            {
+                "subscriptionId": "subscription-1",
+                "notificationId": "notification-signed",
+                "notificationType": "transactions.inbound",
+                "notification": {
+                    "id": "tx-inbound-signed",
+                    "state": "COMPLETE",
+                    "transactionType": "INBOUND",
+                    "walletId": "circle-wallet-1",
+                    "amounts": ["0.5"],
+                    "tokenSymbol": "USDC",
+                },
+                "timestamp": "2026-05-21T06:00:00Z",
+                "version": 2,
+            },
+            separators=(",", ":"),
+        )
+        signature = private_key.sign(body.encode("utf-8"), ec.ECDSA(hashes.SHA256()))
+
+        class FakeResponse:
+            status_code = 200
+
+            def json(self):
+                return {
+                    "data": {
+                        "id": "public-key-1",
+                        "algorithm": "ECDSA_SHA_256",
+                        "publicKey": base64.b64encode(public_key_der).decode("ascii"),
+                    }
+                }
+
+        class FakeAsyncClient:
+            def __init__(self, *args, **kwargs) -> None:
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb) -> None:
+                pass
+
+            async def get(self, url, headers):
+                self.url = url
+                self.headers = headers
+                return FakeResponse()
+
+        class FakeWalletClient:
+            async def gateway_deposit(self, request):
+                return {
+                    "agentId": request.agentId,
+                    "amountAtomic": request.amountAtomic,
+                    "mode": "gateway_deposit",
+                }
+
+        with (
+            patch.object(main.httpx, "AsyncClient", FakeAsyncClient),
+            patch.object(main, "get_ledger_wallet_client", return_value=FakeWalletClient()),
+        ):
+            response = self.client.post(
+                "/circle/webhooks/wallets",
+                content=body,
+                headers={
+                    "content-type": "application/json",
+                    "x-circle-key-id": "public-key-1",
+                    "x-circle-signature": base64.b64encode(signature).decode("ascii"),
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "processed")
 
     def test_gateway_withdrawal_proxies_to_wallet_rest_client(self) -> None:
         class FakeWalletClient:
