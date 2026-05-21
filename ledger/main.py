@@ -3151,6 +3151,7 @@ async def process_circle_wallet_webhook(payload: dict[str, Any]) -> dict[str, An
             }
         )
     )
+    gateway_deposit_result = result if isinstance(result, dict) else {}
     credited_account, credited_entry = get_store().credit(
         agent_id=account.agentId,
         amount_atomic=amount_atomic,
@@ -3162,6 +3163,9 @@ async def process_circle_wallet_webhook(payload: dict[str, Any]) -> dict[str, An
             "linkedEntryId": pending_entry.entryId,
             "txHash": transaction_id,
             "network": "Base",
+            "depositTransactionId": gateway_deposit_result.get("depositTransactionId"),
+            "gatewayBalance": gateway_deposit_result.get("gatewayBalance"),
+            "gatewayDepositResult": gateway_deposit_result,
         },
     )
     return {
@@ -3701,6 +3705,7 @@ async def withdraw_agent_wallet(request: WithdrawalRequest) -> dict[str, Any]:
                 ref_id=withdrawal_id,
             )
         except LedgerSettlementError as error:
+            destination_address = normalize_evm_address(request.destinationAddress)
             _failed_account, _failed_entry = get_store().record_dashboard_event(
                 entry_type="withdrawal_submitted",
                 agent_id=request.agentId,
@@ -3712,7 +3717,7 @@ async def withdraw_agent_wallet(request: WithdrawalRequest) -> dict[str, Any]:
                     "withdrawalId": withdrawal_id,
                     "linkedEntryId": submitted_entry.entryId,
                     "failureReason": error.record.error,
-                    "destinationAddress": request.destinationAddress,
+                    "destinationAddress": destination_address,
                     "network": "Base",
                 },
             )

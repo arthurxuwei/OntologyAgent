@@ -799,17 +799,36 @@ class LedgerServiceTests(unittest.TestCase):
 
         with patch.object(main, "get_ledger_wallet_client", return_value=FakeWalletClient()):
             result = asyncio.run(main.process_circle_wallet_webhook(payload))
+            duplicate = asyncio.run(main.process_circle_wallet_webhook(payload))
 
         self.assertEqual(result["status"], "processed")
+        self.assertEqual(result["account"]["availableAtomic"], "2500000")
+        self.assertEqual(duplicate["status"], "duplicate")
         entries = main.get_store().load().entries
-        self.assertTrue(
-            any(
-                entry.metadata.get("dashboardStatus") == "pending_inbound_chain"
-                for entry in entries
-            )
+        self.assertEqual(len(entries), 2)
+        self.assertEqual(
+            [entry.metadata.get("dashboardStatus") for entry in entries],
+            ["pending_inbound_chain", "credited"],
         )
-        self.assertTrue(
-            any(entry.metadata.get("dashboardStatus") == "credited" for entry in entries)
+        pending_entry, credited_entry = entries
+        self.assertEqual(pending_entry.entryType, "pending_inbound")
+        self.assertEqual(pending_entry.availableDeltaAtomic, "0")
+        self.assertEqual(pending_entry.metadata["amountAtomic"], "2500000")
+        self.assertEqual(credited_entry.entryType, "credit")
+        self.assertEqual(credited_entry.availableDeltaAtomic, "2500000")
+        self.assertEqual(credited_entry.metadata["amountAtomic"], "2500000")
+        self.assertEqual(
+            credited_entry.metadata["linkedEntryId"],
+            pending_entry.entryId,
+        )
+        self.assertEqual(credited_entry.metadata["depositTransactionId"], "deposit-tx")
+        self.assertEqual(
+            credited_entry.metadata["gatewayBalance"],
+            {"availableAtomic": "2500000"},
+        )
+        self.assertEqual(
+            credited_entry.metadata["gatewayDepositResult"]["depositTransactionId"],
+            "deposit-tx",
         )
 
     def test_dashboard_pending_settlement_balance_uses_escrow_amount_fallback(self) -> None:
@@ -2639,6 +2658,12 @@ class LedgerServiceTests(unittest.TestCase):
         settlement_records = main.get_store().load().settlementRecords
         self.assertEqual(len(settlement_records), 1)
         self.assertEqual(settlement_records[0].status, "failed")
+        failed_entry = main.get_store().load().entries[-1]
+        self.assertEqual(failed_entry.metadata["dashboardStatus"], "failed")
+        self.assertEqual(
+            failed_entry.metadata["destinationAddress"],
+            main.normalize_evm_address("0x2222222222222222222222222222222222222222"),
+        )
 
     def test_agent_transfer_requires_real_circle_settlement_enabled(self) -> None:
         self.client.post(
