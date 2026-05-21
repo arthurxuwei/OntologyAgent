@@ -149,6 +149,7 @@ export type AgentWalletInitResult = {
   blockchain: "BASE-SEPOLIA";
   walletAddress: string;
   mode: "mock" | "circle";
+  accountType?: "SCA" | "EOA";
   binding?: AgentWalletBinding;
 };
 
@@ -169,6 +170,7 @@ export type AgentWalletBinding = {
   circleWalletSetId: string | null;
   blockchain: "BASE-SEPOLIA";
   mode: "mock" | "circle";
+  accountType?: "SCA" | "EOA";
   updatedAt: string;
 };
 
@@ -180,6 +182,7 @@ export type AgentWalletStatusResult = {
   status: "created" | "available" | "unknown";
   balances: Record<string, string>;
   mode: "mock" | "circle";
+  accountType?: "SCA" | "EOA";
 };
 
 export type AgentWalletGetOrCreateResult =

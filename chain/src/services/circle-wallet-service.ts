@@ -16,6 +16,7 @@ export type CircleWalletCreateResult = {
   blockchain: "BASE-SEPOLIA";
   walletAddress: string;
   mode: "mock" | "circle";
+  accountType?: "SCA" | "EOA";
 };
 
 export type CircleWalletRecord = Omit<CircleWalletCreateResult, "circleWalletSetId"> & {
@@ -258,6 +259,10 @@ export class CircleWalletService {
       blockchain: "BASE-SEPOLIA",
       walletAddress,
       mode: "circle",
+      accountType:
+        wallet.accountType === "SCA" || wallet.accountType === "EOA"
+          ? wallet.accountType
+          : "SCA",
     };
   }
 

@@ -20,6 +20,7 @@ export type SaveAgentWalletBindingCommand = {
   blockchain: "BASE-SEPOLIA";
   walletAddress: string;
   mode: "mock" | "circle";
+  accountType?: "SCA" | "EOA";
 };
 
 export class AgentWalletStateStore {
@@ -32,7 +33,9 @@ export class AgentWalletStateStore {
     }
 
     const state = await this.read();
-    const wallet = state.wallets.find((entry) => normalizeAgentName(entry.agentName) === normalized);
+    const wallet = state.wallets.find(
+      (entry) => isUsableWallet(entry) && normalizeAgentName(entry.agentName) === normalized,
+    );
     return wallet ? toStatusResult(wallet) : null;
   }
 
@@ -51,6 +54,9 @@ export class AgentWalletStateStore {
 
     const state = await this.read();
     const wallet = state.wallets.find((entry) => {
+      if (!isUsableWallet(entry)) {
+        return false;
+      }
       if (normalizedCircleWalletId && entry.circleWalletId === normalizedCircleWalletId) {
         return true;
       }
@@ -88,7 +94,7 @@ export class AgentWalletStateStore {
       if (boundWalletAddresses.has(normalizeAddress(entry.walletAddress).toLowerCase())) {
         return false;
       }
-      if (entry.mode === "circle" && entry.accountType !== "SCA") {
+      if (!isUsableWallet(entry)) {
         return false;
       }
       return true;
@@ -154,6 +160,9 @@ export class AgentWalletStateStore {
       circleWalletSetId: normalizeOptional(command.circleWalletSetId),
       blockchain: command.blockchain,
       mode: command.mode,
+      ...(command.accountType === "SCA" || command.accountType === "EOA"
+        ? { accountType: command.accountType }
+        : {}),
       updatedAt: new Date().toISOString(),
     };
     state.agentWalletBindings = upsertBinding(state.agentWalletBindings ?? [], binding);
@@ -206,7 +215,14 @@ function toStatusResult(wallet: CircleWalletRecord): AgentWalletStatusResult {
     status: "available",
     balances: {},
     mode: wallet.mode,
+    ...(wallet.accountType === "SCA" || wallet.accountType === "EOA"
+      ? { accountType: wallet.accountType }
+      : {}),
   };
+}
+
+function isUsableWallet(wallet: Pick<CircleWalletRecord, "mode" | "accountType">): boolean {
+  return wallet.mode !== "circle" || wallet.accountType === "SCA";
 }
 
 function dedupeWallets(wallets: CircleWalletRecord[]): CircleWalletRecord[] {
@@ -290,6 +306,11 @@ function isAgentWalletBinding(value: unknown): value is AgentWalletBinding {
     (typeof value.circleWalletSetId === "string" || value.circleWalletSetId === null) &&
     value.blockchain === "BASE-SEPOLIA" &&
     (value.mode === "circle" || value.mode === "mock") &&
+    (
+      value.accountType === undefined ||
+      value.accountType === "SCA" ||
+      value.accountType === "EOA"
+    ) &&
     typeof value.updatedAt === "string"
   );
 }

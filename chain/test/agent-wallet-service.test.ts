@@ -353,6 +353,7 @@ test("AgentWalletService reuses a matching wallet from local Agent Wallet state"
           blockchain: "BASE-SEPOLIA",
           walletAddress: "0x3333333333333333333333333333333333333333",
           mode: "circle",
+          accountType: "SCA",
         },
       ],
     },
@@ -387,6 +388,130 @@ test("AgentWalletService reuses a matching wallet from local Agent Wallet state"
   );
 });
 
+test("AgentWalletService ignores legacy EOA local wallets before creating SCA wallet", async () => {
+  await withTempStateFile(
+    {
+      wallets: [
+        {
+          agentName: "Research Summary",
+          circleWalletId: "legacy-eoa-wallet",
+          circleWalletSetId: "circle-wallet-set",
+          blockchain: "BASE-SEPOLIA",
+          walletAddress: "0x1111111111111111111111111111111111111111",
+          mode: "circle",
+          accountType: "EOA",
+        },
+      ],
+      agentWalletBindings: [],
+    },
+    async (statePath) => {
+      const config = loadConfig({
+        CHAIN_MOCK: "true",
+        AGENT_WALLET_STATE_PATH: statePath,
+      });
+      let createCalls = 0;
+      const circleWalletService = {
+        createWallet: async () => {
+          createCalls += 1;
+          return {
+            circleWalletId: "new-sca-wallet",
+            circleWalletSetId: "circle-wallet-set",
+            blockchain: "BASE-SEPOLIA" as const,
+            walletAddress: "0x2222222222222222222222222222222222222222",
+            mode: "circle" as const,
+            accountType: "SCA" as const,
+          };
+        },
+      } as unknown as CircleWalletService;
+      const service = new AgentWalletService(
+        config,
+        fakeX402FetchService(baseX402Result()),
+        circleWalletService,
+      );
+
+      const result = await service.getOrCreate({
+        agentName: "Research Summary",
+        agentId: "agent_research",
+        email: "research@example.com",
+      });
+
+      assert.equal(createCalls, 1);
+      assert.equal(result.reused, false);
+      assert.equal(result.circleWalletId, "new-sca-wallet");
+      assert.equal(result.binding?.circleWalletId, "new-sca-wallet");
+      assert.equal(result.binding?.accountType, "SCA");
+    },
+  );
+});
+
+test("AgentWalletService ignores legacy non-SCA bindings before creating SCA wallet", async () => {
+  await withTempStateFile(
+    {
+      wallets: [
+        {
+          agentName: "Research Summary",
+          circleWalletId: "legacy-eoa-wallet",
+          circleWalletSetId: "circle-wallet-set",
+          blockchain: "BASE-SEPOLIA",
+          walletAddress: "0x1111111111111111111111111111111111111111",
+          mode: "circle",
+          accountType: "EOA",
+        },
+      ],
+      agentWalletBindings: [
+        {
+          agentName: "Research Summary",
+          agentId: "agent_research",
+          email: "research@example.com",
+          walletAddress: "0x1111111111111111111111111111111111111111",
+          circleWalletId: "legacy-eoa-wallet",
+          circleWalletSetId: "circle-wallet-set",
+          blockchain: "BASE-SEPOLIA",
+          mode: "circle",
+          updatedAt: "2026-05-01T00:00:00.000Z",
+        },
+      ],
+    },
+    async (statePath) => {
+      const config = loadConfig({
+        CHAIN_MOCK: "true",
+        AGENT_WALLET_STATE_PATH: statePath,
+      });
+      let createCalls = 0;
+      const circleWalletService = {
+        createWallet: async () => {
+          createCalls += 1;
+          return {
+            circleWalletId: "new-sca-wallet",
+            circleWalletSetId: "circle-wallet-set",
+            blockchain: "BASE-SEPOLIA" as const,
+            walletAddress: "0x2222222222222222222222222222222222222222",
+            mode: "circle" as const,
+            accountType: "SCA" as const,
+          };
+        },
+      } as unknown as CircleWalletService;
+      const service = new AgentWalletService(
+        config,
+        fakeX402FetchService(baseX402Result()),
+        circleWalletService,
+      );
+
+      const result = await service.getOrCreate({
+        agentName: "Research Summary",
+        agentId: "agent_research",
+        email: "research@example.com",
+      });
+
+      assert.equal(createCalls, 1);
+      assert.equal(result.reused, false);
+      assert.equal(result.circleWalletId, "new-sca-wallet");
+      assert.equal(result.binding?.circleWalletId, "new-sca-wallet");
+      assert.equal(result.binding?.accountType, "SCA");
+    },
+  );
+});
+
 test("AgentWalletService includes live Circle balances when reusing a local wallet", async () => {
   await withTempStateFile(
     {
@@ -398,6 +523,7 @@ test("AgentWalletService includes live Circle balances when reusing a local wall
           blockchain: "BASE-SEPOLIA",
           walletAddress: "0x3333333333333333333333333333333333333333",
           mode: "circle",
+          accountType: "SCA",
         },
       ],
     },
@@ -580,6 +706,7 @@ test("AgentWalletService reuses an existing binding by agent id before importing
           blockchain: "BASE-SEPOLIA",
           walletAddress: "0x1111111111111111111111111111111111111111",
           mode: "circle",
+          accountType: "SCA",
         },
         {
           agentName: "Imported Spare",
@@ -588,6 +715,7 @@ test("AgentWalletService reuses an existing binding by agent id before importing
           blockchain: "BASE-SEPOLIA",
           walletAddress: "0x2222222222222222222222222222222222222222",
           mode: "circle",
+          accountType: "SCA",
         },
       ],
       agentWalletBindings: [
@@ -600,6 +728,7 @@ test("AgentWalletService reuses an existing binding by agent id before importing
           circleWalletSetId: "circle-wallet-set",
           blockchain: "BASE-SEPOLIA",
           mode: "circle",
+          accountType: "SCA",
           updatedAt: "2026-05-13T00:00:00.000Z",
         },
       ],
@@ -655,6 +784,7 @@ test("AgentWalletService reuses an existing binding by agent id before importing
           circleWalletSetId: "circle-wallet-set",
           blockchain: "BASE-SEPOLIA",
           mode: "circle",
+          accountType: "SCA",
           updatedAt: result.binding?.updatedAt,
         },
       ]);
@@ -1537,6 +1667,7 @@ test("CircleWalletService returns normalized successful Circle wallet shape", as
     blockchain: "BASE-SEPOLIA",
     walletAddress: "0x3333333333333333333333333333333333333333",
     mode: "circle",
+    accountType: "SCA",
   });
 });
 

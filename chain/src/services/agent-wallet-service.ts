@@ -63,6 +63,7 @@ export class AgentWalletService {
       blockchain: created.blockchain,
       walletAddress: created.walletAddress,
       mode: created.mode,
+      accountType: created.accountType,
     });
     return {
       ...created,
@@ -88,6 +89,7 @@ export class AgentWalletService {
         blockchain: status.blockchain,
         walletAddress: status.walletAddress,
         mode: status.mode,
+        accountType: status.accountType,
       });
       return {
         ...(await this.withLiveBalances(status)),
@@ -98,7 +100,7 @@ export class AgentWalletService {
 
     if (hasNonEmptyValue(command.agentId)) {
       const existingBinding = await this.stateStore.findBindingByAgentId(command.agentId);
-      if (existingBinding) {
+      if (existingBinding && isUsableBinding(existingBinding)) {
         const binding = await this.stateStore.saveBinding({
           agentName,
           agentId: command.agentId,
@@ -108,6 +110,7 @@ export class AgentWalletService {
           blockchain: existingBinding.blockchain,
           walletAddress: existingBinding.walletAddress,
           mode: existingBinding.mode,
+          accountType: existingBinding.accountType,
         });
         return {
           ...(await this.withLiveBalances(statusFromBinding(existingBinding))),
@@ -128,6 +131,7 @@ export class AgentWalletService {
         blockchain: localWallet.blockchain,
         walletAddress: localWallet.walletAddress,
         mode: localWallet.mode,
+        accountType: localWallet.accountType,
       });
       return {
         ...(await this.withLiveBalances(localWallet)),
@@ -147,6 +151,7 @@ export class AgentWalletService {
         blockchain: importedWallet.blockchain,
         walletAddress: importedWallet.walletAddress,
         mode: importedWallet.mode,
+        accountType: importedWallet.accountType,
       });
       return {
         ...importedWallet,
@@ -172,6 +177,7 @@ export class AgentWalletService {
         blockchain: created.blockchain,
         walletAddress: created.walletAddress,
         mode: created.mode,
+        accountType: created.accountType,
       }));
     return {
       ...created,
@@ -836,7 +842,14 @@ function statusFromBinding(binding: AgentWalletBinding): AgentWalletStatusResult
     status: "available",
     balances: {},
     mode: binding.mode,
+    ...(binding.accountType === "SCA" || binding.accountType === "EOA"
+      ? { accountType: binding.accountType }
+      : {}),
   };
+}
+
+function isUsableBinding(binding: AgentWalletBinding): boolean {
+  return binding.mode !== "circle" || binding.accountType === "SCA";
 }
 
 function normalizePositiveDecimal(value: string | undefined, fieldName: string): string {
