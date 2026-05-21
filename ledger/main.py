@@ -43,6 +43,7 @@ DEFAULT_WALLET_HTTP_URL = "http://circle:8093"
 DEFAULT_CHAIN_RECORDER_ADDRESS = "0x000000000000000000000000000000000000dEaD"
 DEFAULT_CIRCLE_PUBLIC_KEY_BASE_URL = "https://api.circle.com/v2/notifications/publicKey"
 DEFAULT_BASE_SEPOLIA_USDC_ASSET_ADDRESS = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+GATEWAY_SWEEP_MIN_WALLET_BALANCE_ATOMIC = 2_000_000
 GITHUB_AUTHORIZE_URL = "https://github.com/login/oauth/authorize"
 GITHUB_TOKEN_URL = "https://github.com/login/oauth/access_token"
 GITHUB_USER_URL = "https://api.github.com/user"
@@ -2816,6 +2817,16 @@ def circle_webhook_usdc_amount_atomic(notification: dict[str, Any]) -> Optional[
     return amount_atomic
 
 
+def circle_wallet_status_usdc_amount_atomic(status: dict[str, Any]) -> Optional[str]:
+    balances = status.get("balances")
+    if not isinstance(balances, dict):
+        return None
+    usdc_balance = balances.get(DEFAULT_ASSET)
+    if not isinstance(usdc_balance, str):
+        return None
+    return decimal_usdc_to_atomic_string(usdc_balance)
+
+
 def circle_webhook_event_record(
     *,
     notification_id: str,
@@ -2918,11 +2929,40 @@ async def process_circle_wallet_webhook(payload: dict[str, Any]) -> dict[str, An
         )
     )
 
+    wallet_client = get_ledger_wallet_client()
     try:
-        result = await get_ledger_wallet_client().gateway_deposit(
+        wallet_status = await wallet_client.status(
+            wallet_address=wallet_address,
+            circle_wallet_id=circle_wallet_id,
+        )
+        wallet_balance_atomic = circle_wallet_status_usdc_amount_atomic(wallet_status)
+        if wallet_balance_atomic is None:
+            raise RuntimeError("wallet status did not include a USDC balance")
+        if int(wallet_balance_atomic) <= GATEWAY_SWEEP_MIN_WALLET_BALANCE_ATOMIC:
+            skipped = get_store().save_circle_webhook_event(
+                received.model_copy(
+                    update={
+                        "status": "skipped",
+                        "reason": "wallet_balance_not_above_gateway_threshold",
+                        "gatewayDepositResult": {
+                            "walletBalanceAtomic": wallet_balance_atomic,
+                            "thresholdAtomic": str(GATEWAY_SWEEP_MIN_WALLET_BALANCE_ATOMIC),
+                        },
+                        "updatedAt": now_iso(),
+                    }
+                )
+            )
+            return {
+                "status": "skipped",
+                "notificationId": notification_id,
+                "reason": "wallet_balance_not_above_gateway_threshold",
+                "event": skipped.model_dump(),
+            }
+
+        result = await wallet_client.gateway_deposit(
             GatewayDepositRequest(
                 agentId=account.agentId,
-                amountAtomic=amount_atomic,
+                amountAtomic=wallet_balance_atomic,
                 refId=f"circle-webhook:{notification_id}",
             )
         )

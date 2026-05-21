@@ -1113,6 +1113,9 @@ class LedgerServiceTests(unittest.TestCase):
             def __init__(self) -> None:
                 self.requests = []
 
+            async def status(self, *, wallet_address, circle_wallet_id):
+                return {"balances": {"USDC": "2.23"}}
+
             async def gateway_deposit(self, request):
                 self.requests.append(request)
                 return {
@@ -1151,7 +1154,7 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertEqual(second.json()["status"], "duplicate")
         self.assertEqual(len(fake_client.requests), 1)
         self.assertEqual(fake_client.requests[0].agentId, "agent_research")
-        self.assertEqual(fake_client.requests[0].amountAtomic, "1230000")
+        self.assertEqual(fake_client.requests[0].amountAtomic, "2230000")
         self.assertEqual(fake_client.requests[0].refId, "circle-webhook:notification-1")
 
         state = self.client.get("/ledger/state?agentId=agent_research").json()
@@ -1171,6 +1174,9 @@ class LedgerServiceTests(unittest.TestCase):
         class FakeWalletClient:
             def __init__(self) -> None:
                 self.requests = []
+
+            async def status(self, *, wallet_address, circle_wallet_id):
+                return {"balances": {"USDC": "2.01"}}
 
             async def gateway_deposit(self, request):
                 self.requests.append(request)
@@ -1205,7 +1211,54 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "processed")
         self.assertEqual(len(fake_client.requests), 1)
-        self.assertEqual(fake_client.requests[0].amountAtomic, "1000000")
+        self.assertEqual(fake_client.requests[0].amountAtomic, "2010000")
+
+    def test_circle_wallet_webhook_skips_gateway_deposit_until_wallet_balance_exceeds_two_usdc(self) -> None:
+        main.get_store().bind_account_wallet(
+            agent_id="agent_research",
+            agent_name="Research Agent",
+            email="agent@example.com",
+            wallet_address="0x1111111111111111111111111111111111111111",
+            circle_wallet_id="circle-wallet-1",
+        )
+
+        class FakeWalletClient:
+            def __init__(self) -> None:
+                self.deposits = []
+
+            async def status(self, *, wallet_address, circle_wallet_id):
+                return {"balances": {"USDC": "2.00"}}
+
+            async def gateway_deposit(self, request):
+                self.deposits.append(request)
+                raise AssertionError("wallet balance at threshold must not be swept")
+
+        fake_client = FakeWalletClient()
+        with patch.object(main, "get_ledger_wallet_client", return_value=fake_client):
+            response = self.client.post(
+                "/circle/webhooks/wallets",
+                json={
+                    "subscriptionId": "subscription-1",
+                    "notificationId": "notification-threshold",
+                    "notificationType": "transactions.inbound",
+                    "notification": {
+                        "id": "tx-inbound-threshold",
+                        "state": "CONFIRMED",
+                        "transactionType": "INBOUND",
+                        "walletId": "circle-wallet-1",
+                        "destinationAddress": "0x1111111111111111111111111111111111111111",
+                        "amounts": ["2"],
+                        "tokenSymbol": "USDC",
+                    },
+                    "timestamp": "2026-05-21T06:00:00Z",
+                    "version": 2,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "skipped")
+        self.assertEqual(response.json()["reason"], "wallet_balance_not_above_gateway_threshold")
+        self.assertEqual(fake_client.deposits, [])
 
     def test_circle_wallet_webhook_skips_inbound_before_completion(self) -> None:
         main.get_store().bind_account_wallet(
@@ -1309,6 +1362,9 @@ class LedgerServiceTests(unittest.TestCase):
                 return FakeResponse()
 
         class FakeWalletClient:
+            async def status(self, *, wallet_address, circle_wallet_id):
+                return {"balances": {"USDC": "2.50"}}
+
             async def gateway_deposit(self, request):
                 return {
                     "agentId": request.agentId,
