@@ -203,15 +203,24 @@ jobs:
           ssh -i ~/.ssh/lighthouse_key "${remote}" '
             set -eu
             state="/opt/chief/data/chain/agent_wallet_state.json"
+            cd /opt/chief
+            compose_files="-f docker-compose.core.yml"
+            if [ -f .env.deploy ] && grep -q "^CLOUDFLARE_TUNNEL_TOKEN=." .env.deploy; then
+              compose_files="${compose_files} -f docker-compose.cloudflare.yml"
+            fi
+            sudo docker compose --env-file .env --env-file .env.deploy ${compose_files} stop circle || true
             sudo install -d -o "$USER" -g "$USER" /opt/chief/data/chain
             if [ -f "$state" ]; then
               backup="${state}.bak.$(date -u +%Y%m%dT%H%M%SZ)"
-              cp "$state" "$backup"
+              sudo cp -a "$state" "$backup"
               echo "Backed up agent wallet state to ${backup}"
             else
               echo "No existing agent wallet state file found"
             fi
-            printf "{\n  \"wallets\": [],\n  \"agentWalletBindings\": []\n}\n" > "$state"
+            tmp="$(mktemp)"
+            printf "{\n  \"wallets\": [],\n  \"agentWalletBindings\": []\n}\n" > "$tmp"
+            sudo install -m 664 -o "$USER" -g "$USER" "$tmp" "$state"
+            rm -f "$tmp"
             echo "Cleared stored agent wallet bindings and wallet cache at ${state}"
           '
 
