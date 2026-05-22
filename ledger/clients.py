@@ -27,6 +27,13 @@ from models import (
 from utils import normalize_evm_address, now_iso
 
 
+def first_string(*values: Any) -> Optional[str]:
+    for value in values:
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
 class CoinbaseAuth:
     def __init__(
         self,
@@ -441,11 +448,18 @@ class LedgerSettlementClient:
             )
             raise LedgerSettlementError(record)
         try:
-            result = await self._submit_settlement_transfer(
-                from_agent_id=from_agent_id,
-                to_address=destination,
-                amount_atomic=amount_atomic,
-                ref_id=ref_id,
+            client = CircleHttpClient(
+                base_url=self.settlement_http_url,
+                timeout_seconds=self.timeout_seconds,
+                transport=self.transport,
+            )
+            result = await client.gateway_withdraw(
+                {
+                    "agentId": from_agent_id,
+                    "amountAtomic": amount_atomic,
+                    "recipientAddress": destination,
+                    "refId": ref_id,
+                }
             )
             transfer = result
             if transfer.get("error") is not None:
@@ -453,15 +467,19 @@ class LedgerSettlementClient:
             return LedgerSettlementRecord(
                 **base_record,
                 status="submitted",
-                transactionId=transfer.get("transactionId")
-                if isinstance(transfer.get("transactionId"), str)
-                else None,
-                transactionHash=transfer.get("transactionHash")
-                if isinstance(transfer.get("transactionHash"), str)
-                else None,
-                transactionState=transfer.get("state")
-                if isinstance(transfer.get("state"), str)
-                else None,
+                transactionId=first_string(
+                    transfer.get("transactionId"),
+                    transfer.get("mintTransactionId"),
+                    transfer.get("gatewayTransferId"),
+                ),
+                transactionHash=first_string(
+                    transfer.get("transactionHash"),
+                    transfer.get("mintTransactionHash"),
+                ),
+                transactionState=first_string(
+                    transfer.get("state"),
+                    transfer.get("mintState"),
+                ),
                 mode=transfer.get("mode") if isinstance(transfer.get("mode"), str) else None,
                 actionResult=result,
             )

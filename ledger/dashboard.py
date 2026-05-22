@@ -345,21 +345,21 @@ def build_dashboard_data(
         if normalized_owner_email and normalize_email(account.get("email")) != normalized_owner_email:
             continue
         agent_entries = entries_by_agent.get(agent_id, [])
-        linked_pending_entry_ids = {
+        linked_superseded_entry_ids = {
             str(metadata.get("linkedEntryId"))
             for metadata in (
                 entry.get("metadata")
                 for entry in agent_entries
                 if isinstance(entry.get("metadata"), dict)
             )
-            if metadata.get("dashboardStatus") == "credited"
+            if metadata.get("dashboardStatus") in {"credited", "failed", "withdrawn"}
             and isinstance(metadata.get("linkedEntryId"), str)
             and metadata.get("linkedEntryId")
         }
         visible_agent_entries = [
             entry
             for entry in agent_entries
-            if str(entry.get("entryId") or "") not in linked_pending_entry_ids
+            if str(entry.get("entryId") or "") not in linked_superseded_entry_ids
         ]
         gateway_pending_batch_atomic = account.get("gatewayPendingBatchAtomic")
         active_pending_entry_ids = active_gateway_pending_entry_ids(

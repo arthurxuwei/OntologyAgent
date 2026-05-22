@@ -71,6 +71,59 @@ class TestSettlementFlows(LedgerServiceTestCase):
         self.assertEqual(record.status, "submitted")
         self.assertEqual(record.txHash, "0xabc123")
 
+    def test_withdrawal_settlement_client_uses_gateway_withdrawal_endpoint(self) -> None:
+        calls = []
+
+        async def handler(request):
+            calls.append((request.url.path, json.loads(request.content.decode("utf-8"))))
+            return httpx.Response(
+                200,
+                json={
+                    "agentId": "agent_sender",
+                    "recipientAddress": "0x2222222222222222222222222222222222222222",
+                    "amountAtomic": "1250000",
+                    "mode": "gateway_withdraw",
+                    "gatewayTransferId": "gateway-transfer-1",
+                    "mintTransactionId": "mint-tx",
+                    "mintTransactionHash": "0xmint",
+                    "mintState": "CONFIRMED",
+                    "transactionHash": "0xmint",
+                },
+            )
+
+        client = main.LedgerSettlementClient(
+            enabled=True,
+            settlement_http_url="http://circle.test",
+            timeout_seconds=30,
+            require_success=False,
+            transport=httpx.MockTransport(handler),
+        )
+
+        record = asyncio.run(
+            client.submit_withdrawal(
+                from_agent_id="agent_sender",
+                to_address="0x2222222222222222222222222222222222222222",
+                amount_atomic="1250000",
+                ref_id="withdrawal:test",
+            )
+        )
+
+        self.assertEqual(calls, [
+            (
+                "/circle/gateway/withdrawals",
+                {
+                    "agentId": "agent_sender",
+                    "amountAtomic": "1250000",
+                    "recipientAddress": "0x2222222222222222222222222222222222222222",
+                    "refId": "withdrawal:test",
+                },
+            )
+        ])
+        self.assertEqual(record.mode, "gateway_withdraw")
+        self.assertEqual(record.transactionId, "mint-tx")
+        self.assertEqual(record.transactionHash, "0xmint")
+        self.assertEqual(record.transactionState, "CONFIRMED")
+
     def test_create_escrow_moves_buyer_available_to_locked(self) -> None:
         self.client.post(
             "/ledger/accounts/agent_buyer/credit",
@@ -543,7 +596,7 @@ class TestSettlementFlows(LedgerServiceTestCase):
             "0x2222222222222222222222222222222222222222",
         )
         self.assertTrue(payload["entry"]["metadata"]["counterparty"].startswith("External"))
-        self.assertEqual(payload["route"]["method"], "circle_withdrawal")
+        self.assertEqual(payload["route"]["method"], "gateway_withdrawal")
 
     def test_withdrawal_records_submitted_and_withdrawn_entries(self) -> None:
         class FakeSettlementClient:

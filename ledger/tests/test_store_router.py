@@ -314,7 +314,7 @@ class TestStoreRouter(LedgerServiceTestCase):
 
         self.assertEqual(response.status_code, 200)
         result = response.json()
-        self.assertEqual(result["method"], "circle_withdrawal")
+        self.assertEqual(result["method"], "gateway_withdrawal")
         self.assertEqual(result["allowedTools"], ["agent_wallet_settle_ledger_transfer"])
 
     def test_ledger_rest_routes_operate_on_local_store(self) -> None:

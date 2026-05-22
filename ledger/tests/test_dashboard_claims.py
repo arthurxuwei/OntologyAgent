@@ -326,6 +326,58 @@ class TestDashboardClaims(LedgerServiceTestCase):
             self.assertEqual(tx["amountAtomic"], "1250000")
             self.assertEqual(tx["counterparty"], "External · 0x222222...222222")
 
+    def test_dashboard_hides_superseded_withdrawal_submitted_row_after_failure(self) -> None:
+        state = main.build_dashboard_data(
+            {
+                "accounts": [
+                    {
+                        "agentId": "agent_withdraw",
+                        "agentName": "Withdraw Agent",
+                        "email": "owner@example.com",
+                        "walletAddress": "0x1111111111111111111111111111111111111111",
+                        "availableAtomic": "0",
+                    }
+                ],
+                "entries": [
+                    {
+                        "entryId": "entry_withdrawal_failed",
+                        "entryType": "withdrawal_submitted",
+                        "agentId": "agent_withdraw",
+                        "availableDeltaAtomic": "0",
+                        "lockedDeltaAtomic": "0",
+                        "reason": "withdrawal failed",
+                        "metadata": {
+                            "dashboardStatus": "failed",
+                            "amountAtomic": "2000000",
+                            "linkedEntryId": "entry_withdrawal_submitted",
+                            "counterparty": "External · 0x222222...222222",
+                        },
+                        "createdAt": "2026-05-22T16:13:13+00:00",
+                    },
+                    {
+                        "entryId": "entry_withdrawal_submitted",
+                        "entryType": "withdrawal_submitted",
+                        "agentId": "agent_withdraw",
+                        "availableDeltaAtomic": "0",
+                        "lockedDeltaAtomic": "0",
+                        "reason": "withdrawal submitted",
+                        "metadata": {
+                            "dashboardStatus": "withdraw_submitted",
+                            "amountAtomic": "2000000",
+                            "counterparty": "External · 0x222222...222222",
+                        },
+                        "createdAt": "2026-05-22T16:13:12+00:00",
+                    },
+                ],
+                "escrows": [],
+            }
+        )
+
+        transactions = state["agents"]["agent_withdraw"]["transactions"]
+        self.assertEqual([tx["id"] for tx in transactions], ["entry_withdrawal_failed"])
+        self.assertEqual(transactions[0]["status"], "failed")
+        self.assertEqual(transactions[0]["amountAtomic"], "2000000")
+
     def test_dashboard_credited_gateway_rows_are_deposits(self) -> None:
         tx = main.dashboard_transaction(
             {
