@@ -550,21 +550,15 @@ async def withdraw_agent_wallet(request: WithdrawalRequest) -> dict[str, Any]:
             )
         except LedgerSettlementError as error:
             destination_address = normalize_evm_address(request.destinationAddress)
-            _failed_account, _failed_entry = get_store().record_dashboard_event(
-                entry_type="withdrawal_submitted",
+            _failed_entry = get_store().withdrawal_failed(
+                entry_id=submitted_entry.entryId,
                 agent_id=request.agentId,
+                destination_address=destination_address,
+                amount_atomic=request.amountAtomic,
                 reason="withdrawal failed",
-                metadata={
-                    **request.metadata,
-                    "dashboardStatus": "failed",
-                    "amountAtomic": request.amountAtomic,
-                    "withdrawalId": withdrawal_id,
-                    "linkedEntryId": submitted_entry.entryId,
-                    "failureReason": error.record.error,
-                    "destinationAddress": destination_address,
-                    "counterparty": f"External · {short_address(destination_address)}",
-                    "network": "Base",
-                },
+                metadata=request.metadata,
+                withdrawal_id=withdrawal_id,
+                failure_reason=error.record.error,
             )
             get_store().add_settlement_record(error.record)
             raise http_error(error) from error
@@ -576,7 +570,6 @@ async def withdraw_agent_wallet(request: WithdrawalRequest) -> dict[str, Any]:
         withdrawal_metadata = {
             **request.metadata,
             "dashboardStatus": "withdrawn",
-            "linkedEntryId": submitted_entry.entryId,
             "txHash": settlement_record.transactionHash
             or action_result.get("transactionHash"),
             "gasFeeAtomic": action_result.get("estimatedGasFeeAtomic"),
@@ -585,7 +578,8 @@ async def withdraw_agent_wallet(request: WithdrawalRequest) -> dict[str, Any]:
             "netAmount": action_result.get("netAmount"),
             "network": "Base",
         }
-        account, entry = get_store().withdraw(
+        account, entry = get_store().withdrawal_completed(
+            entry_id=submitted_entry.entryId,
             agent_id=request.agentId,
             destination_address=request.destinationAddress,
             amount_atomic=request.amountAtomic,
@@ -614,7 +608,7 @@ async def withdraw_agent_wallet(request: WithdrawalRequest) -> dict[str, Any]:
         "withdrawalId": withdrawal_id,
         "account": account.model_dump(),
         "entry": entry.model_dump(),
-        "entries": [submitted_entry.model_dump(), entry.model_dump()],
+        "entries": [entry.model_dump()],
         "settlementRecord": settlement_record.model_dump(),
         "chainRecord": chain_record.model_dump() if chain_record is not None else None,
         "route": route,

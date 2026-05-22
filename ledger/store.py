@@ -487,6 +487,119 @@ class OffchainLedgerStore:
         )
         return entry
 
+    def withdrawal_failed(
+        self,
+        *,
+        entry_id: str,
+        agent_id: str,
+        destination_address: str,
+        amount_atomic: str,
+        reason: Optional[str],
+        metadata: dict[str, Any],
+        withdrawal_id: str,
+        failure_reason: Optional[str],
+    ) -> LedgerEntry:
+        amount = parse_positive_atomic(amount_atomic)
+        destination = normalize_evm_address(destination_address)
+
+        def mutate(state: LedgerState) -> LedgerEntry:
+            for index, entry in enumerate(state.entries):
+                if entry.entryId != entry_id:
+                    continue
+                if entry.agentId != agent_id:
+                    raise ValueError("withdrawal entry does not match agent")
+                updated = entry.model_copy(
+                    update={
+                        "reason": reason or "withdrawal failed",
+                        "metadata": {
+                            **metadata,
+                            "dashboardStatus": "failed",
+                            "amountAtomic": str(amount),
+                            "withdrawalId": withdrawal_id,
+                            "failureReason": failure_reason,
+                            "destinationAddress": destination,
+                            "counterparty": f"External · {short_address(destination)}",
+                            "network": "Base",
+                        },
+                    }
+                )
+                state.entries[index] = updated
+                return updated
+            raise ValueError("withdrawal entry not found")
+
+        return self._mutate(mutate)
+
+    def withdrawal_completed(
+        self,
+        *,
+        entry_id: str,
+        agent_id: str,
+        destination_address: str,
+        amount_atomic: str,
+        reason: Optional[str],
+        metadata: dict[str, Any],
+        withdrawal_id: str,
+        settlement_record_id: Optional[str],
+        available_atomic: Optional[str] = None,
+        available_label: str = "available balance",
+    ) -> tuple[LedgerAccount, LedgerEntry]:
+        amount = parse_positive_atomic(amount_atomic)
+        destination = normalize_evm_address(destination_address)
+
+        def mutate(state: LedgerState) -> tuple[LedgerAccount, LedgerEntry]:
+            account, account_index = self._account_for_update(
+                state, agent_id, create=False
+            )
+            self._require_circle_wallet(account, "source")
+            balance_basis = (
+                parse_nonnegative_atomic(available_atomic)
+                if available_atomic is not None
+                else parse_nonnegative_atomic(account.availableAtomic)
+            )
+            if balance_basis < amount:
+                raise ValueError(f"amount exceeds {available_label}")
+            current = now_iso()
+            local_available = parse_nonnegative_atomic(account.availableAtomic)
+            next_available = (
+                str(local_available - amount)
+                if local_available >= amount
+                else account.availableAtomic
+            )
+            updated_account = account.model_copy(
+                update={
+                    "availableAtomic": next_available,
+                    "updatedAt": current,
+                }
+            )
+            entry_metadata = {
+                **metadata,
+                "withdrawalId": withdrawal_id,
+                "destinationAddress": destination,
+                "counterparty": f"External · {short_address(destination)}",
+            }
+            if settlement_record_id is not None:
+                entry_metadata["settlementRecordId"] = settlement_record_id
+            for index, entry in enumerate(state.entries):
+                if entry.entryId != entry_id:
+                    continue
+                if entry.agentId != agent_id:
+                    raise ValueError("withdrawal entry does not match agent")
+                updated_entry = entry.model_copy(
+                    update={
+                        "entryType": "withdrawal",
+                        "availableDeltaAtomic": str(-amount),
+                        "lockedDeltaAtomic": "0",
+                        "reason": reason or "withdrawal",
+                        "metadata": entry_metadata,
+                    }
+                )
+                state.accounts[account_index] = updated_account
+                state.entries[index] = updated_entry
+                return updated_account, updated_entry
+            raise ValueError("withdrawal entry not found")
+
+        return self._mutate(mutate)
+
     def create_escrow(
         self,
         *,

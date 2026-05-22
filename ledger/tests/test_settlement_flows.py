@@ -656,7 +656,15 @@ class TestSettlementFlows(LedgerServiceTestCase):
             entry["metadata"].get("dashboardStatus")
             for entry in response.json()["entries"]
         ]
-        self.assertEqual(statuses, ["withdraw_submitted", "withdrawn"])
+        self.assertEqual(statuses, ["withdrawn"])
+        self.assertEqual(len(main.get_store().load().entries), 2)
+        withdrawal_entries = [
+            entry for entry in main.get_store().load().entries
+            if entry.entryType in {"withdrawal", "withdrawal_submitted"}
+        ]
+        self.assertEqual(len(withdrawal_entries), 1)
+        self.assertEqual(withdrawal_entries[0].entryType, "withdrawal")
+        self.assertEqual(withdrawal_entries[0].metadata["dashboardStatus"], "withdrawn")
 
     def test_withdrawal_uses_gateway_available_for_circle_backed_accounts(self) -> None:
         class FakeWalletClient:
@@ -874,15 +882,11 @@ class TestSettlementFlows(LedgerServiceTestCase):
             for entry in state.entries
             if entry.entryType == "withdrawal_submitted"
         ]
-        self.assertEqual(len(lifecycle_entries), 2)
-        submitted_entry, failed_entry = lifecycle_entries
-        self.assertEqual(submitted_entry.availableDeltaAtomic, "0")
+        self.assertEqual(len(lifecycle_entries), 1)
+        failed_entry = lifecycle_entries[0]
         self.assertEqual(failed_entry.availableDeltaAtomic, "0")
-        self.assertEqual(
-            failed_entry.metadata["linkedEntryId"],
-            submitted_entry.entryId,
-        )
         self.assertEqual(failed_entry.metadata["dashboardStatus"], "failed")
+        self.assertNotIn("linkedEntryId", failed_entry.metadata)
         self.assertEqual(
             failed_entry.metadata["destinationAddress"],
             main.normalize_evm_address("0x2222222222222222222222222222222222222222"),
