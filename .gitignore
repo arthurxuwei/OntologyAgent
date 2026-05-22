@@ -20,3 +20,4 @@ tmp*/
 chain/recovery_file_*.dat
 runtime/*
 runtime-peer/*
+runtime-openclaw-x/*
