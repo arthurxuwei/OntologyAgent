@@ -665,6 +665,65 @@ class TestSettlementFlows(LedgerServiceTestCase):
         self.assertEqual(fake_settlement.calls[0]["amount_atomic"], "1000000")
         self.assertEqual(response.json()["account"]["availableAtomic"], "0")
 
+    def test_withdrawal_allows_chief_owner_email_to_differ_from_agent_email(self) -> None:
+        class FakeWalletClient:
+            async def status(self, *, wallet_address=None, circle_wallet_id=None):
+                return {
+                    "balances": {"USDC": "0"},
+                    "gatewayBalance": {
+                        "availableAtomic": "2000000",
+                        "formattedAvailable": "2.0",
+                    },
+                }
+
+        class FakeSettlementClient:
+            def __init__(self) -> None:
+                self.calls = []
+
+            async def submit_withdrawal(self, **kwargs):
+                self.calls.append(kwargs)
+                return main.LedgerSettlementRecord(
+                    recordId="settle_chief_owner_withdrawal",
+                    eventType="withdrawal",
+                    settlementHttpUrl="http://settlement.test",
+                    transferId=kwargs["ref_id"],
+                    fromAgentId=kwargs["from_agent_id"],
+                    toAddress=kwargs["to_address"],
+                    asset="USDC",
+                    amountAtomic=kwargs["amount_atomic"],
+                    status="submitted",
+                    transactionHash="0xwithdrawal",
+                    createdAt=main.now_iso(),
+                    updatedAt=main.now_iso(),
+                )
+
+        store = main.get_store()
+        store.bind_account_wallet(
+            agent_id="agent_agent_bound_email",
+            agent_name="Agent Bound Email",
+            email="agent-bound@example.com",
+            wallet_address="0x1111111111111111111111111111111111111111",
+            circle_wallet_id="circle-agent-bound-email",
+        )
+        fake_settlement = FakeSettlementClient()
+
+        with patch.object(services, "get_ledger_wallet_client", return_value=FakeWalletClient()), patch.object(
+            services, "get_ledger_settlement_client", return_value=fake_settlement
+        ):
+            response = self.client.post(
+                "/ledger/withdrawals",
+                json={
+                    "agentId": "agent_agent_bound_email",
+                    "ownerEmail": "chief-user@example.com",
+                    "destinationAddress": "0x2222222222222222222222222222222222222222",
+                    "amountAtomic": "1000000",
+                    "reason": "dashboard withdrawal",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(fake_settlement.calls[0]["from_agent_id"], "agent_agent_bound_email")
+
     def test_withdrawal_rejects_amount_above_gateway_available(self) -> None:
         class FakeWalletClient:
             async def status(self, *, wallet_address=None, circle_wallet_id=None):

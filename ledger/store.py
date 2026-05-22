@@ -330,9 +330,6 @@ class OffchainLedgerStore:
         if account is None:
             raise ValueError("agent account not found")
         self._require_circle_wallet(account, "source")
-        normalized_owner_email = normalize_email(owner_email)
-        if normalized_owner_email and normalize_email(account.email) != normalized_owner_email:
-            raise ValueError("ownerEmail does not match agent account")
         balance_basis = (
             parse_nonnegative_atomic(available_atomic)
             if available_atomic is not None
