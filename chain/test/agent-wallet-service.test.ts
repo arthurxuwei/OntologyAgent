@@ -2076,16 +2076,36 @@ test("CircleWalletService returns token balances for a Circle wallet", async () 
 });
 
 test("CircleWalletService returns Gateway balance and pending deposits", async () => {
+  const calls: string[] = [];
   const service = new CircleWalletService(
     liveCircleConfig({ X402_FACILITATOR_URL: "https://gateway-api-testnet.circle.com" }),
     {
       fetchImpl: async (input, init) => {
-        assert.equal(input, "https://gateway-api-testnet.circle.com/v1/balances");
+        calls.push(String(input));
         assert.equal(init?.method, "POST");
         const body = JSON.parse(String(init?.body));
         assert.deepEqual(body.sources, [
           { depositor: "0x3333333333333333333333333333333333333333", domain: 6 },
         ]);
+        if (input === "https://gateway-api-testnet.circle.com/v1/deposits") {
+          return new Response(
+            JSON.stringify({
+              deposits: [
+                {
+                  depositor: "0x3333333333333333333333333333333333333333",
+                  domain: 6,
+                  amount: "7890000",
+                  status: "pending",
+                },
+              ],
+            }),
+            {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            },
+          );
+        }
+        assert.equal(input, "https://gateway-api-testnet.circle.com/v1/balances");
 
         return new Response(
           JSON.stringify({
@@ -2094,7 +2114,6 @@ test("CircleWalletService returns Gateway balance and pending deposits", async (
                 balance: "1.25",
                 withdrawing: "0.5",
                 withdrawable: "0.5",
-                pendingDeposits: "2.25",
                 pendingBatch: "0.1",
               },
             ],
@@ -2117,11 +2136,15 @@ test("CircleWalletService returns Gateway balance and pending deposits", async (
   assert.equal(result.total.toString(), "1750000");
   assert.equal(result.withdrawable.toString(), "500000");
   assert.equal(result.withdrawing.toString(), "500000");
-  assert.equal(result.pendingDeposits.toString(), "2250000");
+  assert.equal(result.pendingDeposits.toString(), "7890000");
   assert.equal(result.pendingBatch.toString(), "100000");
   assert.equal(result.formattedAvailable, "1.25");
-  assert.equal(result.formattedPendingDeposits, "2.25");
+  assert.equal(result.formattedPendingDeposits, "7.89");
   assert.equal(result.formattedPendingBatch, "0.1");
+  assert.deepEqual(calls, [
+    "https://gateway-api-testnet.circle.com/v1/balances",
+    "https://gateway-api-testnet.circle.com/v1/deposits",
+  ]);
 });
 
 test("CircleWalletService serializes bigint typed data and adds EIP712Domain for Circle signing", async () => {

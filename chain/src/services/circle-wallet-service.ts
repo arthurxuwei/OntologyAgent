@@ -489,7 +489,35 @@ export class CircleWalletService {
         payload,
       );
     }
-    return balance;
+    const pendingDeposits = await this.getGatewayPendingDeposits(normalizedAddress, domain);
+    return formatGatewayBalance({
+      available: balance.available,
+      withdrawing: balance.withdrawing,
+      withdrawable: balance.withdrawable,
+      pendingDeposits: pendingDeposits > 0n ? pendingDeposits : balance.pendingDeposits,
+      pendingBatch: balance.pendingBatch,
+    });
+  }
+
+  private async getGatewayPendingDeposits(walletAddress: string, domain: number): Promise<bigint> {
+    const response = await this.fetchImpl(`${gatewayApiBaseUrl(this.config.x402.facilitatorUrl)}/deposits`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        token: "USDC",
+        sources: [{ depositor: walletAddress, domain }],
+      }),
+    });
+    const payload = await parseJsonPayload(response);
+    if (!response.ok) {
+      throw new AppError(
+        "UPSTREAM_REQUEST_FAILED",
+        `Circle Gateway pending deposits lookup failed with HTTP ${response.status}`,
+        response.status,
+        payload,
+      );
+    }
+    return extractGatewayPendingDeposits(payload, walletAddress, domain);
   }
 
   async settleGatewayPayment(command: {
@@ -1246,6 +1274,52 @@ function extractPendingGatewayDeposits(balance: Record<string, unknown>, payload
   }
 
   return 0n;
+}
+
+function extractGatewayPendingDeposits(
+  payload: unknown,
+  depositor: string,
+  domain: number,
+): bigint {
+  if (!isRecord(payload) || !Array.isArray(payload.deposits)) {
+    return 0n;
+  }
+  const normalizedDepositor = normalizeAddress(depositor).toLowerCase();
+  return payload.deposits.filter(isRecord).reduce((sum, deposit) => {
+    const depositStatus = typeof deposit.status === "string" ? deposit.status.toLowerCase() : "";
+    if (depositStatus && depositStatus !== "pending") {
+      return sum;
+    }
+    const depositDomain =
+      typeof deposit.domain === "number"
+        ? deposit.domain
+        : typeof deposit.domain === "string" && deposit.domain.trim()
+          ? Number(deposit.domain)
+          : domain;
+    if (depositDomain !== domain) {
+      return sum;
+    }
+    if (typeof deposit.depositor === "string") {
+      try {
+        if (normalizeAddress(deposit.depositor).toLowerCase() !== normalizedDepositor) {
+          return sum;
+        }
+      } catch {
+        return sum;
+      }
+    }
+    if (typeof deposit.amount !== "string") {
+      return sum;
+    }
+    return sum + parseGatewayDepositAmount(deposit.amount, payload);
+  }, 0n);
+}
+
+function parseGatewayDepositAmount(value: string, payload: unknown): bigint {
+  if (/^[0-9]+$/.test(value)) {
+    return BigInt(value);
+  }
+  return parseGatewayAmount(value, payload);
 }
 
 function parseGatewayAmount(value: string, payload: unknown): bigint {
