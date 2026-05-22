@@ -199,6 +199,77 @@ class TestDashboardClaims(LedgerServiceTestCase):
         self.assertEqual(data["balance"]["pendingSettlementAtomic"], "0")
         self.assertEqual(data["transactions"][0]["status"], "released")
 
+    def test_dashboard_counts_only_current_gateway_pending_batch_as_settling(self) -> None:
+        state = main.build_dashboard_data(
+            {
+                "accounts": [
+                    {
+                        "agentId": "receiver",
+                        "agentName": "Receiver Agent",
+                        "email": "receiver@example.com",
+                        "walletAddress": "0x1111111111111111111111111111111111111111",
+                        "availableAtomic": "1000000",
+                        "lockedAtomic": "0",
+                        "gatewayPendingBatchAtomic": "500000",
+                    }
+                ],
+                "entries": [
+                    {
+                        "entryId": "entry_old_settled_batch",
+                        "entryType": "agent_transfer",
+                        "agentId": "receiver",
+                        "availableDeltaAtomic": "222000",
+                        "lockedDeltaAtomic": "0",
+                        "metadata": {
+                            "dashboardStatus": "pending_settle",
+                            "gatewayPendingBatchAtomic": "222000",
+                            "gatewayStage": "pending_batch",
+                            "transactionState": "SETTLED",
+                            "txHash": "0xold",
+                        },
+                        "createdAt": "2026-05-22T07:24:34+00:00",
+                    },
+                    {
+                        "entryId": "entry_current_settled_batch",
+                        "entryType": "agent_transfer",
+                        "agentId": "receiver",
+                        "availableDeltaAtomic": "500000",
+                        "lockedDeltaAtomic": "0",
+                        "metadata": {
+                            "dashboardStatus": "pending_settle",
+                            "gatewayStage": "pending_batch",
+                            "transactionState": "SETTLED",
+                            "txHash": "0xcurrent",
+                        },
+                        "createdAt": "2026-05-22T14:17:27+00:00",
+                    },
+                    {
+                        "entryId": "entry_outgoing_waiting_on_peer_batch",
+                        "entryType": "agent_transfer",
+                        "agentId": "receiver",
+                        "availableDeltaAtomic": "-1100000",
+                        "lockedDeltaAtomic": "0",
+                        "metadata": {
+                            "dashboardStatus": "pending_settle",
+                            "gatewayStage": "pending_batch",
+                            "transactionState": "SETTLED",
+                            "txHash": "0xoutgoing",
+                        },
+                        "createdAt": "2026-05-22T14:21:48+00:00",
+                    },
+                ],
+                "escrows": [],
+            },
+            owner_email="receiver@example.com",
+        )
+
+        data = state["agents"]["receiver"]
+        self.assertEqual(data["balance"]["pendingSettlementAtomic"], "500000")
+        txs_by_id = {tx["id"]: tx for tx in data["transactions"]}
+        self.assertEqual(txs_by_id["entry_current_settled_batch"]["status"], "pending_settle")
+        self.assertEqual(txs_by_id["entry_old_settled_batch"]["status"], "released")
+        self.assertEqual(txs_by_id["entry_outgoing_waiting_on_peer_batch"]["status"], "released")
+
     def test_dashboard_withdrawal_lifecycle_rows_are_outgoing_withdrawals(self) -> None:
         submitted = main.dashboard_transaction(
             {

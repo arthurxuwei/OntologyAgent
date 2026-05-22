@@ -98,7 +98,7 @@ def dashboard_available_usdc(account: dict[str, Any]) -> float:
 def dashboard_transaction(
     entry: dict[str, Any],
     escrow_by_id: dict[str, dict[str, Any]],
-    current_gateway_pending_batch_atomic: Any = None,
+    active_gateway_pending_entry_ids: Optional[set[str]] = None,
 ) -> dict[str, Any]:
     entry_type = str(entry.get("entryType") or "ledger")
     available_delta = atomic_decimal(entry.get("availableDeltaAtomic"))
@@ -129,16 +129,12 @@ def dashboard_transaction(
         status = "withdraw_submitted"
     elif entry_type == "withdrawal":
         status = "withdrawn"
-    current_pending_batch = (
-        atomic_decimal(current_gateway_pending_batch_atomic)
-        if current_gateway_pending_batch_atomic is not None
-        else None
-    )
     if (
         status == "pending_settle"
         and metadata.get("transactionState") == "SETTLED"
         and metadata.get("gatewayStage") == "pending_batch"
-        and current_pending_batch == 0
+        and active_gateway_pending_entry_ids is not None
+        and str(entry.get("entryId") or "") not in active_gateway_pending_entry_ids
     ):
         status = "released"
     withdrawal_lifecycle = status in {"withdraw_submitted", "withdrawn"} or (
@@ -185,6 +181,40 @@ def dashboard_transaction(
         if value is not None:
             transaction[key] = value
     return transaction
+
+
+def active_gateway_pending_entry_ids(
+    agent_entries: list[dict[str, Any]],
+    escrow_by_id: dict[str, dict[str, Any]],
+    current_gateway_pending_batch_atomic: Any,
+) -> Optional[set[str]]:
+    if current_gateway_pending_batch_atomic is None:
+        return None
+    remaining = atomic_decimal(current_gateway_pending_batch_atomic)
+    active: set[str] = set()
+    if remaining <= 0:
+        return active
+    for entry in agent_entries:
+        metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
+        if atomic_decimal(entry.get("availableDeltaAtomic")) <= 0:
+            continue
+        if metadata.get("dashboardStatus") != "pending_settle":
+            continue
+        if metadata.get("transactionState") != "SETTLED":
+            continue
+        if metadata.get("gatewayStage") != "pending_batch":
+            continue
+        amount = parse_dashboard_amount_atomic(
+            entry,
+            dashboard_base_amount_atomic(entry, escrow_by_id),
+        )
+        if amount <= 0 or amount > remaining:
+            continue
+        entry_id = str(entry.get("entryId") or "")
+        if entry_id:
+            active.add(entry_id)
+            remaining -= amount
+    return active
 
 
 def empty_dashboard_agent(account: dict[str, Any]) -> dict[str, Any]:
@@ -272,6 +302,11 @@ def build_dashboard_data(
             if str(entry.get("entryId") or "") not in linked_pending_entry_ids
         ]
         gateway_pending_batch_atomic = account.get("gatewayPendingBatchAtomic")
+        active_pending_entry_ids = active_gateway_pending_entry_ids(
+            agent_entries,
+            escrow_by_id,
+            gateway_pending_batch_atomic,
+        )
         lifetime_in = sum(
             atomic_to_usdc(entry.get("availableDeltaAtomic"))
             for entry in agent_entries
@@ -291,7 +326,7 @@ def build_dashboard_data(
             if dashboard_transaction(
                 entry,
                 escrow_by_id,
-                gateway_pending_batch_atomic,
+                active_pending_entry_ids,
             )["status"] == "pending_settle"
         )
         wallet_address = (
@@ -322,7 +357,7 @@ def build_dashboard_data(
                 dashboard_transaction(
                     entry,
                     escrow_by_id,
-                    gateway_pending_batch_atomic,
+                    active_pending_entry_ids,
                 )
                 for entry in visible_agent_entries
             ],
