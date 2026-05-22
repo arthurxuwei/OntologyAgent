@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any, Optional
 
 from utils import (
     atomic_decimal,
     atomic_to_usdc,
     claim_code_for_account,
-    decimal_usdc_to_float,
     normalize_email,
     normalize_wallet_account_type,
     parse_dashboard_amount_atomic,
@@ -75,6 +74,25 @@ def dashboard_base_amount_atomic(
         abs(atomic_decimal(entry.get("availableDeltaAtomic"))),
         abs(atomic_decimal(entry.get("lockedDeltaAtomic"))),
     )
+
+
+def decimal_usdc(value: Any, fallback: Decimal = Decimal("0")) -> Decimal:
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return fallback
+
+
+def dashboard_available_usdc(account: dict[str, Any]) -> float:
+    wallet = decimal_usdc(
+        account.get("circleUsdcBalance"),
+        fallback=atomic_decimal(account.get("availableAtomic")) / Decimal("1000000"),
+    )
+    gateway = decimal_usdc(
+        account.get("gatewayUsdcTotal"),
+        fallback=atomic_decimal(account.get("gatewayTotalAtomic")) / Decimal("1000000"),
+    )
+    return float(wallet + gateway)
 
 
 def dashboard_transaction(
@@ -259,10 +277,7 @@ def build_dashboard_data(
                 "ownerEmail": normalize_email(account.get("email")),
             },
             "balance": {
-                "available": decimal_usdc_to_float(
-                    account.get("circleUsdcBalance"),
-                    fallback=atomic_to_usdc(account.get("availableAtomic")),
-                ),
+                "available": dashboard_available_usdc(account),
                 "locked": atomic_to_usdc(account.get("lockedAtomic")),
                 "lifetimeIn": round(lifetime_in, 6),
                 "lifetimeOut": round(lifetime_out, 6),

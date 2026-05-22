@@ -727,11 +727,14 @@ class TestDashboardClaims(LedgerServiceTestCase):
         self.assertEqual(candidate["accountType"], "EOA")
         self.assertTrue(candidate["claimCode"].startswith("clm_"))
 
-    def test_dashboard_data_uses_circle_usdc_as_available_balance(self) -> None:
+    def test_dashboard_data_uses_wallet_and_gateway_total_as_available_balance(self) -> None:
         class FakeWalletClient:
             async def status(self, *, wallet_address=None, circle_wallet_id=None):
                 assert circle_wallet_id == "circle-wallet-1"
-                return {"balances": {"USDC": "1.98"}}
+                return {
+                    "balances": {"USDC": "1.98"},
+                    "gatewayBalance": {"formattedTotal": "1.25"},
+                }
 
         store = main.get_store()
         store.bind_account_wallet(
@@ -747,6 +750,6 @@ class TestDashboardClaims(LedgerServiceTestCase):
 
         self.assertEqual(
             dashboard["agents"]["agent_research"]["balance"]["available"],
-            1.98,
+            3.23,
         )
         self.assertEqual(main.get_store().load().accounts[0].availableAtomic, "0")

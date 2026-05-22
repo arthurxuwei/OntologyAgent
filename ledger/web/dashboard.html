@@ -359,7 +359,7 @@ function PendingBalanceLine({ amount = 0, label = 'Settling', size = 'lg' }) {
         letterSpacing: '0.04em',
       }}
     >
-      +${window.formatAmount(amount)} {label}
+      +{window.formatAmount(amount)} {label}
     </div>
   );
 }
@@ -448,7 +448,6 @@ function AgentCard({
           gap: '8px',
         }}
       >
-        <span className="font-mono" style={{ fontSize: isMini ? '20px' : '32px', color: 'var(--ink-tertiary)' }}>$</span>
         <span className="font-mono" style={{ fontSize: isMini ? '36px' : '56px', letterSpacing: '-0.01em', lineHeight: 1, color: 'var(--ink-primary)' }}>
           {fmt(displayBalance)}
         </span>
@@ -462,7 +461,7 @@ function AgentCard({
 
       {escrowed > 0 && (
         <div className="font-mono mt-2" style={{ fontSize: '12px', letterSpacing: '0.04em', color: 'var(--accent-amber)' }}>
-          ESCROWED · ${fmt(escrowed)}
+          ESCROWED · {fmt(escrowed)}
         </div>
       )}
 
@@ -491,7 +490,7 @@ window.AgentCard = AgentCard;
 //
 // Refund visual: instead of striking through the row (which read as "void /
 // never happened"), refund rows keep the original signed amount and append
-// a tertiary "↩ ±$amount · net $0.00" so the round-trip is explicit.
+// a tertiary "↩ ±amount · net 0.00" so the round-trip is explicit.
 // Line-through is reserved for `expired` — the only status that means the
 // trade truly never settled.
 
@@ -643,7 +642,7 @@ function TransactionRow({
             marginLeft: 'auto',
           }}
         >
-          {sign}${window.formatAmount(amount)}
+          {sign}{window.formatAmount(amount)}
         </div>
         {isRefunded && (
           <div
@@ -656,7 +655,7 @@ function TransactionRow({
             }}
             title={t('dash.tx.refund_tooltip')}
           >
-            ↩ {reverseSign}${window.formatAmount(amount)} · {t('dash.tx.refund_net')}
+            ↩ {reverseSign}{window.formatAmount(amount)} · {t('dash.tx.refund_net')}
           </div>
         )}
       </div>
@@ -692,9 +691,9 @@ function TransactionRow({
         )}
         {withdrawalLike && (gasDisplay || netDisplay) && (
           <span className="font-mono text-[11px]" style={{ color: 'var(--ink-tertiary)' }}>
-            {gasDisplay ? `Gas ~$${gasDisplay}` : ''}
+            {gasDisplay ? `Gas ~${gasDisplay}` : ''}
             {gasDisplay && netDisplay ? ' · ' : ''}
-            {netDisplay ? `Net $${netDisplay}` : ''}
+            {netDisplay ? `Net ${netDisplay}` : ''}
             {(gasDisplay || netDisplay) && network ? ` · ${network}` : ''}
           </span>
         )}
@@ -1743,8 +1742,8 @@ const LANG_DICT = {
                                        zh: "提现" },
   // Refund overlay — appended after the amount on refunded rows so the
   // round-trip ($X out, $X back, net 0) is explicit instead of a strike-through.
-  'dash.tx.refund_net':              { en: "net $0.00",
-                                       zh: "净额 $0.00" },
+  'dash.tx.refund_net':              { en: "net 0.00",
+                                      zh: "净额 0.00" },
   'dash.tx.refund_tooltip':          { en: "Trade settled then reversed — funds returned to your wallet.",
                                        zh: "交易曾结算后被反向 —— 资金已退回到你的钱包。" },
 
@@ -2862,7 +2861,7 @@ function AgentRow({ meta, fallbackId, active, t }) {
           letterSpacing: '-0.01em',
         }}
       >
-        ${window.formatAmount(meta.balance.available)}
+        {window.formatAmount(meta.balance.available)}
       </div>
     </div>
   );
@@ -4016,14 +4015,14 @@ window.MockStateToggle = MockStateToggle;
     'mvp.dash.onramp.amount_label':         { en: 'YOU PAY',                  zh: '支付' },
     'mvp.dash.onramp.receive_label':        { en: 'YOU RECEIVE',              zh: '到账' },
     'mvp.dash.onramp.fee_label':            { en: 'Fee',                      zh: '手续费' },
-    'mvp.dash.onramp.min_max_hint':         { en: '$5 minimum · $1,000 maximum', zh: '最低 $5 · 最高 $1,000' },
+    'mvp.dash.onramp.min_max_hint':         { en: '5 USD minimum · 1,000 USD maximum', zh: '最低 5 USD · 最高 1,000 USD' },
     'mvp.dash.onramp.payment_method_label': { en: 'PAYMENT METHOD',           zh: '支付方式' },
     'mvp.dash.onramp.method_apple_pay':     { en: 'Apple Pay',                zh: 'Apple Pay' },
     'mvp.dash.onramp.method_card':          { en: 'Debit / Credit card',      zh: '借记卡 / 信用卡' },
     'mvp.dash.onramp.method_bank':          { en: 'Bank transfer',            zh: '银行转账' },
     'mvp.dash.onramp.method_bank_meta':     { en: '1-3 days',                 zh: '1-3 个工作日' },
     'mvp.dash.onramp.network_label':        { en: 'Network',                  zh: '链' },
-    'mvp.dash.onramp.pay_button':           { en: 'Pay ${amount}',            zh: '支付 ${amount}' },
+    'mvp.dash.onramp.pay_button':           { en: 'Pay {amount} USD',         zh: '支付 {amount} USD' },
     'mvp.dash.onramp.processing_title':     { en: 'Opening Coinbase…',        zh: '正在打开 Coinbase…' },
     'mvp.dash.onramp.processing_body':      { en: 'Creating a hosted onramp session for this agent wallet.', zh: '正在为这个 Agent 钱包创建托管充值会话。' },
     'mvp.dash.onramp.success_title':        { en: 'Coinbase onramp opened',   zh: 'Coinbase 充值已打开' },
@@ -4048,7 +4047,7 @@ window.MockStateToggle = MockStateToggle;
     'mvp.dash.funding.field_destination':           { en: 'Destination address', zh: '目标地址' },
     'mvp.dash.funding.field_amount':                { en: 'Amount (USDC)',       zh: '金额(USDC)' },
     'mvp.dash.funding.max':                         { en: 'MAX',                 zh: '最大' },
-    'mvp.dash.funding.min_hint':                    { en: 'Min 1 USDC · Network: Base · Est. gas ~$0.01', zh: '最低 1 USDC · 链:Base · 预估 gas ~$0.01' },
+    'mvp.dash.funding.min_hint':                    { en: 'Min 1 USDC · Network: Base · Est. gas ~0.01', zh: '最低 1 USDC · 链:Base · 预估 gas ~0.01' },
     'mvp.dash.funding.term_network':                { en: 'Network',                                      zh: '链' },
     'mvp.dash.funding.term_fee':                    { en: 'Network fee',                                  zh: '链上费用' },
     'mvp.dash.funding.term_net_destination':        { en: 'Net to destination',                           zh: '目标到账' },
@@ -4371,7 +4370,7 @@ window.MockStateToggle = MockStateToggle;
           className="font-mono"
           style={{ fontSize: '28px', color: 'var(--ink-primary)', letterSpacing: '-0.01em' }}
         >
-          ${window.formatAmount(balance.available)}
+          {window.formatAmount(balance.available)}
           <span className="font-mono" style={{ fontSize: '11px', color: 'var(--ink-tertiary)', marginLeft: '6px' }}>
             USDC
           </span>
@@ -4433,7 +4432,7 @@ window.MockStateToggle = MockStateToggle;
           {t('mvp.dash.overview.balance_label')}
         </div>
         <div className="font-mono" style={{ fontSize: '56px', color: 'var(--ink-primary)', letterSpacing: '-0.02em', lineHeight: 1 }}>
-          ${window.formatAmount(balance.available)}
+          {window.formatAmount(balance.available)}
           <span style={{ fontSize: '18px', color: 'var(--ink-tertiary)', marginLeft: '12px', letterSpacing: '0.04em' }}>USDC</span>
         </div>
         <window.PendingBalanceLine
@@ -4452,8 +4451,8 @@ window.MockStateToggle = MockStateToggle;
             borderTop: '1px solid var(--stroke-hairline)',
           }}
         >
-          <Kpi label={t('mvp.dash.overview.kpi_in')}  value={`$${window.formatAmount(balance.lifetimeIn)}`} />
-          <Kpi label={t('mvp.dash.overview.kpi_out')} value={`$${window.formatAmount(balance.lifetimeOut)}`} />
+          <Kpi label={t('mvp.dash.overview.kpi_in')}  value={window.formatAmount(balance.lifetimeIn)} />
+          <Kpi label={t('mvp.dash.overview.kpi_out')} value={window.formatAmount(balance.lifetimeOut)} />
         </div>
 
         {/* Recent transactions */}
@@ -4811,7 +4810,6 @@ window.MockStateToggle = MockStateToggle;
               gap: '8px',
             }}
           >
-            <span style={{ fontSize: '20px', color: '#5B6B79' }}>$</span>
             <input
               type="text"
               value={amount}
@@ -4854,7 +4852,7 @@ window.MockStateToggle = MockStateToggle;
             </div>
           </div>
           <div style={{ fontSize: '11px', color: '#5B6B79' }}>
-            {t('mvp.dash.onramp.fee_label')}: ${fee.toFixed(2)}
+            {t('mvp.dash.onramp.fee_label')}: {fee.toFixed(2)}
           </div>
         </div>
 
@@ -6338,7 +6336,7 @@ window.MockStateToggle = MockStateToggle;
           {t('mvp.dash.funding.balance_label')}
         </div>
         <div className="font-mono" style={{ fontSize: '48px', color: 'var(--ink-primary)', letterSpacing: '-0.02em', lineHeight: 1 }}>
-          ${window.formatAmount(localBalance)}
+          {window.formatAmount(localBalance)}
           <span style={{ fontSize: '16px', color: 'var(--ink-tertiary)', marginLeft: '12px', letterSpacing: '0.04em' }}>USDC</span>
         </div>
 
@@ -6524,11 +6522,11 @@ window.MockStateToggle = MockStateToggle;
               <TermLabel>{t('mvp.dash.funding.term_network')}</TermLabel>
               <TermValue>{selectedWallet ? `${chainName(selectedWallet.chain)} · USDC` : 'Base · USDC'}</TermValue>
               <TermLabel>{t('mvp.dash.funding.term_fee')}</TermLabel>
-              <TermValue>~$0.003 USDC</TermValue>
+              <TermValue>~0.003 USDC</TermValue>
               {netAmount !== null && (
                 <>
                   <TermLabel>{t('mvp.dash.funding.term_net_destination')}</TermLabel>
-                  <TermValue accent>${window.formatAmount(netAmount)} USDC</TermValue>
+                  <TermValue accent>{window.formatAmount(netAmount)} USDC</TermValue>
                 </>
               )}
               <TermLabel>{t('mvp.dash.funding.term_eta')}</TermLabel>
@@ -6624,7 +6622,7 @@ window.MockStateToggle = MockStateToggle;
           PENDING TOP-UP
         </div>
         <div className="font-body" style={{ color: 'var(--ink-primary)', fontSize: '13px', marginBottom: '12px', overflowWrap: 'anywhere' }}>
-          +${window.formatAmount(tx.amount)} USDC · {tx.counterparty}
+          +{window.formatAmount(tx.amount)} USDC · {tx.counterparty}
         </div>
         <ol className="font-body" style={{ margin: 0, paddingLeft: '18px', color: 'var(--ink-secondary)', fontSize: '12px', lineHeight: 1.8 }}>
           <li>Exchange withdrawn</li>
@@ -7588,32 +7586,6 @@ window.MockStateToggle = MockStateToggle;
     );
   }
 
-  // Reset link — only after onboarding (matches main).
-  function ResetLink() {
-    const t = window.useT();
-    const { claimed, resetAll } = window.useAppState();
-    if (!claimed) return null;
-    return (
-      <button
-        type="button"
-        onClick={resetAll}
-        className="font-mono"
-        style={{
-          background: 'transparent',
-          border: 'none',
-          padding: '2px 0',
-          cursor: 'pointer',
-          fontSize: '10px',
-          letterSpacing: '0.06em',
-          color: 'var(--ink-tertiary)',
-        }}
-        title={t('mvp.dash.reset_title')}
-      >
-        ↻ {t('mvp.dash.reset')}
-      </button>
-    );
-  }
-
   function DashboardRoot() {
     return (
       <window.LangProvider>
@@ -7630,7 +7602,6 @@ window.MockStateToggle = MockStateToggle;
                 gap: '16px',
               }}
             >
-              <ResetLink />
               <window.LangSwitcher />
             </div>
             <DeepLinkClaimRunner />
