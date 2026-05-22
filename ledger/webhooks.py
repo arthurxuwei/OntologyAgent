@@ -355,18 +355,82 @@ async def process_circle_wallet_webhook(payload: dict[str, Any]) -> dict[str, An
         credited_amount_atomic: str,
         result: Any,
     ) -> dict[str, Any]:
+        pending = pending_entry.metadata
+        pending_transaction_id = pending.get("circleTransactionId") or transaction_id
+        pending_notification_id = pending.get("notificationId") or notification_id
+        pending_gateway_ref_id = pending.get("gatewayRefId") or gateway_ref_id
         return {
             "dashboardStatus": "credited",
             "amountAtomic": credited_amount_atomic,
-            "counterparty": "External wallet",
+            "counterparty": pending.get("counterparty") or "External wallet",
             "linkedEntryId": pending_entry.entryId,
-            "txHash": transaction_id,
-            "network": "Base",
-            "circleTransactionId": transaction_id,
-            "notificationId": notification_id,
-            "gatewayRefId": gateway_ref_id,
+            "txHash": pending.get("txHash") or pending_transaction_id,
+            "network": pending.get("network") or "Base",
+            "circleTransactionId": pending_transaction_id,
+            "notificationId": pending_notification_id,
+            "gatewayRefId": pending_gateway_ref_id,
             **gateway_deposit_ledger_metadata(result),
         }
+
+    def credit_linked_to_pending(pending: LedgerEntry) -> Optional[LedgerEntry]:
+        state = services.get_store().load()
+        pending_transaction_id = pending.metadata.get("circleTransactionId")
+        for entry in state.entries:
+            if entry.entryType != "credit" or entry.agentId != account.agentId:
+                continue
+            metadata = entry.metadata
+            if metadata.get("linkedEntryId") == pending.entryId:
+                return entry
+            if (
+                pending_transaction_id
+                and metadata.get("dashboardStatus") == "credited"
+                and metadata.get("circleTransactionId") == pending_transaction_id
+            ):
+                return entry
+        return None
+
+    def pending_inbounds_covered_by_sweep(swept_amount_atomic: str) -> list[LedgerEntry]:
+        remaining = parse_nonnegative_atomic(swept_amount_atomic)
+        covered: list[LedgerEntry] = []
+        state = services.get_store().load()
+        for entry in state.entries:
+            if entry.entryType != "pending_inbound" or entry.agentId != account.agentId:
+                continue
+            if entry.metadata.get("dashboardStatus") != "pending_inbound_chain":
+                continue
+            if credit_linked_to_pending(entry) is not None:
+                continue
+            amount_text = entry.metadata.get("amountAtomic")
+            if not isinstance(amount_text, str):
+                continue
+            amount = parse_nonnegative_atomic(amount_text)
+            if amount <= 0 or amount > remaining:
+                continue
+            covered.append(entry)
+            remaining -= amount
+        return covered
+
+    def mark_pending_event_processed_by_batch(
+        pending: LedgerEntry,
+        result: dict[str, Any],
+    ) -> None:
+        pending_notification_id = pending.metadata.get("notificationId")
+        if not isinstance(pending_notification_id, str):
+            return
+        event = services.get_store().get_circle_webhook_event(pending_notification_id)
+        if event is None or event.status == "processed":
+            return
+        services.get_store().save_circle_webhook_event(
+            event.model_copy(
+                update={
+                    "status": "processed",
+                    "reason": "gateway_deposit_completed_by_batch_sweep",
+                    "gatewayDepositResult": result,
+                    "error": None,
+                    "updatedAt": now_iso(),
+                }
+            )
+        )
 
     pending_entry = matching_entry("pending_inbound", "pending_inbound_chain")
     credited_entry = matching_entry("credit", "credited")
@@ -431,6 +495,7 @@ async def process_circle_wallet_webhook(payload: dict[str, Any]) -> dict[str, An
         )
 
     gateway_deposit_result: dict[str, Any] = {}
+    swept_amount_atomic: Optional[str] = None
     credited_amount_atomic = (
         existing.amountAtomic
         if existing is not None and existing.amountAtomic is not None
@@ -491,6 +556,7 @@ async def process_circle_wallet_webhook(payload: dict[str, Any]) -> dict[str, An
                     refId=gateway_ref_id,
                 )
             )
+            swept_amount_atomic = wallet_balance_atomic
         except Exception as error:
             services.get_store().save_circle_webhook_event(
                 received.model_copy(
@@ -515,16 +581,37 @@ async def process_circle_wallet_webhook(payload: dict[str, Any]) -> dict[str, An
 
     credited_account = services.get_store().ensure_account(account.agentId)
     if credited_entry is None:
-        credited_account, credited_entry = services.get_store().credit(
-            agent_id=account.agentId,
-            amount_atomic=credited_amount_atomic,
-            reason="Gateway Wallet credited",
-            metadata=credited_metadata(
-                pending_entry,
-                credited_amount_atomic,
-                gateway_deposit_result,
-            ),
-        )
+        pending_entries = [pending_entry]
+        if swept_amount_atomic is not None:
+            pending_entries = pending_inbounds_covered_by_sweep(swept_amount_atomic)
+            if pending_entry not in pending_entries:
+                pending_entries.append(pending_entry)
+
+        for candidate in pending_entries:
+            candidate_amount_atomic = candidate.metadata.get("amountAtomic")
+            if not isinstance(candidate_amount_atomic, str):
+                candidate_amount_atomic = credited_amount_atomic
+            existing_credit = credit_linked_to_pending(candidate)
+            if existing_credit is not None:
+                if candidate.entryId == pending_entry.entryId:
+                    credited_entry = existing_credit
+                continue
+            credited_account, created_credit = services.get_store().credit(
+                agent_id=account.agentId,
+                amount_atomic=candidate_amount_atomic,
+                reason="Gateway Wallet credited",
+                metadata=credited_metadata(
+                    candidate,
+                    candidate_amount_atomic,
+                    gateway_deposit_result,
+                ),
+            )
+            mark_pending_event_processed_by_batch(candidate, gateway_deposit_result)
+            if candidate.entryId == pending_entry.entryId:
+                credited_entry = created_credit
+
+    if credited_entry is None:
+        credited_entry = credit_linked_to_pending(pending_entry)
 
     processed = services.get_store().save_circle_webhook_event(
         received.model_copy(

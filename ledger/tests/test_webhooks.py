@@ -240,6 +240,88 @@ class TestWebhooks(LedgerServiceTestCase):
         self.assertEqual(entries[1].availableDeltaAtomic, "1000000")
         self.assertEqual(entries[1].metadata["amountAtomic"], "1000000")
 
+    def test_circle_wallet_webhook_credits_pending_inbounds_covered_by_batch_sweep(self) -> None:
+        store = main.get_store()
+        store.bind_account_wallet(
+            agent_id="agent_research",
+            agent_name="Research Agent",
+            email="agent@example.com",
+            wallet_address="0x1111111111111111111111111111111111111111",
+            circle_wallet_id="circle-wallet-1",
+        )
+        for suffix in ("one", "two"):
+            store.record_dashboard_event(
+                entry_type="pending_inbound",
+                agent_id="agent_research",
+                reason="external top-up detected",
+                metadata={
+                    "dashboardStatus": "pending_inbound_chain",
+                    "amountAtomic": "1000000",
+                    "counterparty": "External wallet",
+                    "gatewayStage": "gateway_crediting",
+                    "txHash": f"tx-inbound-{suffix}",
+                    "network": "Base",
+                    "circleTransactionId": f"tx-inbound-{suffix}",
+                    "notificationId": f"notification-{suffix}",
+                    "gatewayRefId": f"circle-webhook:notification-{suffix}",
+                },
+            )
+
+        class FakeWalletClient:
+            def __init__(self) -> None:
+                self.requests = []
+
+            async def status(self, *, wallet_address, circle_wallet_id):
+                return {"balances": {"USDC": "3.00"}}
+
+            async def gateway_deposit(self, request):
+                self.requests.append(request)
+                return {
+                    "agentId": request.agentId,
+                    "amountAtomic": request.amountAtomic,
+                    "mode": "gateway_deposit",
+                    "gatewayBalance": {"availableAtomic": request.amountAtomic},
+                }
+
+        fake_client = FakeWalletClient()
+        with patch.object(services, "get_ledger_wallet_client", return_value=fake_client):
+            response = self.client.post(
+                "/circle/webhooks/wallets",
+                json={
+                    "subscriptionId": "subscription-1",
+                    "notificationId": "notification-three",
+                    "notificationType": "transactions.inbound",
+                    "notification": {
+                        "id": "tx-inbound-three",
+                        "state": "CONFIRMED",
+                        "transactionType": "INBOUND",
+                        "walletId": "circle-wallet-1",
+                        "destinationAddress": "0x1111111111111111111111111111111111111111",
+                        "amounts": ["1"],
+                        "tokenSymbol": "USDC",
+                    },
+                    "timestamp": "2026-05-21T06:00:00Z",
+                    "version": 2,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "processed")
+        self.assertEqual(len(fake_client.requests), 1)
+        self.assertEqual(fake_client.requests[0].amountAtomic, "3000000")
+
+        entries = store.load().entries
+        credits = [entry for entry in entries if entry.entryType == "credit"]
+        self.assertEqual([entry.availableDeltaAtomic for entry in credits], ["1000000"] * 3)
+        self.assertEqual(
+            [entry.metadata["circleTransactionId"] for entry in credits],
+            ["tx-inbound-one", "tx-inbound-two", "tx-inbound-three"],
+        )
+        self.assertEqual(
+            {entry.metadata["linkedEntryId"] for entry in credits},
+            {entry.entryId for entry in entries if entry.entryType == "pending_inbound"},
+        )
+
     def test_circle_wallet_webhook_replay_with_new_notification_for_processed_transaction_is_duplicate(self) -> None:
         store = main.get_store()
         store.bind_account_wallet(
