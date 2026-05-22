@@ -249,17 +249,6 @@ class TestWebhooks(LedgerServiceTestCase):
             wallet_address="0x1111111111111111111111111111111111111111",
             circle_wallet_id="circle-wallet-1",
         )
-        _account, pending_entry = store.record_dashboard_event(
-            entry_type="pending_inbound",
-            agent_id="agent_research",
-            reason="external top-up detected",
-            metadata={
-                "dashboardStatus": "pending_inbound_chain",
-                "amountAtomic": "1000000",
-                "circleTransactionId": "tx-inbound-replayed",
-                "notificationId": "notification-original",
-            },
-        )
         store.credit(
             agent_id="agent_research",
             amount_atomic="1000000",
@@ -269,7 +258,6 @@ class TestWebhooks(LedgerServiceTestCase):
                 "amountAtomic": "1000000",
                 "circleTransactionId": "tx-inbound-replayed",
                 "notificationId": "notification-original",
-                "linkedEntryId": pending_entry.entryId,
             },
         )
 
@@ -303,7 +291,7 @@ class TestWebhooks(LedgerServiceTestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "duplicate")
-        self.assertEqual(len(main.get_store().load().entries), 2)
+        self.assertEqual(len(main.get_store().load().entries), 1)
 
     def test_circle_wallet_webhook_skips_gateway_deposit_until_wallet_balance_reaches_one_usdc(self) -> None:
         main.get_store().bind_account_wallet(

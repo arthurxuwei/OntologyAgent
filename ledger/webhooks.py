@@ -376,7 +376,7 @@ async def process_circle_wallet_webhook(payload: dict[str, Any]) -> dict[str, An
             "notificationId": notification_id,
             "event": existing.model_dump(),
         }
-    if existing is None and pending_entry is not None and credited_entry is not None:
+    if existing is None and credited_entry is not None:
         duplicate_event = services.get_store().save_circle_webhook_event(
             circle_webhook_event_record(
                 notification_id=notification_id,
@@ -389,6 +389,21 @@ async def process_circle_wallet_webhook(payload: dict[str, Any]) -> dict[str, An
                 circle_wallet_id=circle_wallet_id,
                 amount_atomic=amount_atomic,
                 reason="duplicate_gateway_deposit_completed",
+            )
+        )
+        return {
+            "status": "duplicate",
+            "notificationId": notification_id,
+            "event": duplicate_event.model_dump(),
+        }
+    if existing is not None and existing.status != "processed" and credited_entry is not None:
+        duplicate_event = services.get_store().save_circle_webhook_event(
+            existing.model_copy(
+                update={
+                    "status": "processed",
+                    "reason": "duplicate_gateway_deposit_completed",
+                    "updatedAt": now_iso(),
+                }
             )
         )
         return {
