@@ -144,7 +144,11 @@ def dashboard_transaction(
         "netAmount",
         "failureReason",
         "gatewayStage",
+        "gatewayPendingBatchAtomic",
         "linkedEntryId",
+        "settlementMode",
+        "settlementRecordId",
+        "transactionState",
     ):
         value = metadata.get(key)
         if value is not None:

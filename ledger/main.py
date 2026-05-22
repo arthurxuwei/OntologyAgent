@@ -75,6 +75,48 @@ from webhooks import (
 app = FastAPI(title="Chief offchain ledger")
 
 
+FINAL_TRANSFER_STATES = {"SETTLED", "COMPLETE", "COMPLETED", "CONFIRMED"}
+
+
+def gateway_pending_batch_atomic(action_result: dict[str, Any]) -> int:
+    gateway_balance = action_result.get("gatewayBalance")
+    if not isinstance(gateway_balance, dict):
+        return 0
+    value = gateway_balance.get("pendingBatchAtomic")
+    if not isinstance(value, str) or not value.isdigit():
+        return 0
+    return int(value)
+
+
+def agent_transfer_dashboard_metadata(
+    settlement_record: LedgerSettlementRecord,
+) -> dict[str, Any]:
+    action_result = (
+        settlement_record.actionResult
+        if isinstance(settlement_record.actionResult, dict)
+        else {}
+    )
+    metadata: dict[str, Any] = {
+        "settlementMode": settlement_record.mode,
+        "transactionState": settlement_record.transactionState,
+        "txHash": settlement_record.transactionHash
+        or action_result.get("transactionHash")
+        or action_result.get("transactionId"),
+    }
+    pending_batch_atomic = gateway_pending_batch_atomic(action_result)
+    if pending_batch_atomic > 0:
+        metadata["gatewayPendingBatchAtomic"] = str(pending_batch_atomic)
+    state = str(settlement_record.transactionState or "").upper()
+    if (
+        str(settlement_record.mode or "").lower() == "gateway"
+        or pending_batch_atomic > 0
+        or (state and state not in FINAL_TRANSFER_STATES)
+    ):
+        metadata["dashboardStatus"] = "pending_settle"
+        metadata["gatewayStage"] = "pending_batch"
+    return {key: value for key, value in metadata.items() if value is not None}
+
+
 @app.get("/health")
 def health() -> dict[str, Any]:
     return {"service": "chief-ledger", "status": "ok"}
@@ -609,6 +651,7 @@ async def transfer_between_agents(request: AgentTransferRequest) -> dict[str, An
             **request.metadata,
             "fromEmail": normalize_email(request.fromEmail),
             "toEmail": normalize_email(request.toEmail),
+            **agent_transfer_dashboard_metadata(settlement_record),
         }
         sender, receiver, entries = get_store().transfer_between_agents(
             from_agent_id=sender_account.agentId,

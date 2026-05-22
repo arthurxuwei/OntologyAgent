@@ -332,6 +332,70 @@ class TestSettlementFlows(LedgerServiceTestCase):
         self.assertEqual(accounts["agent_receiver"].lockedAtomic, "0")
         self.assertEqual([entry["entryType"] for entry in payload["entries"]], ["agent_transfer", "agent_transfer"])
 
+    def test_agent_transfer_pending_batch_surfaces_as_settling_in_dashboard(self) -> None:
+        class FakeSettlementClient:
+            async def submit_agent_transfer(self, **kwargs):
+                return main.LedgerSettlementRecord(
+                    recordId="settle_gateway_batch",
+                    eventType="agent_transfer",
+                    status="submitted",
+                    settlementHttpUrl="http://circle.test",
+                    transferId=kwargs["ref_id"],
+                    fromAgentId=kwargs["from_agent_id"],
+                    toAgentId=kwargs["to_agent_id"],
+                    amountAtomic=kwargs["amount_atomic"],
+                    transactionId="0xgatewaysettlement",
+                    transactionHash="0xgatewaysettlement",
+                    transactionState="SETTLED",
+                    mode="gateway",
+                    actionResult={
+                        "transactionHash": "0xgatewaysettlement",
+                        "gatewayBalance": {
+                            "pendingBatchAtomic": kwargs["amount_atomic"],
+                            "formattedPendingBatch": "1.25",
+                        },
+                    },
+                    createdAt=main.now_iso(),
+                    updatedAt=main.now_iso(),
+                )
+
+        main.get_store().bind_account_wallet(
+            agent_id="agent_sender",
+            agent_name="Sender",
+            email="sender@example.com",
+            wallet_address="0x1111111111111111111111111111111111111111",
+            circle_wallet_id="circle_sender",
+        )
+        main.get_store().bind_account_wallet(
+            agent_id="agent_receiver",
+            agent_name="Receiver",
+            email="receiver@example.com",
+            wallet_address="0x2222222222222222222222222222222222222222",
+            circle_wallet_id="circle_receiver",
+        )
+
+        with patch.object(services, "get_ledger_settlement_client", return_value=FakeSettlementClient()):
+            response = self.client.post(
+                "/ledger/transfers",
+                json={
+                    "fromEmail": "sender@example.com",
+                    "toEmail": "receiver@example.com",
+                    "amountAtomic": "1250000",
+                    "reason": "direct payment",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            [entry["metadata"].get("dashboardStatus") for entry in response.json()["entries"]],
+            ["pending_settle", "pending_settle"],
+        )
+        sender_dashboard = self.client.get("/dashboard/data?email=sender@example.com").json()
+        sender = sender_dashboard["agents"]["agent_sender"]
+        self.assertEqual(sender["balance"]["pendingSettlementAtomic"], "1250000")
+        self.assertEqual(sender["transactions"][0]["status"], "pending_settle")
+        self.assertEqual(sender["transactions"][0]["gatewayStage"], "pending_batch")
+
     def test_agent_transfer_failure_does_not_mutate_ledger_balance(self) -> None:
         class FakeSettlementClient:
             async def submit_agent_transfer(self, **_kwargs):
