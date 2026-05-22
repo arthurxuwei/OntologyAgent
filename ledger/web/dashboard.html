@@ -347,24 +347,162 @@ function useTween(target, duration = 400) {
 // USDC's native 6-decimal precision instead of being rounded to "0.00".
 const fmt = (n) => window.formatAmount(n);
 
-function PendingBalanceLine({ amount = 0, label = 'Settling', size = 'lg' }) {
-  if (!amount || amount <= 0) return null;
+const STATUS_CHIP_META = {
+  pending_settle: {
+    labelKey: 'mvp.dash.status.pending_settle.label',
+    tooltipKey: 'mvp.dash.status.pending_settle.tooltip',
+  },
+  pending_inbound_chain: {
+    labelKey: 'mvp.dash.status.pending_inbound_chain.label',
+    tooltipKey: 'mvp.dash.status.pending_inbound_chain.tooltip',
+  },
+  withdrawn: {
+    labelKey: 'mvp.dash.status.withdrawn.label',
+    chipColor: 'var(--ink-secondary)',
+  },
+  credited: {
+    labelKey: 'mvp.dash.status.credited.label',
+    chipColor: 'var(--ink-secondary)',
+  },
+};
+
+function chipColorFor(meta) {
+  return (meta && meta.chipColor) || 'var(--accent-amber)';
+}
+
+function ExplanationPopover({ text, anchorRef, onClose, align = 'left' }) {
+  React.useEffect(() => {
+    const handleMouseDown = (event) => {
+      if (anchorRef.current && !anchorRef.current.contains(event.target)) onClose();
+    };
+    const handleKey = (event) => {
+      if (event.key === 'Escape') onClose();
+    };
+    document.addEventListener('mousedown', handleMouseDown);
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('mousedown', handleMouseDown);
+      document.removeEventListener('keydown', handleKey);
+    };
+  }, [anchorRef, onClose]);
+
   return (
     <div
-      className="font-mono"
+      role="tooltip"
+      onClick={(event) => event.stopPropagation()}
       style={{
-        marginTop: size === 'sm' ? '8px' : '12px',
-        fontSize: size === 'sm' ? '11px' : '13px',
-        color: 'var(--accent-amber)',
-        letterSpacing: '0.04em',
+        position: 'absolute',
+        top: 'calc(100% + 8px)',
+        [align]: 0,
+        zIndex: 100,
+        width: '320px',
+        maxWidth: 'calc(100vw - 32px)',
+        padding: '12px 14px',
+        background: 'var(--surface-card)',
+        border: '1px solid var(--stroke-rule)',
+        boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
+        fontFamily: 'Geist, -apple-system, sans-serif',
+        fontSize: '12px',
+        lineHeight: 1.5,
+        color: 'var(--ink-secondary)',
+        textAlign: 'left',
+        whiteSpace: 'normal',
+        textTransform: 'none',
+        letterSpacing: 0,
+        cursor: 'default',
       }}
     >
-      +{window.formatAmount(amount)} {label}
+      {text}
+    </div>
+  );
+}
+
+function InfoTrigger({ tooltipKey, size = 'sm', align = 'left' }) {
+  const t = window.useT();
+  const [open, setOpen] = React.useState(false);
+  const ref = React.useRef(null);
+  const iconSize = size === 'lg' ? '13px' : '12px';
+  return (
+    <span ref={ref} style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
+      <span
+        role="button"
+        tabIndex={0}
+        aria-label={t('mvp.dash.status.info_aria')}
+        aria-expanded={open}
+        onClick={(event) => {
+          event.stopPropagation();
+          setOpen((value) => !value);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            event.stopPropagation();
+            setOpen((value) => !value);
+          }
+        }}
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          cursor: 'pointer',
+          color: 'var(--accent-amber)',
+          fontSize: iconSize,
+          lineHeight: 1,
+          opacity: open ? 1 : 0.7,
+          userSelect: 'none',
+        }}
+      >
+        ⓘ
+      </span>
+      {open && (
+        <ExplanationPopover
+          text={t(tooltipKey)}
+          anchorRef={ref}
+          onClose={() => setOpen(false)}
+          align={align}
+        />
+      )}
+    </span>
+  );
+}
+
+function PendingBalanceLine({ amount = 0, status = 'pending_settle', size = 'lg' }) {
+  if (!amount || amount <= 0) return null;
+  const t = window.useT();
+  const meta = STATUS_CHIP_META[status];
+  const isLg = size === 'lg';
+  if (!meta) return null;
+  return (
+    <div
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: '6px',
+        borderLeft: '2px solid var(--accent-amber)',
+        paddingLeft: '10px',
+        marginTop: isLg ? '16px' : '10px',
+      }}
+    >
+      <span
+        className="font-mono"
+        style={{
+          fontSize: isLg ? '13px' : '11px',
+          color: 'var(--accent-amber)',
+          letterSpacing: '0.02em',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {t(meta.labelKey)} {window.formatAmount(amount)}
+      </span>
+      <InfoTrigger tooltipKey={meta.tooltipKey} size={size} />
     </div>
   );
 }
 
 window.PendingBalanceLine = PendingBalanceLine;
+window.InfoTrigger = InfoTrigger;
+window.ExplanationPopover = ExplanationPopover;
+window.STATUS_CHIP_META = STATUS_CHIP_META;
+window.statusChipColorFor = chipColorFor;
 
 function AgentCard({
   agentName,
@@ -455,7 +593,6 @@ function AgentCard({
       </div>
       <window.PendingBalanceLine
         amount={pendingSettlement}
-        label="Settling"
         size={isMini ? 'sm' : 'lg'}
       />
 
@@ -534,7 +671,15 @@ function TransactionRow({
     // pill flips to EXPIRED with neutral ink-tertiary color + line-through.
     expired:           { label: 'EXPIRED',           color: 'var(--ink-tertiary)',    bg: 'transparent' },
   };
-  const s = statusMap[status] || statusMap.locked;
+  const lifecycleMeta = (window.STATUS_CHIP_META || {})[status];
+  const lifecycleLabel = lifecycleMeta ? t(lifecycleMeta.labelKey) : null;
+  const s = lifecycleMeta
+    ? {
+        label: lifecycleLabel,
+        color: (window.statusChipColorFor && window.statusChipColorFor(lifecycleMeta)) || 'var(--accent-amber)',
+        bg: 'transparent',
+      }
+    : (statusMap[status] || statusMap.locked);
   const isInverse = s.bg !== 'transparent';
   const lineThrough = status === 'expired';
   const isRefunded = status === 'refunded';
@@ -673,6 +818,9 @@ function TransactionRow({
         >
           {s.label}
         </span>
+        {lifecycleMeta && lifecycleMeta.tooltipKey && window.InfoTrigger && (
+          <window.InfoTrigger tooltipKey={lifecycleMeta.tooltipKey} size="sm" />
+        )}
         {countdown && (
           <span
             className="font-mono text-[11px]"
@@ -3994,16 +4142,34 @@ window.MockStateToggle = MockStateToggle;
     'mvp.dash.transactions.slug':              { en: 'TRANSACTIONS', zh: '交易记录' },
     'mvp.dash.transactions.empty':             { en: 'No transactions yet.', zh: '还没有交易。' },
     'mvp.dash.transactions.row_count_suffix':  { en: 'transactions',        zh: '笔交易' },
+    'mvp.dash.status.info_aria':               { en: 'View explanation', zh: '查看说明' },
+    'mvp.dash.status.pending_settle.label':    { en: 'Settling', zh: '待入账' },
+    'mvp.dash.status.pending_settle.tooltip': {
+      en: 'Received by Circle Gateway, waiting for the next batch settlement to land on-chain. Will move to your available balance once settled.',
+      zh: '已被 Circle Gateway 接收,正在等待下一次批量结算上链。结算完成后会进入可用余额。',
+    },
+    'mvp.dash.status.pending_inbound_chain.label': { en: 'Crediting', zh: '入账中' },
+    'mvp.dash.status.pending_inbound_chain.tooltip': {
+      en: 'Funds have left the exchange and are being confirmed on Base. Usually around 20 min, depending on network conditions.',
+      zh: '资金已离开交易所,正在 Base 链确认。通常约 20 分钟,实际取决于链上情况。',
+    },
+    'mvp.dash.status.withdrawn.label':          { en: 'Withdrawn', zh: '已提现' },
+    'mvp.dash.status.credited.label':           { en: 'Credited', zh: '已入账' },
 
     // ── Funding view ──────────────────────────────────────────────────────
     'mvp.dash.funding.slug':                      { en: 'FUNDING',                 zh: '资金' },
     'mvp.dash.funding.balance_label':             { en: 'BALANCE',                 zh: '余额' },
+    'mvp.dash.funding.pending_topup_label':        { en: 'PENDING TOP-UP',          zh: '充值处理中' },
     'mvp.dash.funding.add_label':                 { en: 'ADD FUNDS',               zh: '充值' },
     'mvp.dash.funding.add_description': {
       en: "Send USDC to this agent's wallet from any wallet on Base — exchange or self-custody.",
       zh: '从任意支持 Base 链的钱包(交易所或自管钱包)给这个 agent 发 USDC。',
     },
     'mvp.dash.funding.receive_eyebrow': { en: "THIS AGENT'S WALLET · BASE", zh: '本 agent 的收款地址 · BASE' },
+    'mvp.dash.funding.gateway_explainer': {
+      en: 'Funds that arrive on Base are automatically swept into our settlement layer (Circle Gateway), so agent-to-agent transactions carry no extra fees. Looking this address up on Basescan may show 0 USDC — the balance shown above is authoritative.',
+      zh: '资金到达 Base 后会自动转入我们的结算层(Circle Gateway),确保 agent 之间的每笔交易不产生额外手续费。直接在 Basescan 查询此地址可能显示 0 USDC,实际余额以上方为准。',
+    },
     'mvp.dash.funding.onramp_coming_soon': {
       en: 'Buying USDC with card or bank transfer is on the way — Coinbase Onramp lands in an upcoming release.',
       zh: '银行卡 / 银行转账买 USDC 的入口正在路上,会在后续版本里上线。',
@@ -4377,7 +4543,6 @@ window.MockStateToggle = MockStateToggle;
         </div>
         <window.PendingBalanceLine
           amount={pendingSettlement}
-          label="Settling"
           size="sm"
         />
         <div
@@ -4437,7 +4602,6 @@ window.MockStateToggle = MockStateToggle;
         </div>
         <window.PendingBalanceLine
           amount={balance.pendingSettlement || 0}
-          label="Settling"
         />
 
         {/* KPI row — 2-up (escrow dropped: MVP has no lock state) */}
@@ -6341,7 +6505,17 @@ window.MockStateToggle = MockStateToggle;
         </div>
 
         {pendingDeposits.length > 0 && (
-          <Section title="PENDING TOP-UP">
+          <Section
+            title={t('mvp.dash.funding.pending_topup_label')}
+            titleSuffix={
+              window.InfoTrigger && (
+                <window.InfoTrigger
+                  tooltipKey="mvp.dash.status.pending_inbound_chain.tooltip"
+                  size="sm"
+                />
+              )
+            }
+          >
             {pendingDeposits.map((tx) => (
               <PendingDepositCard key={tx.id} tx={tx} t={t} />
             ))}
@@ -6356,8 +6530,16 @@ window.MockStateToggle = MockStateToggle;
           <Card>
             <div className="grid" style={{ gridTemplateColumns: '1fr auto', gap: '28px', alignItems: 'start' }}>
               <div>
-                <div className="smallcaps-mono" style={{ color: 'var(--ink-tertiary)', marginBottom: '8px' }}>
-                  {t('mvp.dash.funding.receive_eyebrow')} · Gateway Wallet
+                <div className="flex items-center" style={{ gap: '6px', marginBottom: '8px' }}>
+                  <span className="smallcaps-mono" style={{ color: 'var(--ink-tertiary)' }}>
+                    {t('mvp.dash.funding.receive_eyebrow')}
+                  </span>
+                  {window.InfoTrigger && (
+                    <window.InfoTrigger
+                      tooltipKey="mvp.dash.funding.gateway_explainer"
+                      size="sm"
+                    />
+                  )}
                 </div>
                 <div
                   className="font-mono"
@@ -6698,11 +6880,14 @@ window.MockStateToggle = MockStateToggle;
     );
   }
 
-  function Section({ title, description, children }) {
+  function Section({ title, titleSuffix, description, children }) {
     return (
       <section style={{ marginTop: '48px', paddingTop: '32px', borderTop: '1px solid var(--stroke-rule)' }}>
-        <div className="smallcaps-mono" style={{ color: 'var(--ink-tertiary)', marginBottom: '4px' }}>
-          {title}
+        <div className="flex items-center" style={{ gap: '6px', marginBottom: '4px' }}>
+          <span className="smallcaps-mono" style={{ color: 'var(--ink-tertiary)' }}>
+            {title}
+          </span>
+          {titleSuffix}
         </div>
         {description && (
           <div className="font-body" style={{ fontSize: '13px', color: 'var(--ink-secondary)', marginBottom: '24px', maxWidth: '720px' }}>

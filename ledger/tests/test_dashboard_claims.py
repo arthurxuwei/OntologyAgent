@@ -388,6 +388,64 @@ class TestDashboardClaims(LedgerServiceTestCase):
         self.assertEqual([tx["id"] for tx in txs], ["entry_credit"])
         self.assertEqual(txs[0]["status"], "credited")
 
+    def test_dashboard_keeps_gateway_deposit_crediting_while_circle_deposit_is_pending(self) -> None:
+        state = main.build_dashboard_data(
+            {
+                "accounts": [
+                    {
+                        "agentId": "agent_topup",
+                        "agentName": "Topup Agent",
+                        "walletAddress": "0x1111111111111111111111111111111111111111",
+                        "circleUsdcBalance": "0",
+                        "gatewayUsdcTotal": "16.202",
+                        "gatewayTotalAtomic": "16202000",
+                        "gatewayUsdcPendingDeposits": "2.1",
+                        "gatewayPendingDepositsAtomic": "2100000",
+                        "availableAtomic": "0",
+                    }
+                ],
+                "entries": [
+                    {
+                        "entryId": "entry_pending",
+                        "entryType": "pending_inbound",
+                        "agentId": "agent_topup",
+                        "availableDeltaAtomic": "0",
+                        "lockedDeltaAtomic": "0",
+                        "createdAt": "2026-05-22T15:08:31+00:00",
+                        "metadata": {
+                            "dashboardStatus": "pending_inbound_chain",
+                            "amountAtomic": "2100000",
+                            "circleTransactionId": "circle-tx-pending",
+                        },
+                    },
+                    {
+                        "entryId": "entry_credit",
+                        "entryType": "credit",
+                        "agentId": "agent_topup",
+                        "availableDeltaAtomic": "2100000",
+                        "lockedDeltaAtomic": "0",
+                        "createdAt": "2026-05-22T15:09:05+00:00",
+                        "metadata": {
+                            "dashboardStatus": "credited",
+                            "amountAtomic": "2100000",
+                            "circleTransactionId": "circle-tx-pending",
+                            "linkedEntryId": "entry_pending",
+                        },
+                    },
+                ],
+                "escrows": [],
+            }
+        )
+
+        agent = state["agents"]["agent_topup"]
+        txs = agent["transactions"]
+
+        self.assertEqual(agent["balance"]["available"], 14.102)
+        self.assertEqual([tx["id"] for tx in txs], ["entry_credit"])
+        self.assertEqual(txs[0]["status"], "pending_inbound_chain")
+        self.assertEqual(txs[0]["role"], "deposit")
+        self.assertEqual(txs[0]["amountAtomic"], "2100000")
+
     def test_dashboard_withdrawal_status_ignores_blank_or_non_string_dashboard_status(self) -> None:
         for dashboard_status in ("", "   ", None, False):
             with self.subTest(dashboard_status=dashboard_status):

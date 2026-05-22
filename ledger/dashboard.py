@@ -92,13 +92,18 @@ def dashboard_available_usdc(account: dict[str, Any]) -> float:
         account.get("gatewayUsdcTotal"),
         fallback=atomic_decimal(account.get("gatewayTotalAtomic")) / Decimal("1000000"),
     )
-    return float(wallet + gateway)
+    pending_gateway_deposits = decimal_usdc(
+        account.get("gatewayUsdcPendingDeposits"),
+        fallback=atomic_decimal(account.get("gatewayPendingDepositsAtomic")) / Decimal("1000000"),
+    )
+    return float(max(wallet + gateway - pending_gateway_deposits, Decimal("0")))
 
 
 def dashboard_transaction(
     entry: dict[str, Any],
     escrow_by_id: dict[str, dict[str, Any]],
     active_gateway_pending_entry_ids: Optional[set[str]] = None,
+    active_gateway_pending_deposit_entry_ids: Optional[set[str]] = None,
 ) -> dict[str, Any]:
     entry_type = str(entry.get("entryType") or "ledger")
     available_delta = atomic_decimal(entry.get("availableDeltaAtomic"))
@@ -130,6 +135,13 @@ def dashboard_transaction(
     elif entry_type == "withdrawal":
         status = "withdrawn"
     if (
+        status == "credited"
+        and entry_type == "credit"
+        and active_gateway_pending_deposit_entry_ids is not None
+        and str(entry.get("entryId") or "") in active_gateway_pending_deposit_entry_ids
+    ):
+        status = "pending_inbound_chain"
+    if (
         status == "pending_settle"
         and metadata.get("transactionState") == "SETTLED"
         and metadata.get("gatewayStage") == "pending_batch"
@@ -147,7 +159,7 @@ def dashboard_transaction(
     role = "payer" if direction == "out" else "payee"
     if withdrawal_lifecycle:
         role = "withdrawal"
-    elif status in {"onramp", "credited"} and entry_type == "credit":
+    elif status in {"onramp", "credited", "pending_inbound_chain"} and entry_type == "credit":
         role = "deposit"
     elif status == "refunded":
         role = "refund"
@@ -203,6 +215,38 @@ def active_gateway_pending_entry_ids(
         if metadata.get("transactionState") != "SETTLED":
             continue
         if metadata.get("gatewayStage") != "pending_batch":
+            continue
+        amount = parse_dashboard_amount_atomic(
+            entry,
+            dashboard_base_amount_atomic(entry, escrow_by_id),
+        )
+        if amount <= 0 or amount > remaining:
+            continue
+        entry_id = str(entry.get("entryId") or "")
+        if entry_id:
+            active.add(entry_id)
+            remaining -= amount
+    return active
+
+
+def active_gateway_pending_deposit_entry_ids(
+    agent_entries: list[dict[str, Any]],
+    escrow_by_id: dict[str, dict[str, Any]],
+    current_gateway_pending_deposits_atomic: Any,
+) -> Optional[set[str]]:
+    if current_gateway_pending_deposits_atomic is None:
+        return None
+    remaining = atomic_decimal(current_gateway_pending_deposits_atomic)
+    active: set[str] = set()
+    if remaining <= 0:
+        return active
+    for entry in agent_entries:
+        metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
+        if entry.get("entryType") != "credit":
+            continue
+        if metadata.get("dashboardStatus") != "credited":
+            continue
+        if not metadata.get("linkedEntryId"):
             continue
         amount = parse_dashboard_amount_atomic(
             entry,
@@ -307,6 +351,12 @@ def build_dashboard_data(
             escrow_by_id,
             gateway_pending_batch_atomic,
         )
+        gateway_pending_deposits_atomic = account.get("gatewayPendingDepositsAtomic")
+        active_pending_deposit_entry_ids = active_gateway_pending_deposit_entry_ids(
+            agent_entries,
+            escrow_by_id,
+            gateway_pending_deposits_atomic,
+        )
         lifetime_in = sum(
             atomic_to_usdc(entry.get("availableDeltaAtomic"))
             for entry in agent_entries
@@ -327,6 +377,7 @@ def build_dashboard_data(
                 entry,
                 escrow_by_id,
                 active_pending_entry_ids,
+                active_pending_deposit_entry_ids,
             )["status"] == "pending_settle"
         )
         wallet_address = (
@@ -358,6 +409,7 @@ def build_dashboard_data(
                     entry,
                     escrow_by_id,
                     active_pending_entry_ids,
+                    active_pending_deposit_entry_ids,
                 )
                 for entry in visible_agent_entries
             ],
