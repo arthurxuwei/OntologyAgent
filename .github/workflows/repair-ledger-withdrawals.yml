@@ -2,6 +2,9 @@ name: Repair ledger withdrawals
 
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/repair-ledger-withdrawals.yml"
 
 jobs:
   repair:
