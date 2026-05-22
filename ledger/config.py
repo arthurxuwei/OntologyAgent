@@ -5,6 +5,7 @@ from pathlib import Path
 
 DEFAULT_ASSET = "USDC"
 DEFAULT_LEDGER_STATE_PATH = "ledger/data/offchain_ledger.json"
+DEFAULT_LEDGER_DB_PATH = "ledger/data/offchain_ledger.sqlite3"
 DEFAULT_COINBASE_API_BASE_URL = "https://api.developer.coinbase.com"
 DEFAULT_COINBASE_TOKEN_PATH = "/onramp/v1/token"
 DEFAULT_COINBASE_HOSTED_URL = "https://pay.coinbase.com/buy/select-asset"

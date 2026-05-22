@@ -26,7 +26,9 @@ class LedgerServiceTestCase(unittest.TestCase):
         self.temp_dir = temp_root / f"ledger-test-{uuid.uuid4().hex}"
         self.temp_dir.mkdir()
         self.state_path = str(self.temp_dir / "ledger.json")
+        self.db_path = str(self.temp_dir / "ledger.sqlite3")
         self.previous_state_path = os.environ.get("LEDGER_STATE_PATH")
+        self.previous_db_path = os.environ.get("LEDGER_DB_PATH")
         self.previous_coinbase_mock = os.environ.get("COINBASE_ONRAMP_MOCK")
         self.previous_coinbase_key_id = os.environ.get("COINBASE_API_KEY_ID")
         self.previous_coinbase_private_key = os.environ.get("COINBASE_API_PRIVATE_KEY")
@@ -43,6 +45,7 @@ class LedgerServiceTestCase(unittest.TestCase):
         self.previous_circle_api_key = os.environ.get("CIRCLE_API_KEY")
         self.previous_circle_webhook_verify = os.environ.get("CIRCLE_WEBHOOK_VERIFY_SIGNATURE")
         os.environ["LEDGER_STATE_PATH"] = self.state_path
+        os.environ["LEDGER_DB_PATH"] = self.db_path
         os.environ["LEDGER_CHAIN_RECORD_ENABLED"] = "false"
         os.environ["LEDGER_CHAIN_RECORD_REQUIRE_SUCCESS"] = "false"
         os.environ["LEDGER_SETTLEMENT_ENABLED"] = "false"
@@ -63,6 +66,10 @@ class LedgerServiceTestCase(unittest.TestCase):
             os.environ.pop("LEDGER_STATE_PATH", None)
         else:
             os.environ["LEDGER_STATE_PATH"] = self.previous_state_path
+        if self.previous_db_path is None:
+            os.environ.pop("LEDGER_DB_PATH", None)
+        else:
+            os.environ["LEDGER_DB_PATH"] = self.previous_db_path
         if self.previous_coinbase_mock is None:
             os.environ.pop("COINBASE_ONRAMP_MOCK", None)
         else:

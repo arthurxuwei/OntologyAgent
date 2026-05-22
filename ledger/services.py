@@ -24,6 +24,7 @@ from config import (
     DEFAULT_COINBASE_API_BASE_URL,
     DEFAULT_COINBASE_HOSTED_URL,
     DEFAULT_COINBASE_TOKEN_PATH,
+    DEFAULT_LEDGER_DB_PATH,
     DEFAULT_LEDGER_STATE_PATH,
     DEFAULT_SETTLEMENT_HTTP_URL,
     DEFAULT_WALLET_HTTP_URL,
@@ -38,7 +39,8 @@ logger = logging.getLogger("chief.ledger")
 @lru_cache(maxsize=1)
 def get_store() -> OffchainLedgerStore:
     return OffchainLedgerStore(
-        os.getenv("LEDGER_STATE_PATH", DEFAULT_LEDGER_STATE_PATH)
+        os.getenv("LEDGER_DB_PATH", DEFAULT_LEDGER_DB_PATH),
+        legacy_json_path=os.getenv("LEDGER_STATE_PATH", DEFAULT_LEDGER_STATE_PATH),
     )
 
 

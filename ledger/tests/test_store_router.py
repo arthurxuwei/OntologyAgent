@@ -167,7 +167,7 @@ class TestStoreRouter(LedgerServiceTestCase):
         self.assertEqual(response.status_code, 404)
         self.assertEqual(response.json()["detail"], "escrow not found")
 
-    def test_state_persists_to_json_file(self) -> None:
+    def test_state_persists_to_sqlite_file(self) -> None:
         self.client.post(
             "/ledger/accounts/agent_buyer/credit",
             json={"amountAtomic": "5000000", "reason": "demo funding"},
@@ -179,7 +179,78 @@ class TestStoreRouter(LedgerServiceTestCase):
 
         self.assertEqual(state["accounts"][0]["agentId"], "agent_buyer")
         self.assertEqual(state["accounts"][0]["availableAtomic"], "5000000")
-        self.assertTrue(Path(self.state_path).exists())
+        self.assertTrue(Path(self.db_path).exists())
+
+    def test_sqlite_store_imports_existing_json_once(self) -> None:
+        now = main.now_iso()
+        legacy_state = {
+            "accounts": [
+                {
+                    "agentId": "agent_legacy",
+                    "asset": "USDC",
+                    "availableAtomic": "7000000",
+                    "lockedAtomic": "0",
+                    "createdAt": now,
+                    "updatedAt": now,
+                }
+            ],
+            "entries": [],
+            "escrows": [],
+            "onrampSessions": [],
+            "onrampEvents": [],
+            "circleWebhookEvents": [],
+            "chainRecords": [],
+            "settlementRecords": [],
+        }
+        Path(self.state_path).write_text(json.dumps(legacy_state), encoding="utf-8")
+
+        state = main.get_store().load()
+        self.assertEqual(state.accounts[0].agentId, "agent_legacy")
+        self.assertEqual(state.accounts[0].availableAtomic, "7000000")
+
+        main.get_store().credit(
+            agent_id="agent_new",
+            amount_atomic="1000000",
+            reason="new funding",
+            metadata={},
+        )
+        Path(self.state_path).write_text(json.dumps({"accounts": []}), encoding="utf-8")
+        main.get_store.cache_clear()
+
+        reloaded = main.get_store().load()
+        self.assertEqual(
+            {account.agentId for account in reloaded.accounts},
+            {"agent_legacy", "agent_new"},
+        )
+
+    def test_sqlite_store_imports_existing_json_when_database_file_is_empty(self) -> None:
+        now = main.now_iso()
+        legacy_state = {
+            "accounts": [
+                {
+                    "agentId": "agent_legacy_empty_db",
+                    "asset": "USDC",
+                    "availableAtomic": "3000000",
+                    "lockedAtomic": "0",
+                    "createdAt": now,
+                    "updatedAt": now,
+                }
+            ],
+            "entries": [],
+            "escrows": [],
+            "onrampSessions": [],
+            "onrampEvents": [],
+            "circleWebhookEvents": [],
+            "chainRecords": [],
+            "settlementRecords": [],
+        }
+        Path(self.state_path).write_text(json.dumps(legacy_state), encoding="utf-8")
+        Path(self.db_path).touch()
+
+        state = main.get_store().load()
+
+        self.assertEqual(state.accounts[0].agentId, "agent_legacy_empty_db")
+        self.assertEqual(state.accounts[0].availableAtomic, "3000000")
 
     def test_route_payment_intent_is_served_by_ledger_rest(self) -> None:
         response = self.client.post(

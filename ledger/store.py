@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 import os
-import tempfile
+import sqlite3
 import threading
 import uuid
+from collections.abc import Callable
 from typing import Any, Literal, Optional
 
 from pydantic import BaseModel
@@ -99,9 +100,39 @@ def migrate_ledger_state_payload(raw: Any) -> Any:
     return raw
 
 
+LedgerRecordId = Callable[[dict[str, Any], int], str]
+
+
+def _account_record_id(record: dict[str, Any], _position: int) -> str:
+    return f"{record.get('asset') or DEFAULT_ASSET}:{record.get('agentId')}"
+
+
+def _field_record_id(field_name: str) -> LedgerRecordId:
+    def record_id(record: dict[str, Any], position: int) -> str:
+        value = record.get(field_name)
+        if isinstance(value, str) and value:
+            return value
+        return f"missing-{field_name}-{position}"
+
+    return record_id
+
+
+LEDGER_COLLECTIONS: tuple[tuple[str, str, LedgerRecordId], ...] = (
+    ("accounts", "accounts", _account_record_id),
+    ("entries", "entries", _field_record_id("entryId")),
+    ("escrows", "escrows", _field_record_id("escrowId")),
+    ("onramp_sessions", "onrampSessions", _field_record_id("sessionId")),
+    ("onramp_events", "onrampEvents", _field_record_id("eventId")),
+    ("circle_webhook_events", "circleWebhookEvents", _field_record_id("notificationId")),
+    ("chain_records", "chainRecords", _field_record_id("recordId")),
+    ("settlement_records", "settlementRecords", _field_record_id("recordId")),
+)
+
+
 class OffchainLedgerStore:
-    def __init__(self, path: str) -> None:
+    def __init__(self, path: str, *, legacy_json_path: Optional[str] = None) -> None:
         self.path = path
+        self.legacy_json_path = legacy_json_path
         self._lock = threading.RLock()
 
     def load(self) -> LedgerState:
@@ -736,43 +767,178 @@ class OffchainLedgerStore:
         return self._mutate(mutate)
 
     def _load_unlocked(self) -> LedgerState:
-        if not os.path.exists(self.path):
-            return LedgerState()
-        with open(self.path, encoding="utf-8") as handle:
-            return LedgerState.model_validate(
-                migrate_ledger_state_payload(json.load(handle))
-            )
+        connection = self._connect()
+        try:
+            self._ensure_schema(connection)
+            self._maybe_import_legacy_json(connection)
+            return self._load_state_from_db(connection)
+        finally:
+            connection.close()
 
     def _save_unlocked(self, state: LedgerState) -> None:
         parent_dir = os.path.dirname(self.path)
         if parent_dir:
             os.makedirs(parent_dir, exist_ok=True)
-        target_dir = parent_dir or "."
-        fd, temp_path = tempfile.mkstemp(
-            prefix=".offchain-ledger-",
-            suffix=".tmp",
-            dir=target_dir,
-            text=True,
-        )
+        connection = self._connect()
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                json.dump(state.model_dump(), handle, indent=2, sort_keys=True)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temp_path, self.path)
-        except Exception:
+            self._ensure_schema(connection)
+            connection.execute("BEGIN IMMEDIATE")
             try:
-                os.unlink(temp_path)
-            except FileNotFoundError:
-                pass
-            raise
+                self._replace_state(connection, state)
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+        finally:
+            connection.close()
 
     def _mutate(self, mutator):
         with self._lock:
-            state = self._load_unlocked()
-            result = mutator(state)
-            self._save_unlocked(state)
-            return result
+            connection = self._connect()
+            try:
+                self._ensure_schema(connection)
+                connection.execute("BEGIN IMMEDIATE")
+                try:
+                    self._maybe_import_legacy_json(connection)
+                    state = self._load_state_from_db(connection)
+                    result = mutator(state)
+                    self._replace_state(connection, state)
+                    connection.commit()
+                    return result
+                except Exception:
+                    connection.rollback()
+                    raise
+            finally:
+                connection.close()
+
+    def _connect(self) -> sqlite3.Connection:
+        parent_dir = os.path.dirname(self.path)
+        if parent_dir:
+            os.makedirs(parent_dir, exist_ok=True)
+        connection = sqlite3.connect(self.path, timeout=30, isolation_level=None)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute("PRAGMA journal_mode = WAL")
+        return connection
+
+    def _ensure_schema(self, connection: sqlite3.Connection) -> None:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ledger_meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ledger_records (
+                collection TEXT NOT NULL,
+                record_id TEXT NOT NULL,
+                position INTEGER NOT NULL,
+                payload TEXT NOT NULL,
+                PRIMARY KEY (collection, record_id)
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_ledger_records_collection_position
+            ON ledger_records(collection, position)
+            """
+        )
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO ledger_meta(key, value)
+            VALUES ('schema_version', '1')
+            """
+        )
+
+    def _maybe_import_legacy_json(self, connection: sqlite3.Connection) -> None:
+        if not self.legacy_json_path or not os.path.exists(self.legacy_json_path):
+            return
+        imported = connection.execute(
+            "SELECT value FROM ledger_meta WHERE key = 'legacy_json_imported'"
+        ).fetchone()
+        if imported is not None:
+            return
+        record_count = connection.execute(
+            "SELECT COUNT(*) AS count FROM ledger_records"
+        ).fetchone()["count"]
+        if record_count:
+            return
+        with open(self.legacy_json_path, encoding="utf-8") as handle:
+            state = LedgerState.model_validate(
+                migrate_ledger_state_payload(json.load(handle))
+            )
+        started_transaction = not connection.in_transaction
+        if started_transaction:
+            connection.execute("BEGIN IMMEDIATE")
+        try:
+            self._replace_state(connection, state)
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO ledger_meta(key, value)
+                VALUES ('legacy_json_imported', ?)
+                """,
+                (self.legacy_json_path,),
+            )
+            if started_transaction:
+                connection.commit()
+        except Exception:
+            if started_transaction:
+                connection.rollback()
+            raise
+
+    def _load_state_from_db(self, connection: sqlite3.Connection) -> LedgerState:
+        raw_state: dict[str, Any] = {}
+        for sql_collection, state_field, _record_id in LEDGER_COLLECTIONS:
+            rows = connection.execute(
+                """
+                SELECT payload FROM ledger_records
+                WHERE collection = ?
+                ORDER BY position ASC, record_id ASC
+                """,
+                (sql_collection,),
+            ).fetchall()
+            raw_state[state_field] = [json.loads(row["payload"]) for row in rows]
+        return LedgerState.model_validate(migrate_ledger_state_payload(raw_state))
+
+    def _replace_state(self, connection: sqlite3.Connection, state: LedgerState) -> None:
+        payload = state.model_dump()
+        connection.execute("DELETE FROM ledger_records")
+        for sql_collection, state_field, record_id_for in LEDGER_COLLECTIONS:
+            records = payload.get(state_field) or []
+            used_record_ids: set[str] = set()
+            for position, record in enumerate(records):
+                if not isinstance(record, dict):
+                    continue
+                base_record_id = record_id_for(record, position)
+                record_id = base_record_id
+                if record_id in used_record_ids:
+                    record_id = f"{base_record_id}#{position}"
+                while record_id in used_record_ids:
+                    record_id = f"{record_id}#duplicate"
+                used_record_ids.add(record_id)
+                connection.execute(
+                    """
+                    INSERT INTO ledger_records(collection, record_id, position, payload)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (
+                        sql_collection,
+                        record_id,
+                        position,
+                        json.dumps(record, sort_keys=True),
+                    ),
+                )
+        connection.execute(
+            """
+            INSERT OR REPLACE INTO ledger_meta(key, value)
+            VALUES ('updated_at', ?)
+            """,
+            (now_iso(),),
+        )
 
     def _account_for_update(
         self, state: LedgerState, agent_id: str, *, create: bool
