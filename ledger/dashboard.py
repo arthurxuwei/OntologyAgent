@@ -98,6 +98,7 @@ def dashboard_available_usdc(account: dict[str, Any]) -> float:
 def dashboard_transaction(
     entry: dict[str, Any],
     escrow_by_id: dict[str, dict[str, Any]],
+    current_gateway_pending_batch_atomic: Any = None,
 ) -> dict[str, Any]:
     entry_type = str(entry.get("entryType") or "ledger")
     available_delta = atomic_decimal(entry.get("availableDeltaAtomic"))
@@ -128,6 +129,18 @@ def dashboard_transaction(
         status = "withdraw_submitted"
     elif entry_type == "withdrawal":
         status = "withdrawn"
+    current_pending_batch = (
+        atomic_decimal(current_gateway_pending_batch_atomic)
+        if current_gateway_pending_batch_atomic is not None
+        else None
+    )
+    if (
+        status == "pending_settle"
+        and metadata.get("transactionState") == "SETTLED"
+        and metadata.get("gatewayStage") == "pending_batch"
+        and current_pending_batch == 0
+    ):
+        status = "released"
     withdrawal_lifecycle = status in {"withdraw_submitted", "withdrawn"} or (
         entry_type == "withdrawal_submitted" and status == "failed"
     )
@@ -258,6 +271,7 @@ def build_dashboard_data(
             for entry in agent_entries
             if str(entry.get("entryId") or "") not in linked_pending_entry_ids
         ]
+        gateway_pending_batch_atomic = account.get("gatewayPendingBatchAtomic")
         lifetime_in = sum(
             atomic_to_usdc(entry.get("availableDeltaAtomic"))
             for entry in agent_entries
@@ -274,7 +288,11 @@ def build_dashboard_data(
                 dashboard_base_amount_atomic(entry, escrow_by_id),
             )
             for entry in agent_entries
-            if dashboard_transaction(entry, escrow_by_id)["status"] == "pending_settle"
+            if dashboard_transaction(
+                entry,
+                escrow_by_id,
+                gateway_pending_batch_atomic,
+            )["status"] == "pending_settle"
         )
         wallet_address = (
             account.get("walletAddress")
@@ -301,7 +319,11 @@ def build_dashboard_data(
                 "pendingSettlementAtomic": str(int(pending_settlement_atomic)),
             },
             "transactions": [
-                dashboard_transaction(entry, escrow_by_id)
+                dashboard_transaction(
+                    entry,
+                    escrow_by_id,
+                    gateway_pending_batch_atomic,
+                )
                 for entry in visible_agent_entries
             ],
             "settings": {"limits": {"perTradeCap": 0.01}},

@@ -159,6 +159,46 @@ class TestDashboardClaims(LedgerServiceTestCase):
         self.assertEqual(submitted["netAmountAtomic"], "997000")
         self.assertEqual(submitted["txHash"], "0xsubmitted")
 
+    def test_dashboard_clears_settling_when_gateway_pending_batch_is_empty(self) -> None:
+        state = main.build_dashboard_data(
+            {
+                "accounts": [
+                    {
+                        "agentId": "receiver",
+                        "agentName": "Receiver Agent",
+                        "email": "receiver@example.com",
+                        "walletAddress": "0x1111111111111111111111111111111111111111",
+                        "availableAtomic": "1000000",
+                        "lockedAtomic": "0",
+                        "gatewayPendingBatchAtomic": "0",
+                    }
+                ],
+                "entries": [
+                    {
+                        "entryId": "entry_settled_batch",
+                        "entryType": "agent_transfer",
+                        "agentId": "receiver",
+                        "availableDeltaAtomic": "222000",
+                        "lockedDeltaAtomic": "0",
+                        "metadata": {
+                            "dashboardStatus": "pending_settle",
+                            "gatewayPendingBatchAtomic": "222000",
+                            "gatewayStage": "pending_batch",
+                            "transactionState": "SETTLED",
+                            "txHash": "0xsettled",
+                        },
+                        "createdAt": main.now_iso(),
+                    }
+                ],
+                "escrows": [],
+            },
+            owner_email="receiver@example.com",
+        )
+
+        data = state["agents"]["receiver"]
+        self.assertEqual(data["balance"]["pendingSettlementAtomic"], "0")
+        self.assertEqual(data["transactions"][0]["status"], "released")
+
     def test_dashboard_withdrawal_lifecycle_rows_are_outgoing_withdrawals(self) -> None:
         submitted = main.dashboard_transaction(
             {
