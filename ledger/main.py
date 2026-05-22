@@ -10,6 +10,7 @@ from urllib.parse import quote, urlencode
 import httpx
 from fastapi import Cookie, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from payment_router import PaymentIntent, route_payment_intent
 import services
 
@@ -73,6 +74,11 @@ from webhooks import (
 
 
 app = FastAPI(title="Chief offchain ledger")
+app.mount(
+    "/dashboard/assets",
+    StaticFiles(directory=LEDGER_DASHBOARD_ASSETS_PATH),
+    name="dashboard_assets",
+)
 
 
 FINAL_TRANSFER_STATES = {"SETTLED", "COMPLETE", "COMPLETED", "CONFIRMED"}
@@ -86,6 +92,19 @@ def gateway_pending_batch_atomic(action_result: dict[str, Any]) -> int:
     if not isinstance(value, str) or not value.isdigit():
         return 0
     return int(value)
+
+
+def withdrawal_available_basis(
+    account: dict[str, Any] | None,
+) -> tuple[str | None, str]:
+    if isinstance(account, dict):
+        gateway_available = account.get("gatewayAvailableAtomic")
+        if gateway_available is not None:
+            return str(gateway_available), "Gateway available balance"
+        available = account.get("availableAtomic")
+        if available is not None:
+            return str(available), "available balance"
+    return None, "available balance"
 
 
 def agent_transfer_dashboard_metadata(
@@ -506,17 +525,13 @@ async def withdraw_agent_wallet(request: WithdrawalRequest) -> dict[str, Any]:
             ),
             None,
         )
-        available_atomic = (
-            str(synced_account.get("availableAtomic"))
-            if isinstance(synced_account, dict)
-            and synced_account.get("availableAtomic") is not None
-            else None
-        )
+        available_atomic, available_label = withdrawal_available_basis(synced_account)
         get_store().validate_withdrawal(
             agent_id=request.agentId,
             amount_atomic=request.amountAtomic,
             owner_email=request.ownerEmail,
             available_atomic=available_atomic,
+            available_label=available_label,
         )
         submitted_entry = get_store().withdrawal_submitted(
             agent_id=request.agentId,
@@ -579,6 +594,7 @@ async def withdraw_agent_wallet(request: WithdrawalRequest) -> dict[str, Any]:
             withdrawal_id=withdrawal_id,
             settlement_record_id=settlement_record.recordId,
             available_atomic=available_atomic,
+            available_label=available_label,
         )
         chain_record = await record_ledger_chain_event(
             event_type="withdrawal",

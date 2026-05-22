@@ -322,6 +322,7 @@ class OffchainLedgerStore:
         amount_atomic: str,
         owner_email: Optional[str],
         available_atomic: Optional[str] = None,
+        available_label: str = "available balance",
     ) -> LedgerAccount:
         amount = parse_positive_atomic(amount_atomic)
         state = self.load()
@@ -338,7 +339,7 @@ class OffchainLedgerStore:
             else parse_nonnegative_atomic(account.availableAtomic)
         )
         if balance_basis < amount:
-            raise ValueError("amount exceeds available balance")
+            raise ValueError(f"amount exceeds {available_label}")
         return account
 
     def account_by_email(self, email: str) -> LedgerAccount:
@@ -410,6 +411,7 @@ class OffchainLedgerStore:
         withdrawal_id: str,
         settlement_record_id: Optional[str],
         available_atomic: Optional[str] = None,
+        available_label: str = "available balance",
     ) -> tuple[LedgerAccount, LedgerEntry]:
         amount = parse_positive_atomic(amount_atomic)
         destination = normalize_evm_address(destination_address)
@@ -425,11 +427,17 @@ class OffchainLedgerStore:
                 else parse_nonnegative_atomic(account.availableAtomic)
             )
             if balance_basis < amount:
-                raise ValueError("amount exceeds available balance")
+                raise ValueError(f"amount exceeds {available_label}")
             current = now_iso()
+            local_available = parse_nonnegative_atomic(account.availableAtomic)
+            next_available = (
+                str(local_available - amount)
+                if local_available >= amount
+                else account.availableAtomic
+            )
             updated = account.model_copy(
                 update={
-                    "availableAtomic": str(balance_basis - amount),
+                    "availableAtomic": next_available,
                     "updatedAt": current,
                 }
             )

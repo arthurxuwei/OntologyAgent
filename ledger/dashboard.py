@@ -7,6 +7,7 @@ from utils import (
     atomic_decimal,
     atomic_to_usdc,
     claim_code_for_account,
+    decimal_usdc_to_atomic_string,
     normalize_email,
     normalize_wallet_account_type,
     parse_dashboard_amount_atomic,
@@ -97,6 +98,21 @@ def dashboard_available_usdc(account: dict[str, Any]) -> float:
         fallback=atomic_decimal(account.get("gatewayPendingDepositsAtomic")) / Decimal("1000000"),
     )
     return float(max(wallet + gateway - pending_gateway_deposits, Decimal("0")))
+
+
+def dashboard_withdraw_available_atomic(account: dict[str, Any]) -> str:
+    gateway_available_atomic = account.get("gatewayAvailableAtomic")
+    if isinstance(gateway_available_atomic, str) and gateway_available_atomic.isdigit():
+        return gateway_available_atomic
+    gateway_available = account.get("gatewayUsdcAvailable")
+    if gateway_available is not None:
+        atomic = decimal_usdc_to_atomic_string(gateway_available)
+        if atomic is not None:
+            return atomic
+    available_atomic = account.get("availableAtomic")
+    if isinstance(available_atomic, str) and available_atomic.isdigit():
+        return available_atomic
+    return "0"
 
 
 def dashboard_transaction(
@@ -386,6 +402,7 @@ def build_dashboard_data(
             or account.get("circleWalletId")
             or agent_id
         )
+        withdraw_available_atomic = dashboard_withdraw_available_atomic(account)
         agents[agent_id] = {
             "agent": {
                 "id": agent_id,
@@ -398,6 +415,8 @@ def build_dashboard_data(
             },
             "balance": {
                 "available": dashboard_available_usdc(account),
+                "withdrawAvailable": atomic_to_usdc(withdraw_available_atomic),
+                "withdrawAvailableAtomic": withdraw_available_atomic,
                 "locked": atomic_to_usdc(account.get("lockedAtomic")),
                 "lifetimeIn": round(lifetime_in, 6),
                 "lifetimeOut": round(lifetime_out, 6),

@@ -13,6 +13,7 @@ import jwt
 import main
 import services
 import webhooks
+from config import LEDGER_DASHBOARD_ASSETS_PATH
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec, ed25519
 
@@ -21,25 +22,35 @@ from helpers import LedgerServiceTestCase
 
 
 class TestDashboardClaims(LedgerServiceTestCase):
+    def dashboard_source(self, html: str) -> str:
+        source = html
+        if LEDGER_DASHBOARD_ASSETS_PATH.exists():
+            source += "\n" + "\n".join(
+                path.read_text()
+                for path in sorted(LEDGER_DASHBOARD_ASSETS_PATH.rglob("*"))
+                if path.is_file()
+            )
+        return source
+
     def test_dashboard_supports_claim_code_deep_link_auto_claim(self) -> None:
         response = self.client.get("/dashboard")
 
         self.assertEqual(response.status_code, 200)
-        html = response.text
-        self.assertIn("params.get('claimCode')", html)
-        self.assertIn("params.get('agentId')", html)
-        self.assertIn("returnTo=${encodeURIComponent(window.location.pathname + window.location.search)}", html)
-        self.assertIn("function DeepLinkClaimRunner()", html)
-        self.assertIn("const consumedRef = React.useRef(false);", html)
-        self.assertIn("authChecked, claimToken, deepLinkAgentId, currentUser,", html)
-        self.assertIn("!authChecked || consumedRef.current", html)
-        self.assertIn("fetch(`/dashboard/claimable-agents?claimed=${claimed}`)", html)
-        self.assertIn("const normalizedDeepLinkAgentId = deepLinkAgentId.trim();", html)
-        self.assertIn("String(candidate.agentId || '').trim() === normalizedDeepLinkAgentId", html)
-        self.assertIn("window.history.replaceState({}, '', cleanUrl.toString())", html)
-        self.assertIn("<DeepLinkClaimRunner />", html)
-        self.assertIn("<DashboardRouter />", html)
-        self.assertLess(html.index("<DeepLinkClaimRunner />"), html.index("<DashboardRouter />"))
+        source = self.dashboard_source(response.text)
+        self.assertIn("params.get('claimCode')", source)
+        self.assertIn("params.get('agentId')", source)
+        self.assertIn("returnTo=${encodeURIComponent(window.location.pathname + window.location.search)}", source)
+        self.assertIn("function DeepLinkClaimRunner()", source)
+        self.assertIn("const consumedRef = React.useRef(false);", source)
+        self.assertIn("authChecked, claimToken, deepLinkAgentId, currentUser,", source)
+        self.assertIn("!authChecked || consumedRef.current", source)
+        self.assertIn("fetch(`/dashboard/claimable-agents?claimed=${claimed}`)", source)
+        self.assertIn("const normalizedDeepLinkAgentId = deepLinkAgentId.trim();", source)
+        self.assertIn("String(candidate.agentId || '').trim() === normalizedDeepLinkAgentId", source)
+        self.assertIn("window.history.replaceState({}, '', cleanUrl.toString())", source)
+        self.assertIn("<DeepLinkClaimRunner />", source)
+        self.assertIn("<DashboardRouter />", source)
+        self.assertLess(source.index("<DeepLinkClaimRunner />"), source.index("<DashboardRouter />"))
 
     def test_dashboard_data_returns_email_scoped_ledger_accounts(self) -> None:
         store = main.get_store()
@@ -951,7 +962,11 @@ class TestDashboardClaims(LedgerServiceTestCase):
                 assert circle_wallet_id == "circle-wallet-1"
                 return {
                     "balances": {"USDC": "1.98"},
-                    "gatewayBalance": {"formattedTotal": "1.25"},
+                    "gatewayBalance": {
+                        "formattedAvailable": "1.10",
+                        "formattedTotal": "1.25",
+                        "availableAtomic": "1100000",
+                    },
                 }
 
         store = main.get_store()
@@ -969,5 +984,13 @@ class TestDashboardClaims(LedgerServiceTestCase):
         self.assertEqual(
             dashboard["agents"]["agent_research"]["balance"]["available"],
             3.23,
+        )
+        self.assertEqual(
+            dashboard["agents"]["agent_research"]["balance"]["withdrawAvailable"],
+            1.1,
+        )
+        self.assertEqual(
+            dashboard["agents"]["agent_research"]["balance"]["withdrawAvailableAtomic"],
+            "1100000",
         )
         self.assertEqual(main.get_store().load().accounts[0].availableAtomic, "0")

@@ -27,6 +27,7 @@ OAUTH_RETURN_COOKIE = "chief_ledger_oauth_return"
 AUTH_SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 14
 LEDGER_CONSOLE_PATH = Path(__file__).resolve().parent / "web" / "index.html"
 LEDGER_DASHBOARD_PATH = Path(__file__).resolve().parent / "web" / "dashboard.html"
+LEDGER_DASHBOARD_ASSETS_PATH = Path(__file__).resolve().parent / "web" / "dashboard-src"
 NO_CACHE_HEADERS = {
     "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
     "Pragma": "no-cache",

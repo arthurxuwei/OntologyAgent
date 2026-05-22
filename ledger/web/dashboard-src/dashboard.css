@@ -1,0 +1,60 @@
+:root {
+  --surface-paper: #F5F1EA;
+  --surface-card: #FBF8F2;
+  --surface-deep: #1A1A1A;
+  --surface-deep-alt: #2A2A2A;
+  --ink-primary: #1A1A1A;
+  --ink-secondary: #5A5651;
+  --ink-tertiary: #8B847A;
+  --ink-inverse: #F5F1EA;
+  --ink-inverse-meta: #9A9590;
+  --stroke-hairline: rgba(26,26,26,0.08);
+  --stroke-rule: rgba(26,26,26,0.20);
+  --stroke-strong: #1A1A1A;
+  --accent-amber: #A8590D;
+  --accent-amber-soft: rgba(168,89,13,0.08);
+  --status-positive: #2D5F3F;
+  --status-warning: #8B6914;
+  --status-negative: #7A2620;
+}
+
+html, body, #root { height: 100%; margin: 0; padding: 0; }
+body {
+  background: var(--surface-paper);
+  color: var(--ink-primary);
+  font-family: 'Geist', -apple-system, sans-serif;
+  font-size: 16px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+.font-display { font-family: 'Fraunces', Georgia, serif; font-optical-sizing: auto; }
+.font-body    { font-family: 'Geist', -apple-system, sans-serif; }
+.font-mono    { font-family: 'JetBrains Mono', monospace; }
+
+body[data-lang="zh"] .font-display {
+  font-family: 'Noto Serif SC', 'Songti SC', 'STSong', 'SimSun', serif;
+  letter-spacing: 0; font-style: normal;
+}
+body[data-lang="zh"] .font-body,
+body[data-lang="zh"] {
+  font-family: 'Noto Sans SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+}
+body[data-lang="zh"] em,
+body[data-lang="zh"] i,
+body[data-lang="zh"] .italic {
+  font-style: normal; font-weight: 600;
+}
+body[data-lang="zh"] .font-mono,
+body[data-lang="zh"] .smallcaps-mono,
+body[data-lang="zh"] code,
+body[data-lang="zh"] pre {
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.smallcaps      { font-family: 'Geist', sans-serif; font-weight: 500; font-size: 14px; letter-spacing: 0.08em; text-transform: uppercase; }
+.smallcaps-mono { font-family: 'JetBrains Mono', monospace; font-weight: 500; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; }
+.meta           { font-family: 'Geist', sans-serif; font-size: 12px; font-weight: 500; letter-spacing: 0.04em; }
+.hairline-b     { border-bottom: 1px solid var(--stroke-hairline); }
+.rule-b         { border-bottom: 1px solid var(--stroke-rule); }
