@@ -357,6 +357,40 @@ class TestWalletsOnrampState(LedgerServiceTestCase):
         self.assertEqual(state_after_second_read["entries"], [])
         self.assertEqual(main.get_store().load().accounts[0].availableAtomic, "0")
 
+    def test_ledger_state_treats_missing_circle_usdc_balance_as_zero(self) -> None:
+        class FakeWalletClient:
+            async def status(self, *, wallet_address=None, circle_wallet_id=None):
+                assert circle_wallet_id == "circle-wallet-1"
+                return {
+                    "balances": {"ETH-SEPOLIA": "0.01"},
+                    "gatewayBalance": {
+                        "totalAtomic": "1922000",
+                        "formattedTotal": "1.922",
+                    },
+                }
+
+        store = main.get_store()
+        store.bind_account_wallet(
+            agent_id="agent_research",
+            wallet_address="0x1111111111111111111111111111111111111111",
+            circle_wallet_id="circle-wallet-1",
+        )
+        store.credit(
+            agent_id="agent_research",
+            amount_atomic="3000000",
+            reason="stale ledger credit",
+            metadata={},
+        )
+
+        with patch.object(services, "get_ledger_wallet_client", return_value=FakeWalletClient()):
+            state = self.client.get("/ledger/state?agentId=agent_research").json()
+
+        account = state["accounts"][0]
+        self.assertEqual(account["circleUsdcBalance"], "0")
+        self.assertEqual(account["availableAtomic"], "0")
+        self.assertEqual(account["balanceSource"], "circle")
+        self.assertEqual(account["gatewayUsdcTotal"], "1.922")
+
     def test_ledger_state_helper_uses_circle_balance_as_agent_visible_available(
         self,
     ) -> None:

@@ -228,6 +228,55 @@ class TestDashboardClaims(LedgerServiceTestCase):
         self.assertEqual(tx["status"], "credited")
         self.assertEqual(tx["amountAtomic"], "2500000")
 
+    def test_dashboard_hides_pending_inbound_after_gateway_credit(self) -> None:
+        state = main.build_dashboard_data(
+            {
+                "accounts": [
+                    {
+                        "agentId": "agent_topup",
+                        "agentName": "Topup Agent",
+                        "walletAddress": "0x1111111111111111111111111111111111111111",
+                        "availableAtomic": "1000000",
+                    }
+                ],
+                "entries": [
+                    {
+                        "entryId": "entry_pending",
+                        "entryType": "pending_inbound",
+                        "agentId": "agent_topup",
+                        "availableDeltaAtomic": "0",
+                        "lockedDeltaAtomic": "0",
+                        "createdAt": "2026-05-22T08:50:22+00:00",
+                        "metadata": {
+                            "dashboardStatus": "pending_inbound_chain",
+                            "amountAtomic": "1000000",
+                            "circleTransactionId": "circle-tx-1",
+                        },
+                    },
+                    {
+                        "entryId": "entry_credit",
+                        "entryType": "credit",
+                        "agentId": "agent_topup",
+                        "availableDeltaAtomic": "1000000",
+                        "lockedDeltaAtomic": "0",
+                        "createdAt": "2026-05-22T08:50:56+00:00",
+                        "metadata": {
+                            "dashboardStatus": "credited",
+                            "amountAtomic": "1000000",
+                            "circleTransactionId": "circle-tx-1",
+                            "linkedEntryId": "entry_pending",
+                        },
+                    },
+                ],
+                "escrows": [],
+            }
+        )
+
+        txs = state["agents"]["agent_topup"]["transactions"]
+
+        self.assertEqual([tx["id"] for tx in txs], ["entry_credit"])
+        self.assertEqual(txs[0]["status"], "credited")
+
     def test_dashboard_withdrawal_status_ignores_blank_or_non_string_dashboard_status(self) -> None:
         for dashboard_status in ("", "   ", None, False):
             with self.subTest(dashboard_status=dashboard_status):

@@ -378,12 +378,13 @@ async def ledger_state_with_circle_balances() -> dict[str, Any]:
         balances = status.get("balances")
         if isinstance(balances, dict):
             usdc_balance = balances.get(DEFAULT_ASSET)
-            if isinstance(usdc_balance, str):
-                account["circleUsdcBalance"] = usdc_balance
-                circle_available_atomic = decimal_usdc_to_atomic_string(usdc_balance)
-                if circle_available_atomic is not None:
-                    account["availableAtomic"] = circle_available_atomic
-                    account["balanceSource"] = "circle"
+            if not isinstance(usdc_balance, str):
+                usdc_balance = "0"
+            account["circleUsdcBalance"] = usdc_balance
+            circle_available_atomic = decimal_usdc_to_atomic_string(usdc_balance)
+            if circle_available_atomic is not None:
+                account["availableAtomic"] = circle_available_atomic
+                account["balanceSource"] = "circle"
         gateway_balance = status.get("gatewayBalance")
         if isinstance(gateway_balance, dict):
             formatted_available = gateway_balance.get("formattedAvailable")

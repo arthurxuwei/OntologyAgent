@@ -328,9 +328,11 @@ async def process_circle_wallet_webhook(payload: dict[str, Any]) -> dict[str, An
             if entry.entryType != entry_type or entry.agentId != account.agentId:
                 continue
             metadata = entry.metadata
+            same_notification = metadata.get("notificationId") == notification_id
+            same_transaction = metadata.get("circleTransactionId") == transaction_id
             if (
                 metadata.get("dashboardStatus") == dashboard_status
-                and metadata.get("notificationId") == notification_id
+                and (same_notification or same_transaction)
             ):
                 return entry
         return None
@@ -373,6 +375,26 @@ async def process_circle_wallet_webhook(payload: dict[str, Any]) -> dict[str, An
             "status": "duplicate",
             "notificationId": notification_id,
             "event": existing.model_dump(),
+        }
+    if existing is None and pending_entry is not None and credited_entry is not None:
+        duplicate_event = services.get_store().save_circle_webhook_event(
+            circle_webhook_event_record(
+                notification_id=notification_id,
+                notification_type=notification_type,
+                status="processed",
+                payload=payload,
+                transaction_id=transaction_id,
+                agent_id=account.agentId,
+                wallet_address=wallet_address,
+                circle_wallet_id=circle_wallet_id,
+                amount_atomic=amount_atomic,
+                reason="duplicate_gateway_deposit_completed",
+            )
+        )
+        return {
+            "status": "duplicate",
+            "notificationId": notification_id,
+            "event": duplicate_event.model_dump(),
         }
 
     if existing is not None and existing.status in {"received", "processed"}:
@@ -418,7 +440,7 @@ async def process_circle_wallet_webhook(payload: dict[str, Any]) -> dict[str, An
             wallet_balance_atomic = circle_wallet_status_usdc_amount_atomic(wallet_status)
             if wallet_balance_atomic is None:
                 raise RuntimeError("wallet status did not include a USDC balance")
-            if int(wallet_balance_atomic) <= GATEWAY_SWEEP_MIN_WALLET_BALANCE_ATOMIC:
+            if int(wallet_balance_atomic) < GATEWAY_SWEEP_MIN_WALLET_BALANCE_ATOMIC:
                 skipped = services.get_store().save_circle_webhook_event(
                     received.model_copy(
                         update={
@@ -467,7 +489,6 @@ async def process_circle_wallet_webhook(payload: dict[str, Any]) -> dict[str, An
             )
             raise RuntimeError(f"Gateway deposit failed: {error}") from error
         gateway_deposit_result = result if isinstance(result, dict) else {}
-        credited_amount_atomic = wallet_balance_atomic
 
     if pending_entry is None:
         _pending_account, pending_entry = services.get_store().record_dashboard_event(

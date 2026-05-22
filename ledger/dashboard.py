@@ -242,6 +242,22 @@ def build_dashboard_data(
         if normalized_owner_email and normalize_email(account.get("email")) != normalized_owner_email:
             continue
         agent_entries = entries_by_agent.get(agent_id, [])
+        linked_pending_entry_ids = {
+            str(metadata.get("linkedEntryId"))
+            for metadata in (
+                entry.get("metadata")
+                for entry in agent_entries
+                if isinstance(entry.get("metadata"), dict)
+            )
+            if metadata.get("dashboardStatus") == "credited"
+            and isinstance(metadata.get("linkedEntryId"), str)
+            and metadata.get("linkedEntryId")
+        }
+        visible_agent_entries = [
+            entry
+            for entry in agent_entries
+            if str(entry.get("entryId") or "") not in linked_pending_entry_ids
+        ]
         lifetime_in = sum(
             atomic_to_usdc(entry.get("availableDeltaAtomic"))
             for entry in agent_entries
@@ -286,7 +302,7 @@ def build_dashboard_data(
             },
             "transactions": [
                 dashboard_transaction(entry, escrow_by_id)
-                for entry in agent_entries
+                for entry in visible_agent_entries
             ],
             "settings": {"limits": {"perTradeCap": 0.01}},
         }
