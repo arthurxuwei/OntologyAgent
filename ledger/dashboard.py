@@ -557,7 +557,6 @@ def build_claimable_agents(
     claimed_agent_ids: list[str],
 ) -> dict[str, Any]:
     normalized_email = normalize_email(email)
-    claimed = {str(agent_id).strip() for agent_id in claimed_agent_ids if str(agent_id).strip()}
     dashboard_state = build_dashboard_data(ledger_state)
     candidates: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -568,7 +567,7 @@ def build_claimable_agents(
     ]
     for account in sorted(accounts, key=lambda item: str(item.get("updatedAt") or ""), reverse=True):
         agent_id = str(account.get("agentId") or "").strip()
-        if not agent_id or agent_id in seen or agent_id in claimed:
+        if not agent_id or agent_id in seen:
             continue
         if account.get("dashboardClaimedAt"):
             continue

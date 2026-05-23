@@ -33,13 +33,6 @@
   }
 
   function readInitialAgents() {
-    const raw = window.localStorage.getItem(STORAGE_KEYS.agents);
-    if (raw) {
-      try {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) return parsed;
-      } catch { /* fall through */ }
-    }
     return [];
   }
 
@@ -71,8 +64,6 @@
   }
 
   function readInitialActiveAgent(agents) {
-    const stored = window.localStorage.getItem(STORAGE_KEYS.activeAgent);
-    if (stored) return stored;
     return agents[0] || null;
   }
 
@@ -143,8 +134,6 @@
           email: 'william@example.com',
           avatar_url: null,
         }));
-        window.localStorage.setItem(STORAGE_KEYS.agents, JSON.stringify(['agentA']));
-        window.localStorage.setItem(STORAGE_KEYS.activeAgent, 'agentA');
       }
       if (['empty', 'day1', 'mature'].includes(seed)) {
         window.localStorage.setItem(STORAGE_KEYS.mockState, seed);
@@ -196,8 +185,6 @@
     const [authChecked, setAuthChecked] = React.useState(() => !!params.get('seed'));
 
     const writeActiveAgent = React.useCallback((id) => {
-      if (id) window.localStorage.setItem(STORAGE_KEYS.activeAgent, id);
-      else window.localStorage.removeItem(STORAGE_KEYS.activeAgent);
       setActiveAgentIdState(id);
     }, []);
 
@@ -282,12 +269,17 @@
       }
       window.localStorage.setItem(STORAGE_KEYS.user, JSON.stringify(user));
       setCurrentUserState(user);
-      const nextAgents = Array.isArray(opts.claimedAgentIds) ? opts.claimedAgentIds.filter(Boolean) : null;
-      if (nextAgents && nextAgents.length > 0) {
-        window.localStorage.setItem(STORAGE_KEYS.agents, JSON.stringify(nextAgents));
+      const shouldSyncClaimedAgents = Object.prototype.hasOwnProperty.call(opts, 'claimedAgentIds');
+      const nextAgents = Array.isArray(opts.claimedAgentIds) ? opts.claimedAgentIds.filter(Boolean) : [];
+      if (shouldSyncClaimedAgents) {
         setAgentsState(nextAgents);
-        if (!window.localStorage.getItem(STORAGE_KEYS.activeAgent)) {
-          writeActiveAgent(nextAgents[0]);
+        if (nextAgents.length === 0) {
+          window.localStorage.removeItem(STORAGE_KEYS.activeAgent);
+          setActiveAgentIdState(null);
+        } else {
+          setActiveAgentIdState((current) => (
+            current && nextAgents.includes(current) ? current : nextAgents[0]
+          ));
         }
       }
       writeBool(STORAGE_KEYS.registered, true);
@@ -361,7 +353,6 @@
       if (!agentId) return;
       setAgentsState((prev) => {
         const next = prev.includes(agentId) ? prev : [...prev, agentId];
-        window.localStorage.setItem(STORAGE_KEYS.agents, JSON.stringify(next));
         return next;
       });
       writeActiveAgent(agentId);

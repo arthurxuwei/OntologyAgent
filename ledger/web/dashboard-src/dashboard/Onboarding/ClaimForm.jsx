@@ -17,9 +17,8 @@
 
     React.useEffect(() => {
       let cancelled = false;
-      const claimed = encodeURIComponent(claimedAgents.join(','));
       setStatus('loading');
-      fetch(`/dashboard/claimable-agents?claimed=${claimed}`)
+      fetch('/dashboard/claimable-agents')
         .then((response) => {
           if (!response.ok) throw new Error(`claimable agents ${response.status}`);
           return response.json();

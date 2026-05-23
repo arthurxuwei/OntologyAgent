@@ -45,7 +45,8 @@ class TestDashboardClaims(LedgerServiceTestCase):
         self.assertNotIn("window.location.href = `/auth/github/login?returnTo=", source)
         self.assertNotIn("function DeepLinkClaimRunner()", source)
         self.assertNotIn("<DeepLinkClaimRunner />", source)
-        self.assertIn("fetch(`/dashboard/claimable-agents?claimed=${claimed}`)", source)
+        self.assertIn("fetch('/dashboard/claimable-agents')", source)
+        self.assertNotIn("claimable-agents?claimed=${claimed}", source)
         self.assertIn(
             "const shouldOpenDeepLinkClaim = !!(claimToken && deepLinkAgentId && !claimedAgents.includes(deepLinkAgentId));",
             source,
@@ -771,7 +772,10 @@ class TestDashboardClaims(LedgerServiceTestCase):
         payload = response.json()
         self.assertEqual(payload["email"], "owner@example.com")
         self.assertEqual(payload["source"], "ledger-accounts")
-        self.assertEqual({agent["agentId"] for agent in payload["agents"]}, {"agent_beta", "agent_other"})
+        self.assertEqual(
+            {agent["agentId"] for agent in payload["agents"]},
+            {"agent_alpha", "agent_beta", "agent_other"},
+        )
         candidate = next(agent for agent in payload["agents"] if agent["agentId"] == "agent_beta")
         self.assertEqual(candidate["agentId"], "agent_beta")
         self.assertEqual(candidate["agentName"], "Beta Research")
@@ -1051,6 +1055,28 @@ class TestDashboardClaims(LedgerServiceTestCase):
         self.assertEqual(candidate["ownerEmail"], "agent-bound@example.com")
         self.assertEqual(candidate["accountType"], "EOA")
         self.assertTrue(candidate["claimCode"].startswith("clm_"))
+
+    def test_dashboard_claimable_agents_ignores_stale_client_claimed_ids(self) -> None:
+        store = main.get_store()
+        store.bind_account_wallet(
+            agent_id="agent_stale_local",
+            agent_name="Stale Local Agent",
+            email="agent-bound@example.com",
+            wallet_address="0x4444444444444444444444444444444444444444",
+            circle_wallet_id="circle-stale-local",
+            account_type="EOA",
+        )
+
+        response = self.client.get(
+            "/dashboard/claimable-agents?claimed=agent_stale_local"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(
+            {agent["agentId"] for agent in payload["agents"]},
+            {"agent_stale_local"},
+        )
 
     def test_dashboard_data_uses_wallet_and_gateway_total_as_available_balance(self) -> None:
         class FakeWalletClient:
