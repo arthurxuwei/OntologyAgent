@@ -179,6 +179,7 @@ def circle_webhook_usdc_amount_atomic(notification: dict[str, Any]) -> Optional[
         or circle_webhook_nested_text(notification, "token", "symbol")
         or circle_webhook_nested_text(notification, "asset", "symbol")
     )
+    symbol_is_usdc = symbol is not None and symbol.upper() == DEFAULT_ASSET
     if symbol is not None and symbol.upper() != DEFAULT_ASSET:
         return None
 
@@ -190,7 +191,27 @@ def circle_webhook_usdc_amount_atomic(notification: dict[str, Any]) -> Optional[
         or circle_webhook_nested_text(notification, "asset", "address")
     )
     expected_token_address = configured_usdc_asset_address().lower()
+    token_address_is_usdc = (
+        token_address is not None and token_address.lower() == expected_token_address
+    )
     if token_address is not None and token_address.lower() != expected_token_address:
+        return None
+
+    token_id = (
+        circle_webhook_text(notification.get("tokenId"))
+        or circle_webhook_nested_text(notification, "token", "id")
+        or circle_webhook_nested_text(notification, "asset", "id")
+    )
+    expected_token_id = configured_usdc_token_id()
+    token_id_is_usdc = (
+        token_id is not None
+        and expected_token_id is not None
+        and token_id == expected_token_id
+    )
+    if token_id is not None and expected_token_id is not None and token_id != expected_token_id:
+        return None
+
+    if not (symbol_is_usdc or token_address_is_usdc or token_id_is_usdc):
         return None
 
     amounts = notification.get("amounts")
@@ -220,6 +241,13 @@ def configured_usdc_asset_address() -> str:
     if chain_profile in {"base-mainnet", "base", "mainnet"}:
         return DEFAULT_BASE_MAINNET_USDC_ASSET_ADDRESS
     return DEFAULT_BASE_SEPOLIA_USDC_ASSET_ADDRESS
+
+
+def configured_usdc_token_id() -> Optional[str]:
+    configured = os.getenv("CIRCLE_USDC_TOKEN_ID")
+    if configured and configured.strip():
+        return configured.strip()
+    return None
 
 
 def circle_wallet_status_usdc_amount_atomic(status: dict[str, Any]) -> Optional[str]:

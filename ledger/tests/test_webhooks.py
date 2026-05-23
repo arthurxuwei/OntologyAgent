@@ -206,6 +206,51 @@ class TestWebhooks(LedgerServiceTestCase):
         self.assertEqual(len(fake_client.webhook_payloads), 1)
         self.assertEqual(scheduled[0]["intentId"], "gas-intent-1")
 
+    def test_circle_wallet_webhook_skips_native_eth_inbound_without_usdc_asset_metadata(self) -> None:
+        main.get_store().bind_account_wallet(
+            agent_id="agent_research",
+            agent_name="Research Agent",
+            email="agent@example.com",
+            wallet_address="0x1111111111111111111111111111111111111111",
+            circle_wallet_id="circle-wallet-1",
+        )
+
+        class FakeWalletClient:
+            async def gas_topup_webhook(self, payload):
+                return {"matched": False}
+
+            async def status(self, *, wallet_address, circle_wallet_id):
+                raise AssertionError("native ETH inbound must not query wallet USDC status")
+
+            async def gateway_deposit(self, request):
+                raise AssertionError("native ETH inbound must not call gateway deposit")
+
+        payload = {
+            "subscriptionId": "subscription-1",
+            "notificationId": "notification-native-eth-inbound",
+            "notificationType": "transactions.inbound",
+            "notification": {
+                "id": "tx-native-eth-inbound",
+                "state": "CONFIRMED",
+                "transactionType": "INBOUND",
+                "walletId": "circle-wallet-1",
+                "destinationAddress": "0x1111111111111111111111111111111111111111",
+                "amounts": ["0.0001"],
+            },
+            "timestamp": "2026-05-21T06:01:00Z",
+            "version": 2,
+        }
+
+        with patch.object(services, "get_ledger_wallet_client", return_value=FakeWalletClient()):
+            response = self.client.post("/circle/webhooks/wallets", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "skipped")
+        self.assertEqual(response.json()["reason"], "not_positive_usdc")
+        state = self.client.get("/ledger/state?agentId=agent_research").json()
+        self.assertEqual(state["entries"], [])
+        self.assertEqual(state["accounts"][0]["availableAtomic"], "0")
+
     def test_gas_topup_resume_success_credits_original_pending_inbound(self) -> None:
         store = main.get_store()
         store.bind_account_wallet(
@@ -299,7 +344,11 @@ class TestWebhooks(LedgerServiceTestCase):
                 }
 
         fake_client = FakeWalletClient()
-        with patch.object(services, "get_ledger_wallet_client", return_value=fake_client):
+        with patch.dict(
+            os.environ,
+            {"CIRCLE_USDC_TOKEN_ID": "bdf128b4-827b-5267-8f9e-243694989b5f"},
+            clear=False,
+        ), patch.object(services, "get_ledger_wallet_client", return_value=fake_client):
             response = self.client.post(
                 "/circle/webhooks/wallets",
                 json={
