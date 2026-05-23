@@ -8,7 +8,7 @@ from typing import Any
 from urllib.parse import quote, urlencode
 
 import httpx
-from fastapi import Cookie, FastAPI, HTTPException, Request, Response
+from fastapi import Cookie, FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from payment_router import PaymentIntent, route_payment_intent
@@ -175,6 +175,25 @@ def ledger_admin() -> FileResponse:
 @app.get("/admin/ledger/state")
 async def get_admin_ledger_state() -> dict[str, Any]:
     return await ledger_state_with_circle_balances()
+
+
+@app.post("/admin/debug/dashboard-claims/reset")
+def debug_reset_dashboard_claims(
+    request: DebugResetDashboardClaimsRequest,
+    debug_token: str | None = Header(default=None, alias="X-Debug-Token"),
+) -> dict[str, Any]:
+    expected_token = os.getenv("LEDGER_DEBUG_ADMIN_TOKEN", "").strip()
+    if not expected_token:
+        raise HTTPException(status_code=404, detail="debug admin endpoint is disabled")
+    if not debug_token or not secrets.compare_digest(debug_token, expected_token):
+        raise HTTPException(status_code=403, detail="invalid debug admin token")
+    if request.confirm != "reset-dashboard-claims":
+        raise HTTPException(status_code=400, detail="confirm must be reset-dashboard-claims")
+    accounts = get_store().reset_dashboard_claims(agent_ids=request.agentIds)
+    return {
+        "cleared": len(accounts),
+        "agentIds": [account.agentId for account in accounts],
+    }
 
 
 @app.get("/dashboard")

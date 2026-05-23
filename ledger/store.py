@@ -473,6 +473,38 @@ class OffchainLedgerStore:
 
         return self._mutate(mutate)
 
+    def reset_dashboard_claims(
+        self,
+        *,
+        agent_ids: Optional[list[str]] = None,
+    ) -> list[LedgerAccount]:
+        requested = {
+            str(agent_id).strip()
+            for agent_id in (agent_ids or [])
+            if str(agent_id).strip()
+        }
+
+        def mutate(state: LedgerState) -> list[LedgerAccount]:
+            updated_accounts: list[LedgerAccount] = []
+            current = now_iso()
+            for index, account in enumerate(state.accounts):
+                if requested and account.agentId not in requested:
+                    continue
+                if not account.dashboardClaimedAt and not account.dashboardClaimedByEmail:
+                    continue
+                updated = account.model_copy(
+                    update={
+                        "dashboardClaimedAt": None,
+                        "dashboardClaimedByEmail": None,
+                        "updatedAt": current,
+                    }
+                )
+                state.accounts[index] = updated
+                updated_accounts.append(updated)
+            return updated_accounts
+
+        return self._mutate(mutate)
+
     def transfer_between_agents(
         self,
         *,

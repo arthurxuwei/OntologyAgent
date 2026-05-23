@@ -253,6 +253,13 @@ class DashboardClaimRequest(BaseModel):
     email: Optional[str] = None
 
 
+class DebugResetDashboardClaimsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    confirm: str = Field(min_length=1)
+    agentIds: list[str] = Field(default_factory=list)
+
+
 class GatewayDepositRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 

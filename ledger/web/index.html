@@ -224,7 +224,8 @@
       }
 
       input,
-      select {
+      select,
+      textarea {
         width: 100%;
         border: 1px solid var(--border);
         border-radius: 12px;
@@ -233,6 +234,11 @@
         font-size: 14px;
         color: var(--ink);
         background: rgba(255, 255, 255, 0.82);
+      }
+
+      textarea {
+        min-height: 86px;
+        resize: vertical;
       }
 
       button {
@@ -338,6 +344,20 @@
             <button class="danger" type="button" id="refund-button">Refund</button>
           </div>
         </form>
+
+        <form class="card" id="debug-claims-form">
+          <h2>Dashboard Claims</h2>
+          <label>
+            Debug Token
+            <input id="debug-token" type="password" autocomplete="off" />
+          </label>
+          <label>
+            Agent IDs
+            <textarea id="debug-claim-agent-ids" placeholder="Optional. Leave blank to reset all dashboard claims."></textarea>
+          </label>
+          <button class="danger" type="submit">Reset Claim Bindings</button>
+          <div class="summary" id="debug-claims-output">No claim reset submitted.</div>
+        </form>
       </section>
     </main>
 
@@ -346,6 +366,7 @@
       const refreshButtonEl = document.getElementById("refresh-button");
       const walletFormEl = document.getElementById("wallet-form");
       const settlementFormEl = document.getElementById("settlement-form");
+      const debugClaimsFormEl = document.getElementById("debug-claims-form");
       const walletAgentNameEl = document.getElementById("wallet-agent-name");
       const walletAgentIdEl = document.getElementById("wallet-agent-id");
       const walletEmailEl = document.getElementById("wallet-email");
@@ -355,6 +376,9 @@
       const escrowSelectEl = document.getElementById("escrow-select");
       const releaseButtonEl = document.getElementById("release-button");
       const refundButtonEl = document.getElementById("refund-button");
+      const debugTokenEl = document.getElementById("debug-token");
+      const debugClaimAgentIdsEl = document.getElementById("debug-claim-agent-ids");
+      const debugClaimsOutputEl = document.getElementById("debug-claims-output");
 
       function selectedEscrowId() {
         return escrowSelectEl.value || escrowSelectEl.children?.[0]?.value || "";
@@ -600,9 +624,42 @@
         await refreshLedgerState();
       }
 
+      function debugAgentIds() {
+        return debugClaimAgentIdsEl.value
+          .split(/[\s,]+/)
+          .map((value) => value.trim())
+          .filter(Boolean);
+      }
+
+      async function resetDashboardClaims(event) {
+        event.preventDefault();
+        const token = debugTokenEl.value.trim();
+        if (!token) {
+          debugClaimsOutputEl.textContent = "Debug token is required.";
+          return;
+        }
+        const agentIds = debugAgentIds();
+        const payload = await requestJson("/admin/debug/dashboard-claims/reset", {
+          method: "POST",
+          headers: {
+            "X-Debug-Token": token,
+          },
+          body: JSON.stringify({
+            confirm: "reset-dashboard-claims",
+            agentIds,
+          }),
+        });
+        debugClaimsOutputEl.textContent = [
+          `Cleared: ${payload.cleared}`,
+          `Agents: ${(payload.agentIds || []).join(", ") || "none"}`,
+        ].join("\n");
+        await refreshLedgerState();
+      }
+
       refreshButtonEl.addEventListener("click", refreshLedgerState);
       walletFormEl.addEventListener("submit", getOrCreateWallet);
       settlementFormEl.addEventListener("submit", preventSettlementSubmit);
+      debugClaimsFormEl.addEventListener("submit", resetDashboardClaims);
       releaseButtonEl.addEventListener("click", () => settleEscrow("release"));
       refundButtonEl.addEventListener("click", () => settleEscrow("refund"));
 

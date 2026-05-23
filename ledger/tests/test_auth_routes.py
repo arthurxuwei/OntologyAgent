@@ -355,6 +355,51 @@ class TestAuthRoutes(LedgerServiceTestCase):
         self.assertIn('{ label: "Gateway Withdrawable"', html)
         self.assertIn('{ label: "Pending Deposits Atomic"', html)
         self.assertIn('{ label: "Pending Batch Atomic"', html)
+        self.assertIn('id="debug-claims-form"', html)
+        self.assertIn('id="debug-token"', html)
+        self.assertIn('id="debug-claim-agent-ids"', html)
+        self.assertIn("/admin/debug/dashboard-claims/reset", html)
+        self.assertIn('"X-Debug-Token"', html)
+
+    def test_debug_reset_dashboard_claims_requires_token(self) -> None:
+        with patch.dict(os.environ, {"LEDGER_DEBUG_ADMIN_TOKEN": "debug-token"}):
+            response = self.client.post(
+                "/admin/debug/dashboard-claims/reset",
+                json={"confirm": "reset-dashboard-claims"},
+            )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.json()["detail"], "invalid debug admin token")
+
+    def test_debug_reset_dashboard_claims_clears_claims_only(self) -> None:
+        main.get_store().bind_account_wallet(
+            agent_id="agent_claimed",
+            agent_name="Claimed Agent",
+            email="owner@example.com",
+            wallet_address="0x1111111111111111111111111111111111111111",
+            circle_wallet_id="circle-claimed",
+            account_type="EOA",
+        )
+        main.get_store().claim_dashboard_account(
+            agent_id="agent_claimed",
+            email="owner@example.com",
+            dashboard_email="dashboard@example.com",
+        )
+
+        with patch.dict(os.environ, {"LEDGER_DEBUG_ADMIN_TOKEN": "debug-token"}):
+            response = self.client.post(
+                "/admin/debug/dashboard-claims/reset",
+                headers={"X-Debug-Token": "debug-token"},
+                json={"confirm": "reset-dashboard-claims"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["cleared"], 1)
+        account = main.get_store().load().accounts[0]
+        self.assertIsNone(account.dashboardClaimedAt)
+        self.assertIsNone(account.dashboardClaimedByEmail)
+        self.assertEqual(account.walletAddress, "0x1111111111111111111111111111111111111111")
+        self.assertEqual(account.circleWalletId, "circle-claimed")
 
     def test_dashboard_serves_user_dashboard_page(self) -> None:
         response = self.client.get("/dashboard")
