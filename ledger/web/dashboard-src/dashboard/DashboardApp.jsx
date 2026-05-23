@@ -2,7 +2,7 @@
 //
 // Onboarding flow:
 //   1. MvpGithubAuthScreen — prototype GitHub-style consent, email-scoped
-//   2. MvpClaimScreen      — claim a wallet assigned to the signed-in email
+//   2. MvpClaimScreen      — claim a wallet by claim code
 //   3. DashboardSurface   — chrome + 5 tabs
 //
 // State comes from MvpAppStateProvider (MVP-specific localStorage keys, so
