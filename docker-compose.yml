@@ -1,28 +1,6 @@
 name: chief
 
 services:
-  agent:
-    build:
-      context: ./agent
-    container_name: agent
-    ports:
-      - "8000:8000"
-    environment:
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
-      OPENAI_ENDPOINT: ${OPENAI_ENDPOINT:-}
-      BRAIN_AGENT_MODEL: ${BRAIN_AGENT_MODEL:-gpt-4o-mini}
-      LEDGER_HTTP_URL: ${LEDGER_HTTP_URL:-http://ledger:8092}
-      CHAIN_HTTP_URL: ${CHAIN_HTTP_URL:-http://chain:8091}
-    volumes:
-      - ./agent/data:/app/data
-      - ./agent/skills:/app/skills:ro
-    restart: unless-stopped
-    depends_on:
-      - chain
-      - circle
-      - ledger
-
   ledger:
     build:
       context: ./ledger
@@ -53,33 +31,6 @@ services:
       X402_USDC_ASSET_ADDRESS: ${X402_USDC_ASSET_ADDRESS:-}
     volumes:
       - ./ledger/data:/app/data
-    restart: unless-stopped
-
-  chain:
-    build:
-      context: ./chain
-    container_name: chain
-    ports:
-      - "8091:8091"
-    environment:
-      CHAIN_HTTP_PORT: ${CHAIN_HTTP_PORT:-8091}
-      PRIVATE_KEY: ${PRIVATE_KEY:-}
-      CHAIN_PROFILE: ${CHAIN_PROFILE:-base-sepolia}
-      RPC_URL: ${RPC_URL:-}
-      CHAIN_ID: ${CHAIN_ID:-}
-      DAILY_LIMIT: ${DAILY_LIMIT:-2.0}
-      SINGLE_TX_CAP: ${SINGLE_TX_CAP:-1.0}
-      WHITELISTED_RECIPIENTS: ${WHITELISTED_RECIPIENTS:-}
-      CHAIN_MOCK: ${CHAIN_MOCK:-false}
-      CHAIN_MOCK_BALANCE_ETH: ${CHAIN_MOCK_BALANCE_ETH:-1.0}
-      BUNDLER_RPC_URL: ${BUNDLER_RPC_URL:-}
-      ENTRY_POINT_ADDRESS: ${ENTRY_POINT_ADDRESS:-0x0576a174D229E3cFA37253523E645A78A0C91B57}
-      X402_FACILITATOR_URL: ${X402_FACILITATOR_URL:-}
-      X402_NETWORK: ${X402_NETWORK:-}
-      X402_BUYER_PRIVATE_KEY: ${X402_BUYER_PRIVATE_KEY:-}
-      X402_USDC_ASSET_ADDRESS: ${X402_USDC_ASSET_ADDRESS:-}
-      X402_USDC_SINGLE_CAP: ${X402_USDC_SINGLE_CAP:-1.0}
-      X402_USDC_DAILY_CAP: ${X402_USDC_DAILY_CAP:-2.0}
     restart: unless-stopped
 
   circle:

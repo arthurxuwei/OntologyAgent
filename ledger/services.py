@@ -31,7 +31,12 @@ from config import (
 )
 from models import AgentWalletRequest, EscrowRecord, LedgerChainRecord, LedgerEntry, LedgerSettlementRecord
 from store import OffchainLedgerStore
-from utils import decimal_usdc_to_atomic_string, normalize_wallet_account_type, now_iso
+from utils import (
+    decimal_usdc_to_atomic_string,
+    normalize_email,
+    normalize_wallet_account_type,
+    now_iso,
+)
 
 logger = logging.getLogger("chief.ledger")
 
@@ -283,6 +288,11 @@ async def settle_withdrawal(
 
 
 async def get_or_create_agent_wallet(request: AgentWalletRequest) -> dict[str, Any]:
+    owner_email = normalize_email(request.email)
+    if owner_email is None:
+        raise ValueError("email is required")
+    request = request.model_copy(update={"email": owner_email})
+
     wallet = await get_ledger_wallet_client().get_or_create(request)
     binding = wallet.get("binding")
     binding_agent_id = binding.get("agentId") if isinstance(binding, dict) else None
