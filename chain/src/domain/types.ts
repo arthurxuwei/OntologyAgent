@@ -276,6 +276,65 @@ export type AgentWalletGatewayDepositResult = {
   };
   mode: "gateway_deposit";
   raw: unknown;
+} | AgentWalletGatewayDepositPendingResult;
+
+export type AgentWalletGatewayDepositPendingResult = {
+  agentId: string | null;
+  agentName: string | null;
+  circleWalletId: string;
+  walletAddress: string;
+  asset: "USDC";
+  amount: string;
+  amountAtomic: string;
+  tokenAddress: string;
+  gatewayWallet: string;
+  blockchain: CircleBlockchain;
+  mode: "gas_topup_pending";
+  gasTopUp: {
+    intentId: string;
+    transactionId: string;
+    amountEth: string;
+    fromAgentId: string;
+    toAddress: string;
+    state: string | null;
+  };
+  pendingGatewayDeposit: AgentWalletGatewayDepositCommand;
+  raw: unknown;
+};
+
+export type AgentWalletGasTopUpIntent = {
+  intentId: string;
+  status: "pending" | "topup_complete" | "gateway_deposit_completed" | "failed";
+  topUpTransactionId: string;
+  targetAgentId?: string | null;
+  targetWalletAddress: string;
+  targetCircleWalletId: string;
+  seedAgentId: string;
+  seedCircleWalletId: string;
+  amountEth: string;
+  originalGatewayDeposit: AgentWalletGatewayDepositCommand;
+  gatewayDepositResult?: AgentWalletGatewayDepositResult | null;
+  error?: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type AgentWalletGasTopUpWebhookCommand = {
+  transactionId?: string | null;
+  refId?: string | null;
+  state?: string | null;
+  payload?: unknown;
+};
+
+export type AgentWalletGasTopUpWebhookResult = {
+  matched: boolean;
+  intent: AgentWalletGasTopUpIntent | null;
+  resumeRequired: boolean;
+};
+
+export type AgentWalletGasTopUpResumeCommand = {
+  intentId?: string;
+  transactionId?: string;
 };
 
 export type AgentWalletGatewayWithdrawCommand = {

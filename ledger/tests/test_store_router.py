@@ -181,6 +181,34 @@ class TestStoreRouter(LedgerServiceTestCase):
         self.assertEqual(state["accounts"][0]["availableAtomic"], "5000000")
         self.assertTrue(Path(self.db_path).exists())
 
+    def test_sqlite_store_writes_records_to_relation_tables(self) -> None:
+        self.client.post(
+            "/ledger/accounts/agent_buyer/credit",
+            json={"amountAtomic": "5000000", "reason": "demo funding"},
+        )
+
+        import sqlite3
+
+        connection = sqlite3.connect(self.db_path)
+        try:
+            account = connection.execute(
+                "SELECT agentId, availableAtomic FROM ledger_accounts"
+            ).fetchone()
+            entry = connection.execute(
+                "SELECT agentId, entryType, metadata FROM ledger_entries"
+            ).fetchone()
+            old_records = connection.execute(
+                "SELECT COUNT(*) FROM ledger_records"
+            ).fetchone()[0]
+        finally:
+            connection.close()
+
+        self.assertEqual(account, ("agent_buyer", "5000000"))
+        self.assertEqual(entry[0], "agent_buyer")
+        self.assertEqual(entry[1], "credit")
+        self.assertEqual(json.loads(entry[2]), {})
+        self.assertEqual(old_records, 0)
+
     def test_sqlite_store_imports_existing_json_once(self) -> None:
         now = main.now_iso()
         legacy_state = {
@@ -251,6 +279,194 @@ class TestStoreRouter(LedgerServiceTestCase):
 
         self.assertEqual(state.accounts[0].agentId, "agent_legacy_empty_db")
         self.assertEqual(state.accounts[0].availableAtomic, "3000000")
+
+    def test_sqlite_store_migrates_legacy_payload_records_to_relation_tables(self) -> None:
+        now = main.now_iso()
+
+        import sqlite3
+
+        connection = sqlite3.connect(self.db_path)
+        try:
+            connection.execute(
+                """
+                CREATE TABLE ledger_records (
+                    collection TEXT NOT NULL,
+                    record_id TEXT NOT NULL,
+                    position INTEGER NOT NULL,
+                    payload TEXT NOT NULL,
+                    PRIMARY KEY (collection, record_id)
+                )
+                """
+            )
+            connection.execute(
+                """
+                INSERT INTO ledger_records(collection, record_id, position, payload)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    "accounts",
+                    "USDC:agent_payload",
+                    0,
+                    json.dumps(
+                        {
+                            "agentId": "agent_payload",
+                            "asset": "USDC",
+                            "availableAtomic": "9000000",
+                            "lockedAtomic": "0",
+                            "createdAt": now,
+                            "updatedAt": now,
+                        }
+                    ),
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO ledger_records(collection, record_id, position, payload)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    "entries",
+                    "entry_payload",
+                    0,
+                    json.dumps(
+                        {
+                            "entryId": "entry_payload",
+                            "entryType": "credit",
+                            "agentId": "agent_payload",
+                            "asset": "USDC",
+                            "availableDeltaAtomic": "9000000",
+                            "lockedDeltaAtomic": "0",
+                            "reason": "legacy funding",
+                            "metadata": {"source": "legacy-records"},
+                            "createdAt": now,
+                        }
+                    ),
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO ledger_records(collection, record_id, position, payload)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    "circle_webhook_events",
+                    "notification_payload",
+                    0,
+                    json.dumps(
+                        {
+                            "notificationId": "notification_payload",
+                            "notificationType": "transactions.inbound",
+                            "status": "processed",
+                            "transactionId": "tx_payload",
+                            "gatewayDepositResult": {"mode": "gateway_deposit"},
+                            "rawPayload": {"legacy": True},
+                            "createdAt": now,
+                            "updatedAt": now,
+                        }
+                    ),
+                ),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        state = main.get_store().load()
+
+        self.assertEqual(state.accounts[0].agentId, "agent_payload")
+        self.assertEqual(state.accounts[0].availableAtomic, "9000000")
+        self.assertEqual(state.entries[0].metadata, {"source": "legacy-records"})
+        self.assertEqual(
+            state.circleWebhookEvents[0].gatewayDepositResult,
+            {"mode": "gateway_deposit"},
+        )
+        connection = sqlite3.connect(self.db_path)
+        try:
+            account = connection.execute(
+                "SELECT agentId, availableAtomic FROM ledger_accounts"
+            ).fetchone()
+            entry = connection.execute(
+                "SELECT metadata FROM ledger_entries WHERE entryId = 'entry_payload'"
+            ).fetchone()
+            circle_event = connection.execute(
+                """
+                SELECT gatewayDepositResult, rawPayload
+                FROM ledger_circle_webhook_events
+                WHERE notificationId = 'notification_payload'
+                """
+            ).fetchone()
+            old_records = connection.execute(
+                "SELECT COUNT(*) FROM ledger_records"
+            ).fetchone()[0]
+        finally:
+            connection.close()
+        self.assertEqual(account, ("agent_payload", "9000000"))
+        self.assertEqual(json.loads(entry[0]), {"source": "legacy-records"})
+        self.assertEqual(json.loads(circle_event[0]), {"mode": "gateway_deposit"})
+        self.assertEqual(json.loads(circle_event[1]), {"legacy": True})
+        self.assertEqual(old_records, 0)
+
+    def test_health_migrates_legacy_payload_records_to_relation_tables(self) -> None:
+        now = main.now_iso()
+
+        import sqlite3
+
+        connection = sqlite3.connect(self.db_path)
+        try:
+            connection.execute(
+                """
+                CREATE TABLE ledger_records (
+                    collection TEXT NOT NULL,
+                    record_id TEXT NOT NULL,
+                    position INTEGER NOT NULL,
+                    payload TEXT NOT NULL,
+                    PRIMARY KEY (collection, record_id)
+                )
+                """
+            )
+            connection.execute(
+                """
+                INSERT INTO ledger_records(collection, record_id, position, payload)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    "accounts",
+                    "USDC:agent_health_migrate",
+                    0,
+                    json.dumps(
+                        {
+                            "agentId": "agent_health_migrate",
+                            "asset": "USDC",
+                            "availableAtomic": "4000000",
+                            "lockedAtomic": "0",
+                            "createdAt": now,
+                            "updatedAt": now,
+                        }
+                    ),
+                ),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        response = self.client.get("/health")
+
+        self.assertEqual(response.status_code, 200)
+        connection = sqlite3.connect(self.db_path)
+        try:
+            migrated = connection.execute(
+                """
+                SELECT agentId, availableAtomic
+                FROM ledger_accounts
+                WHERE agentId = 'agent_health_migrate'
+                """
+            ).fetchone()
+            old_records = connection.execute(
+                "SELECT COUNT(*) FROM ledger_records"
+            ).fetchone()[0]
+        finally:
+            connection.close()
+        self.assertEqual(migrated, ("agent_health_migrate", "4000000"))
+        self.assertEqual(old_records, 0)
 
     def test_route_payment_intent_is_served_by_ledger_rest(self) -> None:
         response = self.client.post(

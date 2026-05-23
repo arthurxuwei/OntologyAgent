@@ -5,6 +5,7 @@ import {
   type BatchEvmSigner,
 } from "@circle-fin/x402-batching";
 import { BatchEvmScheme, CHAIN_CONFIGS } from "@circle-fin/x402-batching/client";
+import { formatEther, parseEther } from "ethers";
 import { AppError } from "../domain/errors.js";
 import type {
   AgentWalletBinding,
@@ -14,6 +15,10 @@ import type {
   AgentWalletFaucetResult,
   AgentWalletGatewayDepositCommand,
   AgentWalletGatewayDepositResult,
+  AgentWalletGasTopUpIntent,
+  AgentWalletGasTopUpResumeCommand,
+  AgentWalletGasTopUpWebhookCommand,
+  AgentWalletGasTopUpWebhookResult,
   AgentWalletGatewayWithdrawCommand,
   AgentWalletGatewayWithdrawResult,
   AgentWalletGetOrCreateCommand,
@@ -489,31 +494,182 @@ export class AgentWalletService {
     );
     const normalizedWalletAddress = normalizeRequestAddress(walletAddress, "walletAddress");
 
-    const raw = await this.circleWalletService.depositToGateway({
-      walletId: circleWalletId,
+    const gasTopUp = await this.ensureNativeGasForGatewayDeposit({
+      binding,
+      circleWalletId,
       walletAddress: normalizedWalletAddress,
+      amount,
+      amountAtomic: amountAtomic.toString(),
       tokenAddress,
       gatewayWallet,
-      amountAtomic: amountAtomic.toString(),
       refId: command.refId,
+      originalGatewayDeposit: command,
+    });
+    if (gasTopUp) {
+      return gasTopUp;
+    }
+
+    return this.executeGatewayDeposit({
+      binding,
+      command,
+      circleWalletId,
+      walletAddress: normalizedWalletAddress,
+      amount,
+      amountAtomic: amountAtomic.toString(),
+      tokenAddress,
+      gatewayWallet,
+      chainConfig,
+    });
+  }
+
+  async handleGasTopUpWebhook(
+    command: AgentWalletGasTopUpWebhookCommand,
+  ): Promise<AgentWalletGasTopUpWebhookResult> {
+    const intent = await this.stateStore.findGasTopUpIntent({
+      transactionId: command.transactionId ?? command.refId ?? null,
+    });
+    if (!intent) {
+      return { matched: false, intent: null, resumeRequired: false };
+    }
+    const state = command.state?.toUpperCase() ?? "";
+    if (!["COMPLETE", "COMPLETED", "CONFIRMED", "SUCCESS", "MINED"].includes(state)) {
+      return { matched: true, intent, resumeRequired: false };
+    }
+    if (intent.status !== "pending") {
+      return {
+        matched: true,
+        intent,
+        resumeRequired: intent.status === "topup_complete",
+      };
+    }
+    const updated = await this.stateStore.saveGasTopUpIntent({
+      ...intent,
+      status: "topup_complete",
+      updatedAt: new Date().toISOString(),
+    });
+    return { matched: true, intent: updated, resumeRequired: true };
+  }
+
+  async resumeGasTopUpGatewayDeposit(
+    command: AgentWalletGasTopUpResumeCommand,
+  ): Promise<AgentWalletGatewayDepositResult> {
+    const intent = await this.stateStore.findGasTopUpIntent({
+      intentId: command.intentId,
+      transactionId: command.transactionId,
+    });
+    if (!intent) {
+      throw new AppError("VALIDATION_ERROR", "gas top-up intent not found", 404);
+    }
+    if (intent.status === "gateway_deposit_completed" && intent.gatewayDepositResult) {
+      return intent.gatewayDepositResult;
+    }
+    if (intent.status !== "topup_complete" && intent.status !== "pending") {
+      throw new AppError("VALIDATION_ERROR", "gas top-up intent is not resumable", 400);
+    }
+
+    try {
+      const result = await this.depositToGatewayWithoutGasTopUp(intent.originalGatewayDeposit);
+      await this.stateStore.saveGasTopUpIntent({
+        ...intent,
+        status: "gateway_deposit_completed",
+        gatewayDepositResult: result,
+        updatedAt: new Date().toISOString(),
+      });
+      return result;
+    } catch (error) {
+      await this.stateStore.saveGasTopUpIntent({
+        ...intent,
+        status: "failed",
+        error: error instanceof Error ? error.message : String(error),
+        updatedAt: new Date().toISOString(),
+      });
+      throw error;
+    }
+  }
+
+  private async depositToGatewayWithoutGasTopUp(
+    command: AgentWalletGatewayDepositCommand,
+  ): Promise<AgentWalletGatewayDepositResult> {
+    const binding = await this.resolveBinding({
+      agentId: command.agentId,
+      agentName: command.agentName,
+    });
+    const circleWalletId = firstNonEmpty(command.circleWalletId, binding?.circleWalletId);
+    if (!circleWalletId) {
+      throw new AppError(
+        "VALIDATION_ERROR",
+        "agentId/agentName must resolve to a real Circle wallet id, or circleWalletId must be provided",
+        400,
+      );
+    }
+    const walletAddress = firstNonEmpty(command.walletAddress, binding?.walletAddress);
+    if (!walletAddress) {
+      throw new AppError(
+        "VALIDATION_ERROR",
+        "agentId/agentName must resolve to a wallet address, or walletAddress must be provided",
+        400,
+      );
+    }
+    const amountAtomic = parsePositiveBigInt(command.amountAtomic, "amountAtomic");
+    const amount = atomicUsdcToDecimal(command.amountAtomic);
+    const tokenAddress = normalizeRequestAddress(
+      this.config.x402.usdcAssetAddress,
+      "X402_USDC_ASSET_ADDRESS",
+    );
+    const chainConfig = gatewayChainConfig(this.config.x402.network);
+    const gatewayWallet = normalizeRequestAddress(
+      chainConfig.gatewayWallet,
+      "Gateway verifying contract",
+    );
+    return this.executeGatewayDeposit({
+      binding,
+      command,
+      circleWalletId,
+      walletAddress: normalizeRequestAddress(walletAddress, "walletAddress"),
+      amount,
+      amountAtomic: amountAtomic.toString(),
+      tokenAddress,
+      gatewayWallet,
+      chainConfig,
+    });
+  }
+
+  private async executeGatewayDeposit(command: {
+    binding: AgentWalletBinding | null;
+    command: AgentWalletGatewayDepositCommand;
+    circleWalletId: string;
+    walletAddress: string;
+    amount: string;
+    amountAtomic: string;
+    tokenAddress: string;
+    gatewayWallet: string;
+    chainConfig: ReturnType<typeof gatewayChainConfig>;
+  }): Promise<AgentWalletGatewayDepositResult> {
+    const raw = await this.circleWalletService.depositToGateway({
+      walletId: command.circleWalletId,
+      walletAddress: command.walletAddress,
+      tokenAddress: command.tokenAddress,
+      gatewayWallet: command.gatewayWallet,
+      amountAtomic: command.amountAtomic,
+      refId: command.command.refId,
     });
     const gatewayBalance = await this.circleWalletService.getGatewayBalance(
-      normalizedWalletAddress,
-      chainConfig.domain,
+      command.walletAddress,
+      command.chainConfig.domain,
     );
     const approvalTransaction = extractTransaction(raw.approvalFinal ?? raw.approval);
     const depositTransaction = extractTransaction(raw.depositFinal ?? raw.deposit);
 
     return {
-      agentId: binding?.agentId ?? command.agentId ?? null,
-      agentName: binding?.agentName ?? command.agentName ?? null,
-      circleWalletId,
-      walletAddress: normalizedWalletAddress,
+      agentId: command.binding?.agentId ?? command.command.agentId ?? null,
+      agentName: command.binding?.agentName ?? command.command.agentName ?? null,
+      circleWalletId: command.circleWalletId,
+      walletAddress: command.walletAddress,
       asset: "USDC",
-      amount,
-      amountAtomic: amountAtomic.toString(),
-      tokenAddress,
-      gatewayWallet,
+      amount: command.amount,
+      amountAtomic: command.amountAtomic,
+      tokenAddress: command.tokenAddress,
+      gatewayWallet: command.gatewayWallet,
       blockchain: this.config.circle.blockchain,
       approvalTransactionId: approvalTransaction.id,
       approvalState: approvalTransaction.state,
@@ -526,6 +682,120 @@ export class AgentWalletService {
         formattedTotal: gatewayBalance.formattedTotal,
       },
       mode: "gateway_deposit",
+      raw,
+    };
+  }
+
+  private async ensureNativeGasForGatewayDeposit(command: {
+    binding: AgentWalletBinding | null;
+    circleWalletId: string;
+    walletAddress: string;
+    amount: string;
+    amountAtomic: string;
+    tokenAddress: string;
+    gatewayWallet: string;
+    refId?: string;
+    originalGatewayDeposit: AgentWalletGatewayDepositCommand;
+  }): Promise<AgentWalletGatewayDepositResult | null> {
+    if (!this.config.gasTopUp.enabled || command.binding?.accountType !== "EOA") {
+      return null;
+    }
+    const balances = await this.circleWalletService.getWalletBalances(command.circleWalletId);
+    const currentWei = parseEthBalanceToWei(balances.ETH ?? balances.ETHEREUM ?? "0");
+    if (currentWei >= this.config.gasTopUp.minWei) {
+      return null;
+    }
+    const since = Date.now() - this.config.gasTopUp.pendingReuseSeconds * 1000;
+    const existing = await this.stateStore.findPendingGasTopUpForWallet(command.walletAddress, since);
+    if (existing) {
+      return this.gasTopUpPendingResult(command, existing);
+    }
+    const seed = await this.resolveBinding({ agentId: this.config.gasTopUp.seedAgentId });
+    if (!seed?.circleWalletId || seed.accountType !== "EOA") {
+      throw new AppError("CONFIG_ERROR", "gas top-up seed wallet must be a bound EOA Circle wallet", 500);
+    }
+    const amountWei = this.config.gasTopUp.targetWei - currentWei;
+    if (amountWei <= 0n) {
+      return null;
+    }
+    const dayStart = new Date();
+    dayStart.setUTCHours(0, 0, 0, 0);
+    const spent = await this.stateStore.gasTopUpSpentSince({
+      walletAddress: command.walletAddress,
+      sinceMs: dayStart.getTime(),
+    });
+    if (spent.walletWei + amountWei > this.config.gasTopUp.walletDailyLimitWei) {
+      throw new AppError("VALIDATION_ERROR", "gas top-up wallet daily limit exceeded", 429);
+    }
+    if (spent.globalWei + amountWei > this.config.gasTopUp.globalDailyLimitWei) {
+      throw new AppError("VALIDATION_ERROR", "gas top-up global daily limit exceeded", 429);
+    }
+    const amountEth = formatEthAmount(amountWei);
+    const refId = appendRef(command.refId, "gas-topup");
+    const raw = await this.circleWalletService.createNativeTransfer({
+      walletId: seed.circleWalletId,
+      destinationAddress: command.walletAddress,
+      amountEth,
+      refId,
+    });
+    const transaction = extractTransaction(raw);
+    if (!transaction.id) {
+      throw new AppError("UPSTREAM_REQUEST_FAILED", "Circle gas top-up response did not include a transaction id", 502, raw);
+    }
+    const now = new Date().toISOString();
+    const intent = await this.stateStore.saveGasTopUpIntent({
+      intentId: `gas_${Date.now().toString(16)}_${Math.random().toString(16).slice(2)}`,
+      status: "pending",
+      topUpTransactionId: transaction.id,
+      targetAgentId: command.binding.agentId,
+      targetWalletAddress: command.walletAddress,
+      targetCircleWalletId: command.circleWalletId,
+      seedAgentId: this.config.gasTopUp.seedAgentId,
+      seedCircleWalletId: seed.circleWalletId,
+      amountEth,
+      originalGatewayDeposit: command.originalGatewayDeposit,
+      createdAt: now,
+      updatedAt: now,
+    });
+    return this.gasTopUpPendingResult(command, intent, raw, transaction.state);
+  }
+
+  private gasTopUpPendingResult(
+    command: {
+      binding: AgentWalletBinding | null;
+      circleWalletId: string;
+      walletAddress: string;
+      amount: string;
+      amountAtomic: string;
+      tokenAddress: string;
+      gatewayWallet: string;
+      originalGatewayDeposit: AgentWalletGatewayDepositCommand;
+    },
+    intent: AgentWalletGasTopUpIntent,
+    raw: unknown = null,
+    state: string | null = null,
+  ): AgentWalletGatewayDepositResult {
+    return {
+      agentId: command.binding?.agentId ?? command.originalGatewayDeposit.agentId ?? null,
+      agentName: command.binding?.agentName ?? command.originalGatewayDeposit.agentName ?? null,
+      circleWalletId: command.circleWalletId,
+      walletAddress: command.walletAddress,
+      asset: "USDC",
+      amount: command.amount,
+      amountAtomic: command.amountAtomic,
+      tokenAddress: command.tokenAddress,
+      gatewayWallet: command.gatewayWallet,
+      blockchain: this.config.circle.blockchain,
+      mode: "gas_topup_pending",
+      gasTopUp: {
+        intentId: intent.intentId,
+        transactionId: intent.topUpTransactionId,
+        amountEth: intent.amountEth,
+        fromAgentId: intent.seedAgentId,
+        toAddress: intent.targetWalletAddress,
+        state,
+      },
+      pendingGatewayDeposit: intent.originalGatewayDeposit,
       raw,
     };
   }
@@ -964,6 +1234,22 @@ function atomicUsdcToDecimal(value: string | undefined): string {
     .toString()
     .padStart(Number(USDC_DECIMALS), "0")
     .replace(/0+$/, "")}`;
+}
+
+function parseEthBalanceToWei(value: string): bigint {
+  try {
+    return parseEther(value);
+  } catch {
+    return 0n;
+  }
+}
+
+function formatEthAmount(value: bigint): string {
+  return formatEther(value).replace(/\.?0+$/, "");
+}
+
+function appendRef(refId: string | undefined, suffix: string): string {
+  return refId && refId.trim() ? `${refId}:${suffix}` : suffix;
 }
 
 function extractTransaction(payload: unknown): {

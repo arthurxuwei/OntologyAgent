@@ -1358,6 +1358,7 @@ test("AgentWalletService withdraws USDC from Circle wallet without Gateway balan
           circleWalletSetId: "circle-wallet-set",
           blockchain: "BASE-SEPOLIA",
           mode: "circle",
+          accountType: "EOA",
           updatedAt: "2026-05-13T00:00:00.000Z",
         },
       ],
@@ -1571,6 +1572,7 @@ test("AgentWalletService deposits USDC into Circle Gateway", async () => {
     async (statePath) => {
       const config = liveCircleConfig({
         AGENT_WALLET_STATE_PATH: statePath,
+        CIRCLE_BLOCKCHAIN: "BASE-SEPOLIA",
         X402_FACILITATOR_URL: "https://gateway-api-testnet.circle.com",
         X402_NETWORK: "eip155:84532",
       });
@@ -1627,10 +1629,287 @@ test("AgentWalletService deposits USDC into Circle Gateway", async () => {
 
       assert.equal(result.circleWalletId, "circle-main");
       assert.equal(result.amount, "0.001");
+      assert.equal(result.mode, "gateway_deposit");
       assert.equal(result.approvalTransactionId, "approve-tx");
       assert.equal(result.depositTransactionId, "deposit-tx");
       assert.equal(result.gatewayBalance.availableAtomic, "1000");
+    },
+  );
+});
+
+test("AgentWalletService submits gas top-up instead of Gateway deposit when ETH is low", async () => {
+  await withTempStateFile(
+    {
+      wallets: [],
+      agentWalletBindings: [
+        {
+          agentName: "Chief Gas Treasury Seed Wallet",
+          agentId: "__gas_treasury_seed__",
+          email: null,
+          walletAddress: "0x82df36f77f84bffcbcdf6dc142c0289a692e4797",
+          circleWalletId: "circle-seed",
+          circleWalletSetId: "circle-wallet-set",
+          blockchain: "BASE-SEPOLIA",
+          mode: "circle",
+          accountType: "EOA",
+          updatedAt: "2026-05-13T00:00:00.000Z",
+        },
+        {
+          agentName: "ZeroClaw OntologyAgent",
+          agentId: "main-agent",
+          email: null,
+          walletAddress: "0x1111111111111111111111111111111111111111",
+          circleWalletId: "circle-main",
+          circleWalletSetId: "circle-wallet-set",
+          blockchain: "BASE-SEPOLIA",
+          mode: "circle",
+          accountType: "EOA",
+          updatedAt: "2026-05-13T00:00:00.000Z",
+        },
+      ],
+    },
+    async (statePath) => {
+      const config = liveCircleConfig({
+        AGENT_WALLET_STATE_PATH: statePath,
+        CIRCLE_BLOCKCHAIN: "BASE-SEPOLIA",
+        X402_FACILITATOR_URL: "https://gateway-api-testnet.circle.com",
+        X402_NETWORK: "eip155:84532",
+      });
+      let depositCalls = 0;
+      const nativeTransfers: unknown[] = [];
+      const circleWalletService = {
+        getWalletBalances: async (walletId: string) => {
+          if (walletId === "circle-main") return { ETH: "0.000001", USDC: "2" };
+          if (walletId === "circle-seed") return { ETH: "1" };
+          return {};
+        },
+        createNativeTransfer: async (input: unknown) => {
+          nativeTransfers.push(input);
+          return { transaction: { id: "gas-topup-tx", state: "INITIATED" } };
+        },
+        depositToGateway: async () => {
+          depositCalls += 1;
+          throw new Error("Gateway deposit must wait for gas top-up webhook");
+        },
+      } as unknown as CircleWalletService;
+      const service = new AgentWalletService(
+        config,
+        fakeX402FetchService(baseX402Result()),
+        circleWalletService,
+      );
+
+      const result = await service.depositToGateway({
+        agentId: "main-agent",
+        amountAtomic: "1000",
+        refId: "deposit:test",
+      });
+
+      assert.equal(result.mode, "gas_topup_pending");
+      assert.equal(result.gasTopUp.transactionId, "gas-topup-tx");
+      assert.equal(result.gasTopUp.amountEth, "0.000099");
+      assert.equal(depositCalls, 0);
+      assert.deepEqual(nativeTransfers, [
+        {
+          walletId: "circle-seed",
+          destinationAddress: "0x1111111111111111111111111111111111111111",
+          amountEth: "0.000099",
+          refId: "deposit:test:gas-topup",
+        },
+      ]);
+    },
+  );
+});
+
+test("AgentWalletService enforces gas top-up wallet daily limits", async () => {
+  await withTempStateFile(
+    {
+      wallets: [],
+      agentWalletBindings: [
+        {
+          agentName: "Chief Gas Treasury Seed Wallet",
+          agentId: "__gas_treasury_seed__",
+          email: null,
+          walletAddress: "0x82df36f77f84bffcbcdf6dc142c0289a692e4797",
+          circleWalletId: "circle-seed",
+          circleWalletSetId: "circle-wallet-set",
+          blockchain: "BASE-SEPOLIA",
+          mode: "circle",
+          accountType: "EOA",
+          updatedAt: "2026-05-13T00:00:00.000Z",
+        },
+        {
+          agentName: "ZeroClaw OntologyAgent",
+          agentId: "main-agent",
+          email: null,
+          walletAddress: "0x1111111111111111111111111111111111111111",
+          circleWalletId: "circle-main",
+          circleWalletSetId: "circle-wallet-set",
+          blockchain: "BASE-SEPOLIA",
+          mode: "circle",
+          accountType: "EOA",
+          updatedAt: "2026-05-13T00:00:00.000Z",
+        },
+      ],
+      gasTopUpIntents: [
+        {
+          intentId: "gas_intent_existing",
+          status: "gateway_deposit_completed",
+          topUpTransactionId: "gas-topup-existing",
+          targetAgentId: "main-agent",
+          targetWalletAddress: "0x1111111111111111111111111111111111111111",
+          targetCircleWalletId: "circle-main",
+          seedAgentId: "__gas_treasury_seed__",
+          seedCircleWalletId: "circle-seed",
+          amountEth: "0.001",
+          originalGatewayDeposit: {
+            agentId: "main-agent",
+            amountAtomic: "1000",
+            refId: "deposit:existing",
+          },
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      ],
+    },
+    async (statePath) => {
+      const config = liveCircleConfig({
+        AGENT_WALLET_STATE_PATH: statePath,
+        CIRCLE_BLOCKCHAIN: "BASE-SEPOLIA",
+        X402_FACILITATOR_URL: "https://gateway-api-testnet.circle.com",
+        X402_NETWORK: "eip155:84532",
+      });
+      let nativeTransfers = 0;
+      const circleWalletService = {
+        getWalletBalances: async (walletId: string) => {
+          if (walletId === "circle-main") return { ETH: "0.000001", USDC: "2" };
+          if (walletId === "circle-seed") return { ETH: "1" };
+          return {};
+        },
+        createNativeTransfer: async () => {
+          nativeTransfers += 1;
+          return { transaction: { id: "gas-topup-tx", state: "INITIATED" } };
+        },
+      } as unknown as CircleWalletService;
+      const service = new AgentWalletService(
+        config,
+        fakeX402FetchService(baseX402Result()),
+        circleWalletService,
+      );
+
+      await assertRejectsWithAppError(
+        () =>
+          service.depositToGateway({
+            agentId: "main-agent",
+            amountAtomic: "1000",
+            refId: "deposit:test",
+          }),
+        {
+          code: "VALIDATION_ERROR",
+          statusCode: 429,
+          message: /wallet daily limit exceeded/i,
+        },
+      );
+      assert.equal(nativeTransfers, 0);
+    },
+  );
+});
+
+test("AgentWalletService resumes Gateway deposit after matching gas top-up webhook", async () => {
+  await withTempStateFile(
+    {
+      wallets: [],
+      agentWalletBindings: [
+        {
+          agentName: "Chief Gas Treasury Seed Wallet",
+          agentId: "__gas_treasury_seed__",
+          email: null,
+          walletAddress: "0x82df36f77f84bffcbcdf6dc142c0289a692e4797",
+          circleWalletId: "circle-seed",
+          circleWalletSetId: "circle-wallet-set",
+          blockchain: "BASE-SEPOLIA",
+          mode: "circle",
+          accountType: "EOA",
+          updatedAt: "2026-05-13T00:00:00.000Z",
+        },
+        {
+          agentName: "ZeroClaw OntologyAgent",
+          agentId: "main-agent",
+          email: null,
+          walletAddress: "0x1111111111111111111111111111111111111111",
+          circleWalletId: "circle-main",
+          circleWalletSetId: "circle-wallet-set",
+          blockchain: "BASE-SEPOLIA",
+          mode: "circle",
+          accountType: "EOA",
+          updatedAt: "2026-05-13T00:00:00.000Z",
+        },
+      ],
+      gasTopUpIntents: [
+        {
+          intentId: "gas_intent_1",
+          status: "pending",
+          topUpTransactionId: "gas-topup-tx",
+          targetAgentId: "main-agent",
+          targetWalletAddress: "0x1111111111111111111111111111111111111111",
+          targetCircleWalletId: "circle-main",
+          seedAgentId: "__gas_treasury_seed__",
+          seedCircleWalletId: "circle-seed",
+          amountEth: "0.000099",
+          originalGatewayDeposit: {
+            agentId: "main-agent",
+            amountAtomic: "1000",
+            refId: "deposit:test",
+          },
+          createdAt: "2026-05-13T00:00:00.000Z",
+          updatedAt: "2026-05-13T00:00:00.000Z",
+        },
+      ],
+    },
+    async (statePath) => {
+      const config = liveCircleConfig({
+        AGENT_WALLET_STATE_PATH: statePath,
+        X402_FACILITATOR_URL: "https://gateway-api-testnet.circle.com",
+        X402_NETWORK: "eip155:84532",
+      });
+      const circleWalletService = {
+        depositToGateway: async () => ({
+          approval: { transaction: { id: "approve-tx", state: "COMPLETE" } },
+          approvalFinal: { transaction: { id: "approve-tx", state: "COMPLETE" } },
+          deposit: { transaction: { id: "deposit-tx", state: "COMPLETE" } },
+          depositFinal: { transaction: { id: "deposit-tx", state: "COMPLETE" } },
+        }),
+        getGatewayBalance: async () => ({
+          total: 1000n,
+          available: 1000n,
+          withdrawing: 0n,
+          withdrawable: 1000n,
+          pendingDeposits: 0n,
+          pendingBatch: 0n,
+          formattedTotal: "0.001",
+          formattedAvailable: "0.001",
+          formattedWithdrawing: "0",
+          formattedWithdrawable: "0.001",
+          formattedPendingDeposits: "0",
+          formattedPendingBatch: "0",
+        }),
+      } as unknown as CircleWalletService;
+      const service = new AgentWalletService(
+        config,
+        fakeX402FetchService(baseX402Result()),
+        circleWalletService,
+      );
+
+      const webhook = await service.handleGasTopUpWebhook({
+        transactionId: "gas-topup-tx",
+        state: "COMPLETE",
+      });
+      const result = await service.resumeGasTopUpGatewayDeposit({
+        intentId: webhook.intent!.intentId,
+      });
+
+      assert.equal(webhook.matched, true);
       assert.equal(result.mode, "gateway_deposit");
+      assert.equal(result.depositTransactionId, "deposit-tx");
     },
   );
 });

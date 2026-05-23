@@ -50,6 +50,12 @@ class CircleHttpClient:
     async def gateway_withdraw(self, payload: dict[str, Any]) -> dict[str, Any]:
         return await self._post("/circle/gateway/withdrawals", payload)
 
+    async def gas_topup_webhook(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return await self._post("/circle/gas-topups/webhook", payload)
+
+    async def gas_topup_resume(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return await self._post("/circle/gas-topups/resume", payload)
+
     async def settle(self, payload: dict[str, Any]) -> dict[str, Any]:
         return await self._post("/circle/settlements", payload)
 

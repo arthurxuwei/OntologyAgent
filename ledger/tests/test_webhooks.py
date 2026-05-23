@@ -91,6 +91,189 @@ class TestWebhooks(LedgerServiceTestCase):
         self.assertEqual(state["circleWebhookEvents"][0]["status"], "processed")
         self.assertEqual(state["circleWebhookEvents"][0]["transactionId"], "tx-inbound-1")
 
+    def test_circle_wallet_webhook_keeps_inbound_pending_when_gas_topup_is_pending(self) -> None:
+        main.get_store().bind_account_wallet(
+            agent_id="agent_research",
+            agent_name="Research Agent",
+            email="agent@example.com",
+            wallet_address="0x1111111111111111111111111111111111111111",
+            circle_wallet_id="circle-wallet-1",
+        )
+
+        class FakeWalletClient:
+            async def status(self, *, wallet_address, circle_wallet_id):
+                return {"balances": {"USDC": "2.23"}}
+
+            async def gateway_deposit(self, request):
+                return {
+                    "agentId": request.agentId,
+                    "amountAtomic": request.amountAtomic,
+                    "mode": "gas_topup_pending",
+                    "gasTopUp": {
+                        "intentId": "gas-intent-1",
+                        "transactionId": "gas-topup-tx",
+                    },
+                    "pendingGatewayDeposit": {
+                        "agentId": request.agentId,
+                        "amountAtomic": request.amountAtomic,
+                        "refId": request.refId,
+                    },
+                }
+
+        payload = {
+            "subscriptionId": "subscription-1",
+            "notificationId": "notification-gas-pending",
+            "notificationType": "transactions.inbound",
+            "notification": {
+                "id": "tx-inbound-gas-pending",
+                "state": "COMPLETE",
+                "transactionType": "INBOUND",
+                "walletId": "circle-wallet-1",
+                "destinationAddress": "0x1111111111111111111111111111111111111111",
+                "amounts": ["2.23"],
+                "tokenSymbol": "USDC",
+                "contractAddress": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+            },
+            "timestamp": "2026-05-21T06:00:00Z",
+            "version": 2,
+        }
+
+        with patch.object(services, "get_ledger_wallet_client", return_value=FakeWalletClient()):
+            response = self.client.post("/circle/webhooks/wallets", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "pending")
+        state = self.client.get("/ledger/state?agentId=agent_research").json()
+        self.assertEqual(len(state["entries"]), 1)
+        self.assertEqual(state["entries"][0]["entryType"], "pending_inbound")
+        self.assertEqual(state["entries"][0]["metadata"]["dashboardStatus"], "pending_inbound_chain")
+        self.assertEqual(state["circleWebhookEvents"][0]["status"], "received")
+        self.assertEqual(
+            state["circleWebhookEvents"][0]["gatewayDepositResult"]["mode"],
+            "gas_topup_pending",
+        )
+
+    def test_circle_wallet_webhook_routes_gas_topup_completion_to_circle(self) -> None:
+        class FakeWalletClient:
+            def __init__(self) -> None:
+                self.webhook_payloads = []
+
+            async def gas_topup_webhook(self, payload):
+                self.webhook_payloads.append(payload)
+                return {
+                    "matched": True,
+                    "resumeRequired": True,
+                    "intent": {
+                        "intentId": "gas-intent-1",
+                        "targetAgentId": "agent_research",
+                        "originalGatewayDeposit": {
+                            "agentId": "agent_research",
+                            "amountAtomic": "2230000",
+                            "refId": "circle-webhook:notification-gas-pending",
+                        },
+                    },
+                }
+
+        fake_client = FakeWalletClient()
+        scheduled = []
+        payload = {
+            "subscriptionId": "subscription-1",
+            "notificationId": "notification-gas-complete",
+            "notificationType": "transactions.outbound",
+            "notification": {
+                "id": "gas-topup-tx",
+                "state": "COMPLETE",
+                "transactionType": "OUTBOUND",
+                "walletId": "circle-seed",
+                "destinationAddress": "0x1111111111111111111111111111111111111111",
+                "amounts": ["0.000099"],
+                "tokenSymbol": "ETH",
+            },
+            "timestamp": "2026-05-21T06:01:00Z",
+            "version": 2,
+        }
+
+        with patch.object(services, "get_ledger_wallet_client", return_value=fake_client), patch.object(
+            webhooks,
+            "schedule_gas_topup_resume",
+            side_effect=lambda intent: scheduled.append(intent),
+        ):
+            response = self.client.post("/circle/webhooks/wallets", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "processed")
+        self.assertEqual(response.json()["reason"], "gas_topup_resume_queued")
+        self.assertEqual(len(fake_client.webhook_payloads), 1)
+        self.assertEqual(scheduled[0]["intentId"], "gas-intent-1")
+
+    def test_gas_topup_resume_success_credits_original_pending_inbound(self) -> None:
+        store = main.get_store()
+        store.bind_account_wallet(
+            agent_id="agent_research",
+            agent_name="Research Agent",
+            email="agent@example.com",
+            wallet_address="0x1111111111111111111111111111111111111111",
+            circle_wallet_id="circle-wallet-1",
+        )
+        _account, pending_entry = store.record_dashboard_event(
+            entry_type="pending_inbound",
+            agent_id="agent_research",
+            reason="external top-up detected",
+            metadata={
+                "dashboardStatus": "pending_inbound_chain",
+                "amountAtomic": "2230000",
+                "counterparty": "External wallet",
+                "gatewayStage": "gateway_crediting",
+                "txHash": "tx-inbound-gas-pending",
+                "network": "Base",
+                "circleTransactionId": "tx-inbound-gas-pending",
+                "notificationId": "notification-gas-pending",
+                "gatewayRefId": "circle-webhook:notification-gas-pending",
+            },
+        )
+
+        credited = webhooks.credit_gateway_deposit_resumed_from_gas_topup(
+            {
+                "intentId": "gas-intent-1",
+                "targetAgentId": "agent_research",
+                "originalGatewayDeposit": {
+                    "agentId": "agent_research",
+                    "amountAtomic": "2230000",
+                    "refId": "circle-webhook:notification-gas-pending",
+                },
+            },
+            {
+                "mode": "gateway_deposit",
+                "depositTransactionId": "deposit-tx",
+                "gatewayBalance": {"availableAtomic": "2230000"},
+            },
+        )
+        duplicate = webhooks.credit_gateway_deposit_resumed_from_gas_topup(
+            {
+                "intentId": "gas-intent-1",
+                "targetAgentId": "agent_research",
+                "originalGatewayDeposit": {
+                    "agentId": "agent_research",
+                    "amountAtomic": "2230000",
+                    "refId": "circle-webhook:notification-gas-pending",
+                },
+            },
+            {
+                "mode": "gateway_deposit",
+                "depositTransactionId": "deposit-tx",
+            },
+        )
+
+        self.assertIsNotNone(credited)
+        self.assertEqual(credited.entryType, "credit")
+        self.assertEqual(credited.availableDeltaAtomic, "2230000")
+        self.assertEqual(credited.metadata["linkedEntryId"], pending_entry.entryId)
+        self.assertEqual(credited.metadata["depositTransactionId"], "deposit-tx")
+        self.assertEqual(duplicate.entryId, credited.entryId)
+        state = store.load()
+        self.assertEqual(len([entry for entry in state.entries if entry.entryType == "credit"]), 1)
+        self.assertEqual(state.accounts[0].availableAtomic, "2230000")
+
     def test_circle_wallet_webhook_sweeps_confirmed_inbound_usdc_to_gateway(self) -> None:
         main.get_store().bind_account_wallet(
             agent_id="agent_research",
@@ -383,7 +566,7 @@ class TestWebhooks(LedgerServiceTestCase):
         self.assertEqual(response.json()["status"], "duplicate")
         self.assertEqual(len(main.get_store().load().entries), 1)
 
-    def test_circle_wallet_webhook_skips_gateway_deposit_until_wallet_balance_reaches_one_usdc(self) -> None:
+    def test_circle_wallet_webhook_sweeps_sub_one_usdc_wallet_balance(self) -> None:
         main.get_store().bind_account_wallet(
             agent_id="agent_research",
             agent_name="Research Agent",
@@ -397,11 +580,15 @@ class TestWebhooks(LedgerServiceTestCase):
                 self.deposits = []
 
             async def status(self, *, wallet_address, circle_wallet_id):
-                return {"balances": {"USDC": "0.99"}}
+                return {"balances": {"USDC": "0.5"}}
 
             async def gateway_deposit(self, request):
                 self.deposits.append(request)
-                raise AssertionError("wallet balance below threshold must not be swept")
+                return {
+                    "agentId": request.agentId,
+                    "amountAtomic": request.amountAtomic,
+                    "mode": "gateway_deposit",
+                }
 
         fake_client = FakeWalletClient()
         with patch.object(services, "get_ledger_wallet_client", return_value=fake_client):
@@ -417,7 +604,7 @@ class TestWebhooks(LedgerServiceTestCase):
                         "transactionType": "INBOUND",
                         "walletId": "circle-wallet-1",
                         "destinationAddress": "0x1111111111111111111111111111111111111111",
-                        "amounts": ["0.99"],
+                        "amounts": ["0.5"],
                         "tokenSymbol": "USDC",
                     },
                     "timestamp": "2026-05-21T06:00:00Z",
@@ -426,10 +613,12 @@ class TestWebhooks(LedgerServiceTestCase):
             )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["status"], "skipped")
-        self.assertEqual(response.json()["reason"], "wallet_balance_not_above_gateway_threshold")
-        self.assertEqual(fake_client.deposits, [])
-        self.assertEqual(main.get_store().load().entries, [])
+        self.assertEqual(response.json()["status"], "processed")
+        self.assertEqual(len(fake_client.deposits), 1)
+        self.assertEqual(fake_client.deposits[0].amountAtomic, "500000")
+        entries = main.get_store().load().entries
+        self.assertEqual(entries[0].entryType, "pending_inbound")
+        self.assertEqual(entries[1].entryType, "credit")
 
     def test_circle_wallet_webhook_skips_inbound_before_completion(self) -> None:
         main.get_store().bind_account_wallet(

@@ -25,6 +25,8 @@ const ROUTES = [
   "GET /circle/wallets/status",
   "POST /circle/gateway/deposits",
   "POST /circle/gateway/withdrawals",
+  "POST /circle/gas-topups/resume",
+  "POST /circle/gas-topups/webhook",
   "POST /circle/settlements",
   "POST /circle/wallets/get-or-create",
   "POST /circle/wallets/import",
@@ -139,6 +141,20 @@ export function createCircleHttpApp(
     "/circle/gateway/withdrawals",
     asyncRoute(async (req, res) =>
       sendResult(res, () => runtime.agentWalletService.withdrawFromGateway(req.body)),
+    ),
+  );
+
+  app.post(
+    "/circle/gas-topups/webhook",
+    asyncRoute(async (req, res) =>
+      sendResult(res, () => runtime.agentWalletService.handleGasTopUpWebhook(req.body)),
+    ),
+  );
+
+  app.post(
+    "/circle/gas-topups/resume",
+    asyncRoute(async (req, res) =>
+      sendResult(res, () => runtime.agentWalletService.resumeGasTopUpGatewayDeposit(req.body)),
     ),
   );
 

@@ -117,7 +117,41 @@ def _field_record_id(field_name: str) -> LedgerRecordId:
     return record_id
 
 
-LEDGER_COLLECTIONS: tuple[tuple[str, str, LedgerRecordId], ...] = (
+LedgerCollection = tuple[str, str, type[BaseModel], LedgerRecordId]
+
+
+LEDGER_COLLECTIONS: tuple[LedgerCollection, ...] = (
+    ("ledger_accounts", "accounts", LedgerAccount, _account_record_id),
+    ("ledger_entries", "entries", LedgerEntry, _field_record_id("entryId")),
+    ("ledger_escrows", "escrows", EscrowRecord, _field_record_id("escrowId")),
+    (
+        "ledger_onramp_sessions",
+        "onrampSessions",
+        OnrampSessionRecord,
+        _field_record_id("sessionId"),
+    ),
+    (
+        "ledger_onramp_events",
+        "onrampEvents",
+        OnrampEventRecord,
+        _field_record_id("eventId"),
+    ),
+    (
+        "ledger_circle_webhook_events",
+        "circleWebhookEvents",
+        CircleWebhookEventRecord,
+        _field_record_id("notificationId"),
+    ),
+    ("ledger_chain_records", "chainRecords", LedgerChainRecord, _field_record_id("recordId")),
+    (
+        "ledger_settlement_records",
+        "settlementRecords",
+        LedgerSettlementRecord,
+        _field_record_id("recordId"),
+    ),
+)
+
+LEGACY_LEDGER_RECORD_COLLECTIONS: tuple[tuple[str, str, LedgerRecordId], ...] = (
     ("accounts", "accounts", _account_record_id),
     ("entries", "entries", _field_record_id("entryId")),
     ("escrows", "escrows", _field_record_id("escrowId")),
@@ -127,6 +161,64 @@ LEDGER_COLLECTIONS: tuple[tuple[str, str, LedgerRecordId], ...] = (
     ("chain_records", "chainRecords", _field_record_id("recordId")),
     ("settlement_records", "settlementRecords", _field_record_id("recordId")),
 )
+
+
+def quote_identifier(identifier: str) -> str:
+    return '"' + identifier.replace('"', '""') + '"'
+
+
+def serialize_record_field(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, sort_keys=True)
+    return str(value)
+
+
+def deserialize_record_field(value: Optional[str]) -> Any:
+    if value is None:
+        return None
+    stripped = value.strip()
+    if stripped.startswith("{") or stripped.startswith("["):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return value
+    return value
+
+
+def record_from_row(row: sqlite3.Row, model_type: type[BaseModel]) -> dict[str, Any]:
+    record: dict[str, Any] = {}
+    for field_name in model_type.model_fields:
+        value = row[field_name]
+        if value is not None:
+            record[field_name] = deserialize_record_field(value)
+    return record
+
+
+def insert_record(
+    connection: sqlite3.Connection,
+    table_name: str,
+    model_type: type[BaseModel],
+    record_id: str,
+    position: int,
+    record: dict[str, Any],
+) -> None:
+    columns = ["record_id", "position", *model_type.model_fields]
+    placeholders = ", ".join("?" for _ in columns)
+    values = [
+        record_id,
+        position,
+        *[serialize_record_field(record.get(field_name)) for field_name in model_type.model_fields],
+    ]
+    connection.execute(
+        f"""
+        INSERT INTO {quote_identifier(table_name)}
+        ({", ".join(quote_identifier(column) for column in columns)})
+        VALUES ({placeholders})
+        """,
+        values,
+    )
 
 
 class OffchainLedgerStore:
@@ -997,25 +1089,49 @@ class OffchainLedgerStore:
             ON ledger_records(collection, position)
             """
         )
+        for table_name, _state_field, model_type, _record_id in LEDGER_COLLECTIONS:
+            self._ensure_record_table(connection, table_name, model_type)
         connection.execute(
             """
-            INSERT OR IGNORE INTO ledger_meta(key, value)
-            VALUES ('schema_version', '1')
+            INSERT OR REPLACE INTO ledger_meta(key, value)
+            VALUES ('schema_version', '2')
             """
         )
 
     def _maybe_import_legacy_json(self, connection: sqlite3.Connection) -> None:
+        if self._relation_record_count(connection) > 0:
+            return
+        record_count = connection.execute(
+            "SELECT COUNT(*) AS count FROM ledger_records"
+        ).fetchone()["count"]
+        if record_count:
+            state = self._load_state_from_legacy_records(connection)
+            started_transaction = not connection.in_transaction
+            if started_transaction:
+                connection.execute("BEGIN IMMEDIATE")
+            try:
+                self._replace_state(connection, state)
+                connection.execute("DELETE FROM ledger_records")
+                connection.execute(
+                    """
+                    INSERT OR REPLACE INTO ledger_meta(key, value)
+                    VALUES ('legacy_records_imported', ?)
+                    """,
+                    (now_iso(),),
+                )
+                if started_transaction:
+                    connection.commit()
+            except Exception:
+                if started_transaction:
+                    connection.rollback()
+                raise
+            return
         if not self.legacy_json_path or not os.path.exists(self.legacy_json_path):
             return
         imported = connection.execute(
             "SELECT value FROM ledger_meta WHERE key = 'legacy_json_imported'"
         ).fetchone()
         if imported is not None:
-            return
-        record_count = connection.execute(
-            "SELECT COUNT(*) AS count FROM ledger_records"
-        ).fetchone()["count"]
-        if record_count:
             return
         with open(self.legacy_json_path, encoding="utf-8") as handle:
             state = LedgerState.model_validate(
@@ -1042,22 +1158,23 @@ class OffchainLedgerStore:
 
     def _load_state_from_db(self, connection: sqlite3.Connection) -> LedgerState:
         raw_state: dict[str, Any] = {}
-        for sql_collection, state_field, _record_id in LEDGER_COLLECTIONS:
+        for table_name, state_field, model_type, _record_id in LEDGER_COLLECTIONS:
             rows = connection.execute(
-                """
-                SELECT payload FROM ledger_records
-                WHERE collection = ?
+                f"""
+                SELECT * FROM {quote_identifier(table_name)}
                 ORDER BY position ASC, record_id ASC
-                """,
-                (sql_collection,),
+                """
             ).fetchall()
-            raw_state[state_field] = [json.loads(row["payload"]) for row in rows]
+            raw_state[state_field] = [
+                record_from_row(row, model_type)
+                for row in rows
+            ]
         return LedgerState.model_validate(migrate_ledger_state_payload(raw_state))
 
     def _replace_state(self, connection: sqlite3.Connection, state: LedgerState) -> None:
         payload = state.model_dump()
-        connection.execute("DELETE FROM ledger_records")
-        for sql_collection, state_field, record_id_for in LEDGER_COLLECTIONS:
+        for table_name, state_field, model_type, record_id_for in LEDGER_COLLECTIONS:
+            connection.execute(f"DELETE FROM {quote_identifier(table_name)}")
             records = payload.get(state_field) or []
             used_record_ids: set[str] = set()
             for position, record in enumerate(records):
@@ -1070,18 +1187,8 @@ class OffchainLedgerStore:
                 while record_id in used_record_ids:
                     record_id = f"{record_id}#duplicate"
                 used_record_ids.add(record_id)
-                connection.execute(
-                    """
-                    INSERT INTO ledger_records(collection, record_id, position, payload)
-                    VALUES (?, ?, ?, ?)
-                    """,
-                    (
-                        sql_collection,
-                        record_id,
-                        position,
-                        json.dumps(record, sort_keys=True),
-                    ),
-                )
+                insert_record(connection, table_name, model_type, record_id, position, record)
+        connection.execute("DELETE FROM ledger_records")
         connection.execute(
             """
             INSERT OR REPLACE INTO ledger_meta(key, value)
@@ -1089,6 +1196,68 @@ class OffchainLedgerStore:
             """,
             (now_iso(),),
         )
+
+    def _ensure_record_table(
+        self,
+        connection: sqlite3.Connection,
+        table_name: str,
+        model_type: type[BaseModel],
+    ) -> None:
+        field_columns = [
+            f"{quote_identifier(field_name)} TEXT"
+            for field_name in model_type.model_fields
+        ]
+        connection.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {quote_identifier(table_name)} (
+                record_id TEXT PRIMARY KEY,
+                position INTEGER NOT NULL,
+                {", ".join(field_columns)}
+            )
+            """
+        )
+        existing_columns = {
+            row["name"]
+            for row in connection.execute(
+                f"PRAGMA table_info({quote_identifier(table_name)})"
+            ).fetchall()
+        }
+        for field_name in model_type.model_fields:
+            if field_name not in existing_columns:
+                connection.execute(
+                    f"""
+                    ALTER TABLE {quote_identifier(table_name)}
+                    ADD COLUMN {quote_identifier(field_name)} TEXT
+                    """
+                )
+        connection.execute(
+            f"""
+            CREATE INDEX IF NOT EXISTS {quote_identifier(f"idx_{table_name}_position")}
+            ON {quote_identifier(table_name)}(position)
+            """
+        )
+
+    def _relation_record_count(self, connection: sqlite3.Connection) -> int:
+        total = 0
+        for table_name, _state_field, _model_type, _record_id in LEDGER_COLLECTIONS:
+            total += connection.execute(
+                f"SELECT COUNT(*) AS count FROM {quote_identifier(table_name)}"
+            ).fetchone()["count"]
+        return total
+
+    def _load_state_from_legacy_records(self, connection: sqlite3.Connection) -> LedgerState:
+        raw_state: dict[str, Any] = {}
+        for sql_collection, state_field, _record_id in LEGACY_LEDGER_RECORD_COLLECTIONS:
+            rows = connection.execute(
+                """
+                SELECT payload FROM ledger_records
+                WHERE collection = ?
+                ORDER BY position ASC, record_id ASC
+                """,
+                (sql_collection,),
+            ).fetchall()
+            raw_state[state_field] = [json.loads(row["payload"]) for row in rows]
+        return LedgerState.model_validate(migrate_ledger_state_payload(raw_state))
 
     def _account_for_update(
         self, state: LedgerState, agent_id: str, *, create: bool

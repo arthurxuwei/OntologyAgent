@@ -593,6 +593,28 @@ class LedgerWalletClient:
             raise RuntimeError("wallet REST response did not include Gateway deposit content")
         return deposit
 
+    async def gas_topup_webhook(self, payload: dict[str, Any]) -> dict[str, Any]:
+        client = CircleHttpClient(
+            base_url=self.wallet_http_url,
+            timeout_seconds=self.timeout_seconds,
+            transport=self.transport,
+        )
+        result = await client.gas_topup_webhook(payload)
+        if not result:
+            raise RuntimeError("wallet REST response did not include gas top-up webhook content")
+        return result
+
+    async def gas_topup_resume(self, payload: dict[str, Any]) -> dict[str, Any]:
+        client = CircleHttpClient(
+            base_url=self.wallet_http_url,
+            timeout_seconds=self.timeout_seconds,
+            transport=self.transport,
+        )
+        result = await client.gas_topup_resume(payload)
+        if not result:
+            raise RuntimeError("wallet REST response did not include gas top-up resume content")
+        return result
+
     async def gateway_withdraw(self, request: GatewayWithdrawalRequest) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "agentId": request.agentId,

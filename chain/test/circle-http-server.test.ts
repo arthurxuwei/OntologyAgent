@@ -58,6 +58,8 @@ test("circle REST exposes Agent Wallet lifecycle and settlement routes", async (
   assert.deepEqual(body.routes.sort(), [
     "GET /circle/transactions/:transactionId",
     "GET /circle/wallets/status",
+    "POST /circle/gas-topups/resume",
+    "POST /circle/gas-topups/webhook",
     "POST /circle/gateway/deposits",
     "POST /circle/gateway/withdrawals",
     "POST /circle/settlements",

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import os
 from typing import Any, Literal, Optional
@@ -15,7 +16,6 @@ from config import (
     DEFAULT_BASE_MAINNET_USDC_ASSET_ADDRESS,
     DEFAULT_BASE_SEPOLIA_USDC_ASSET_ADDRESS,
     DEFAULT_CIRCLE_PUBLIC_KEY_BASE_URL,
-    GATEWAY_SWEEP_MIN_WALLET_BALANCE_ATOMIC,
 )
 from models import CircleWebhookEventRecord, GatewayDepositRequest, LedgerEntry
 import services
@@ -277,6 +277,111 @@ def gateway_deposit_ledger_metadata(result: Any) -> dict[str, Any]:
     }
 
 
+def gas_topup_webhook_payload(
+    payload: dict[str, Any],
+    notification: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "transactionId": circle_webhook_transaction_id(notification),
+        "refId": circle_webhook_text(notification.get("refId")),
+        "state": circle_webhook_text(notification.get("state"))
+        or circle_webhook_text(notification.get("status")),
+        "payload": payload,
+    }
+
+
+def gas_topup_pending(result: Any) -> bool:
+    return isinstance(result, dict) and result.get("mode") == "gas_topup_pending"
+
+
+def schedule_gas_topup_resume(intent: dict[str, Any]) -> None:
+    asyncio.create_task(resume_gas_topup_gateway_deposit(intent))
+
+
+async def resume_gas_topup_gateway_deposit(intent: dict[str, Any]) -> None:
+    intent_id = intent.get("intentId")
+    if not isinstance(intent_id, str) or not intent_id:
+        return
+    try:
+        result = await services.get_ledger_wallet_client().gas_topup_resume(
+            {"intentId": intent_id}
+        )
+        credit_gateway_deposit_resumed_from_gas_topup(intent, result)
+    except Exception:
+        return
+
+
+def credit_gateway_deposit_resumed_from_gas_topup(
+    intent: dict[str, Any],
+    result: dict[str, Any],
+) -> Optional[LedgerEntry]:
+    original = intent.get("originalGatewayDeposit")
+    if not isinstance(original, dict):
+        return None
+    agent_id = original.get("agentId") or intent.get("targetAgentId")
+    ref_id = original.get("refId")
+    if not isinstance(agent_id, str) or not isinstance(ref_id, str):
+        return None
+
+    state = services.get_store().load()
+    pending_entry: Optional[LedgerEntry] = None
+    for entry in state.entries:
+        if entry.agentId != agent_id or entry.entryType != "pending_inbound":
+            continue
+        if entry.metadata.get("gatewayRefId") == ref_id:
+            pending_entry = entry
+            break
+    if pending_entry is None:
+        return None
+
+    for entry in state.entries:
+        if (
+            entry.agentId == agent_id
+            and entry.entryType == "credit"
+            and entry.metadata.get("linkedEntryId") == pending_entry.entryId
+        ):
+            return entry
+
+    amount_atomic = pending_entry.metadata.get("amountAtomic") or original.get("amountAtomic")
+    if not isinstance(amount_atomic, str):
+        return None
+    metadata = {
+        "dashboardStatus": "credited",
+        "amountAtomic": amount_atomic,
+        "counterparty": pending_entry.metadata.get("counterparty") or "External wallet",
+        "linkedEntryId": pending_entry.entryId,
+        "txHash": pending_entry.metadata.get("txHash"),
+        "network": pending_entry.metadata.get("network") or "Base",
+        "circleTransactionId": pending_entry.metadata.get("circleTransactionId"),
+        "notificationId": pending_entry.metadata.get("notificationId"),
+        "gatewayRefId": ref_id,
+        **gateway_deposit_ledger_metadata(result),
+    }
+    if pending_entry.metadata.get("sourceAddress"):
+        metadata["sourceAddress"] = pending_entry.metadata.get("sourceAddress")
+    _account, credited = services.get_store().credit(
+        agent_id=agent_id,
+        amount_atomic=amount_atomic,
+        reason="Gateway Wallet credited",
+        metadata=metadata,
+    )
+    notification_id = pending_entry.metadata.get("notificationId")
+    if isinstance(notification_id, str):
+        event = services.get_store().get_circle_webhook_event(notification_id)
+        if event is not None:
+            services.get_store().save_circle_webhook_event(
+                event.model_copy(
+                    update={
+                        "status": "processed",
+                        "reason": "gateway_deposit_completed",
+                        "gatewayDepositResult": result,
+                        "updatedAt": now_iso(),
+                    }
+                )
+            )
+    return credited
+
+
 async def process_circle_wallet_webhook(payload: dict[str, Any]) -> dict[str, Any]:
     notification_id = circle_webhook_notification_id(payload)
     notification_type = circle_webhook_text(payload.get("notificationType")) or "unknown"
@@ -292,6 +397,39 @@ async def process_circle_wallet_webhook(payload: dict[str, Any]) -> dict[str, An
     transaction_id = circle_webhook_transaction_id(notification)
     wallet_address = circle_webhook_wallet_address(notification)
     circle_wallet_id = circle_webhook_wallet_id(notification)
+
+    try:
+        gas_topup_result = await services.get_ledger_wallet_client().gas_topup_webhook(
+            gas_topup_webhook_payload(payload, notification)
+        )
+    except Exception:
+        gas_topup_result = {}
+    if isinstance(gas_topup_result, dict) and gas_topup_result.get("matched") is True:
+        intent = gas_topup_result.get("intent")
+        if isinstance(intent, dict) and gas_topup_result.get("resumeRequired") is True:
+            schedule_gas_topup_resume(intent)
+        event = services.get_store().save_circle_webhook_event(
+            circle_webhook_event_record(
+                notification_id=notification_id,
+                notification_type=notification_type,
+                status="processed",
+                payload=payload,
+                transaction_id=transaction_id,
+                agent_id=intent.get("targetAgentId") if isinstance(intent, dict) else None,
+                wallet_address=wallet_address,
+                circle_wallet_id=circle_wallet_id,
+                reason="gas_topup_resume_queued"
+                if gas_topup_result.get("resumeRequired") is True
+                else "gas_topup_webhook_matched",
+                gateway_deposit_result=gas_topup_result,
+            )
+        )
+        return {
+            "status": "processed",
+            "notificationId": notification_id,
+            "reason": event.reason,
+            "event": event.model_dump(),
+        }
 
     def save_skipped(reason: str) -> dict[str, Any]:
         matched_account = services.get_store().find_account_by_wallet(
@@ -528,26 +666,6 @@ async def process_circle_wallet_webhook(payload: dict[str, Any]) -> dict[str, An
             wallet_balance_atomic = circle_wallet_status_usdc_amount_atomic(wallet_status)
             if wallet_balance_atomic is None:
                 raise RuntimeError("wallet status did not include a USDC balance")
-            if int(wallet_balance_atomic) < GATEWAY_SWEEP_MIN_WALLET_BALANCE_ATOMIC:
-                skipped = services.get_store().save_circle_webhook_event(
-                    received.model_copy(
-                        update={
-                            "status": "skipped",
-                            "reason": "wallet_balance_not_above_gateway_threshold",
-                            "gatewayDepositResult": {
-                                "walletBalanceAtomic": wallet_balance_atomic,
-                                "thresholdAtomic": str(GATEWAY_SWEEP_MIN_WALLET_BALANCE_ATOMIC),
-                            },
-                            "updatedAt": now_iso(),
-                        }
-                    )
-                )
-                return {
-                    "status": "skipped",
-                    "notificationId": notification_id,
-                    "reason": "wallet_balance_not_above_gateway_threshold",
-                    "event": skipped.model_dump(),
-                }
 
             if pending_entry is None:
                 _pending_account, pending_entry = services.get_store().record_dashboard_event(
@@ -578,6 +696,24 @@ async def process_circle_wallet_webhook(payload: dict[str, Any]) -> dict[str, An
             )
             raise RuntimeError(f"Gateway deposit failed: {error}") from error
         gateway_deposit_result = result if isinstance(result, dict) else {}
+        if gas_topup_pending(gateway_deposit_result):
+            pending_event = services.get_store().save_circle_webhook_event(
+                received.model_copy(
+                    update={
+                        "status": "received",
+                        "reason": "gateway_gas_topup_pending",
+                        "gatewayDepositResult": gateway_deposit_result,
+                        "updatedAt": now_iso(),
+                    }
+                )
+            )
+            return {
+                "status": "pending",
+                "notificationId": notification_id,
+                "reason": "gateway_gas_topup_pending",
+                "event": pending_event.model_dump(),
+                "pendingEntry": pending_entry.model_dump() if pending_entry else None,
+            }
 
     if pending_entry is None:
         _pending_account, pending_entry = services.get_store().record_dashboard_event(

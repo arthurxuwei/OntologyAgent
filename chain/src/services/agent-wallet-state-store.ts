@@ -1,13 +1,19 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
-import type { AgentWalletBinding, AgentWalletStatusResult, CircleBlockchain } from "../domain/types.js";
+import type {
+  AgentWalletBinding,
+  AgentWalletGasTopUpIntent,
+  AgentWalletStatusResult,
+  CircleBlockchain,
+} from "../domain/types.js";
 import { normalizeAddress } from "../security.js";
 import type { CircleWalletRecord } from "./circle-wallet-service.js";
 
 export type AgentWalletState = {
   wallets: CircleWalletRecord[];
   agentWalletBindings?: AgentWalletBinding[];
+  gasTopUpIntents?: AgentWalletGasTopUpIntent[];
   updatedAt?: string;
 };
 
@@ -174,6 +180,7 @@ export class AgentWalletStateStore {
     const state: AgentWalletState = {
       wallets: dedupeWallets(wallets),
       agentWalletBindings: previous.agentWalletBindings ?? [],
+      gasTopUpIntents: previous.gasTopUpIntents ?? [],
       updatedAt: new Date().toISOString(),
     };
     await this.write(state);
@@ -212,6 +219,78 @@ export class AgentWalletStateStore {
     return binding;
   }
 
+  async saveGasTopUpIntent(intent: AgentWalletGasTopUpIntent): Promise<AgentWalletGasTopUpIntent> {
+    if (!this.statePath) {
+      throw new Error("AGENT_WALLET_STATE_PATH is not configured");
+    }
+    const state = await this.read();
+    const intents = state.gasTopUpIntents ?? [];
+    const index = intents.findIndex((entry) => entry.intentId === intent.intentId);
+    if (index >= 0) {
+      intents[index] = intent;
+    } else {
+      intents.push(intent);
+    }
+    state.gasTopUpIntents = intents;
+    state.updatedAt = intent.updatedAt;
+    await this.write(state);
+    return intent;
+  }
+
+  async findPendingGasTopUpForWallet(
+    walletAddress: string,
+    sinceMs: number,
+  ): Promise<AgentWalletGasTopUpIntent | null> {
+    const normalized = normalizeAddress(walletAddress).toLowerCase();
+    const state = await this.read();
+    return (
+      (state.gasTopUpIntents ?? []).find((intent) => {
+        if (intent.status !== "pending") return false;
+        if (normalizeAddress(intent.targetWalletAddress).toLowerCase() !== normalized) return false;
+        return Date.parse(intent.createdAt) >= sinceMs;
+      }) ?? null
+    );
+  }
+
+  async findGasTopUpIntent(command: {
+    intentId?: string | null;
+    transactionId?: string | null;
+  }): Promise<AgentWalletGasTopUpIntent | null> {
+    const intentId = normalizeOptional(command.intentId);
+    const transactionId = normalizeOptional(command.transactionId);
+    const state = await this.read();
+    return (
+      (state.gasTopUpIntents ?? []).find((intent) => {
+        if (intentId && intent.intentId === intentId) return true;
+        return Boolean(transactionId && intent.topUpTransactionId === transactionId);
+      }) ?? null
+    );
+  }
+
+  async gasTopUpSpentSince(command: {
+    walletAddress?: string | null;
+    sinceMs: number;
+  }): Promise<{ walletWei: bigint; globalWei: bigint }> {
+    const normalized = command.walletAddress
+      ? normalizeAddress(command.walletAddress).toLowerCase()
+      : null;
+    const state = await this.read();
+    let walletWei = 0n;
+    let globalWei = 0n;
+    for (const intent of state.gasTopUpIntents ?? []) {
+      if (Date.parse(intent.createdAt) < command.sinceMs) continue;
+      const amountWei = parseEthToWei(intent.amountEth);
+      globalWei += amountWei;
+      if (
+        normalized &&
+        normalizeAddress(intent.targetWalletAddress).toLowerCase() === normalized
+      ) {
+        walletWei += amountWei;
+      }
+    }
+    return { walletWei, globalWei };
+  }
+
   private async read(): Promise<AgentWalletState> {
     if (!this.statePath) {
       return { wallets: [] };
@@ -226,6 +305,9 @@ export class AgentWalletStateStore {
         wallets: payload.wallets.filter(isWalletRecord),
         agentWalletBindings: Array.isArray(payload.agentWalletBindings)
           ? payload.agentWalletBindings.filter(isAgentWalletBinding)
+          : [],
+        gasTopUpIntents: Array.isArray(payload.gasTopUpIntents)
+          ? payload.gasTopUpIntents.filter(isGasTopUpIntent)
           : [],
         updatedAt: typeof payload.updatedAt === "string" ? payload.updatedAt : undefined,
       };
@@ -364,6 +446,29 @@ function isAgentWalletBinding(value: unknown): value is AgentWalletBinding {
     ) &&
     typeof value.updatedAt === "string"
   );
+}
+
+function isGasTopUpIntent(value: unknown): value is AgentWalletGasTopUpIntent {
+  return (
+    isRecord(value) &&
+    typeof value.intentId === "string" &&
+    typeof value.status === "string" &&
+    typeof value.topUpTransactionId === "string" &&
+    typeof value.targetWalletAddress === "string" &&
+    typeof value.targetCircleWalletId === "string" &&
+    typeof value.seedAgentId === "string" &&
+    typeof value.seedCircleWalletId === "string" &&
+    typeof value.amountEth === "string" &&
+    isRecord(value.originalGatewayDeposit) &&
+    typeof value.createdAt === "string" &&
+    typeof value.updatedAt === "string"
+  );
+}
+
+function parseEthToWei(value: string): bigint {
+  const [whole, fraction = ""] = value.split(".");
+  const paddedFraction = `${fraction}000000000000000000`.slice(0, 18);
+  return BigInt(whole || "0") * 1_000_000_000_000_000_000n + BigInt(paddedFraction || "0");
 }
 
 function isCircleBlockchain(value: unknown): value is CircleBlockchain {

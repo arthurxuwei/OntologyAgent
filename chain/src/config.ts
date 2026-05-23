@@ -50,6 +50,15 @@ export type AppConfig = {
   agentWallet: {
     statePath?: string;
   };
+  gasTopUp: {
+    enabled: boolean;
+    seedAgentId: string;
+    minWei: bigint;
+    targetWei: bigint;
+    walletDailyLimitWei: bigint;
+    globalDailyLimitWei: bigint;
+    pendingReuseSeconds: number;
+  };
 };
 
 type ChainProfile = "base-sepolia" | "base-mainnet";
@@ -264,6 +273,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     },
     agentWallet: {
       statePath: pickOptionalEnv(env.AGENT_WALLET_STATE_PATH),
+    },
+    gasTopUp: {
+      enabled: parseBooleanEnv(env, "GAS_TOPUP_ENABLED", true),
+      seedAgentId: env.GAS_TOPUP_SEED_AGENT_ID ?? "__gas_treasury_seed__",
+      minWei: parseEthEnv(env, "GAS_TOPUP_MIN_ETH", "0.00001"),
+      targetWei: parseEthEnv(env, "GAS_TOPUP_TARGET_ETH", "0.0001"),
+      walletDailyLimitWei: parseEthEnv(env, "GAS_TOPUP_WALLET_DAILY_LIMIT_ETH", "0.001"),
+      globalDailyLimitWei: parseEthEnv(env, "GAS_TOPUP_GLOBAL_DAILY_LIMIT_ETH", "0.02"),
+      pendingReuseSeconds: parseNumberEnv(env, "GAS_TOPUP_PENDING_REUSE_SECONDS", 600),
     },
   };
 }

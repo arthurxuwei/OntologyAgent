@@ -138,6 +138,7 @@ def agent_transfer_dashboard_metadata(
 
 @app.get("/health")
 def health() -> dict[str, Any]:
+    get_store().load()
     return {"service": "chief-ledger", "status": "ok"}
 
 
