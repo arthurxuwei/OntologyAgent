@@ -33,6 +33,7 @@ services:
       CIRCLE_API_KEY: ${CIRCLE_API_KEY:-}
       CIRCLE_WEBHOOK_VERIFY_SIGNATURE: ${CIRCLE_WEBHOOK_VERIFY_SIGNATURE:-true}
       CIRCLE_PUBLIC_KEY_BASE_URL: ${CIRCLE_PUBLIC_KEY_BASE_URL:-https://api.circle.com/v2/notifications/publicKey}
+      CIRCLE_USDC_TOKEN_ID: ${CIRCLE_USDC_TOKEN_ID:-}
       X402_USDC_ASSET_ADDRESS: ${X402_USDC_ASSET_ADDRESS:-}
     volumes:
       - ${CHIEF_DATA_ROOT:-/opt/chief/data}/ledger:/app/data
