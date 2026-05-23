@@ -32,25 +32,22 @@ class TestDashboardClaims(LedgerServiceTestCase):
             )
         return source
 
-    def test_dashboard_supports_claim_code_deep_link_auto_claim(self) -> None:
+    def test_dashboard_supports_claim_code_deep_link_without_auto_login_or_auto_claim(self) -> None:
         response = self.client.get("/dashboard")
 
         self.assertEqual(response.status_code, 200)
         source = self.dashboard_source(response.text)
         self.assertIn("params.get('claimCode')", source)
         self.assertIn("params.get('agentId')", source)
-        self.assertIn("returnTo=${encodeURIComponent(window.location.pathname + window.location.search)}", source)
-        self.assertIn("function DeepLinkClaimRunner()", source)
-        self.assertIn("const consumedRef = React.useRef(false);", source)
-        self.assertIn("authChecked, claimToken, deepLinkAgentId, currentUser,", source)
-        self.assertIn("!authChecked || consumedRef.current", source)
+        self.assertIn("githubLoginHref", source)
+        self.assertIn("returnTo=${encodeURIComponent(returnTo)}", source)
+        self.assertNotIn("window.location.href = `/auth/github/login?returnTo=", source)
+        self.assertNotIn("function DeepLinkClaimRunner()", source)
+        self.assertNotIn("<DeepLinkClaimRunner />", source)
         self.assertIn("fetch(`/dashboard/claimable-agents?claimed=${claimed}`)", source)
-        self.assertIn("const normalizedDeepLinkAgentId = deepLinkAgentId.trim();", source)
-        self.assertIn("String(candidate.agentId || '').trim() === normalizedDeepLinkAgentId", source)
-        self.assertIn("window.history.replaceState({}, '', cleanUrl.toString())", source)
-        self.assertIn("<DeepLinkClaimRunner />", source)
+        self.assertIn("const [addAgentOpen, setAddAgentOpen] = React.useState(() => !!(claimToken && deepLinkAgentId));", source)
+        self.assertIn("(mode === 'initial' || mode === 'add') && claimToken", source)
         self.assertIn("<DashboardRouter />", source)
-        self.assertLess(source.index("<DeepLinkClaimRunner />"), source.index("<DashboardRouter />"))
 
     def test_dashboard_data_returns_email_scoped_ledger_accounts(self) -> None:
         store = main.get_store()
