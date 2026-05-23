@@ -215,6 +215,7 @@ async def auth_session(
             account.agentId
             for account in get_store().load().accounts
             if normalize_email(account.email) == owner_email
+            and account.dashboardClaimedAt
         ]
     return {
         "authenticated": True,
@@ -370,6 +371,40 @@ async def dashboard_claimable_agents(email: str = "", claimed: str = "") -> dict
         ledger_state=await ledger_state_with_circle_balances(),
         claimed_agent_ids=claimed_agent_ids,
     )
+
+
+@app.post("/dashboard/claims")
+async def dashboard_claim(request: DashboardClaimRequest) -> dict[str, Any]:
+    owner_email = normalize_email(request.email)
+    if owner_email is None:
+        raise HTTPException(status_code=400, detail="email is required")
+    state = get_store().load().model_dump()
+    account = next(
+        (
+            item
+            for item in state.get("accounts", [])
+            if isinstance(item, dict)
+            and str(item.get("agentId") or "") == request.agentId
+        ),
+        None,
+    )
+    if account is None:
+        raise HTTPException(status_code=404, detail="agent account not found")
+    if normalize_email(account.get("email")) != owner_email:
+        raise HTTPException(status_code=403, detail="agent is not assigned to this email")
+    expected_code = claim_code_for_account(account, owner_email)
+    if not secrets.compare_digest(expected_code, request.claimCode.strip()):
+        raise HTTPException(status_code=400, detail="invalid claim code")
+    claimed = get_store().claim_dashboard_account(
+        agent_id=request.agentId,
+        email=owner_email,
+    )
+    return {
+        "agentId": claimed.agentId,
+        "ownerEmail": owner_email,
+        "claimed": True,
+        "dashboardClaimedAt": claimed.dashboardClaimedAt,
+    }
 
 
 @app.post("/onramp/sessions")

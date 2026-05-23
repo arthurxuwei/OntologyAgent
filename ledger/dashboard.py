@@ -570,6 +570,8 @@ def build_claimable_agents(
         agent_id = str(account.get("agentId") or "").strip()
         if not agent_id or agent_id in seen or agent_id in claimed:
             continue
+        if account.get("dashboardClaimedAt"):
+            continue
         account_email = normalize_email(account.get("email"))
         if normalized_email and account_email != normalized_email:
             continue
