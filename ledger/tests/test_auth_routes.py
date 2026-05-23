@@ -462,6 +462,7 @@ class TestAuthRoutes(LedgerServiceTestCase):
         self.assertIn("credited", source)
         self.assertIn("withdrawn", source)
         self.assertIn("failed", source)
+
         self.assertIn("Gas", source)
         self.assertIn("Net", source)
         self.assertIn("Gas ~", source)
@@ -565,6 +566,17 @@ class TestAuthRoutes(LedgerServiceTestCase):
         self.assertNotIn("claimAgent('agentA')", source)
         self.assertNotIn("mvp.dash.settings.danger_button", source)
         self.assertNotIn("mvp.dash.settings.open_demo", source)
+
+    def test_dashboard_assets_are_not_browser_cached(self) -> None:
+        response = self.client.get(
+            "/dashboard/assets/dashboard/Shell/MvpAppStateProvider.jsx"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.headers.get("cache-control"),
+            "no-store, no-cache, must-revalidate, max-age=0",
+        )
 
     def test_dashboard_assets_are_served_as_static_files(self) -> None:
         response = self.client.get("/dashboard/assets/dashboard/DashboardApp.jsx")

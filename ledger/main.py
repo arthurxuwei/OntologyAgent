@@ -81,6 +81,17 @@ app.mount(
 )
 
 
+@app.middleware("http")
+async def add_dashboard_asset_no_cache_headers(
+    request: Request,
+    call_next: Any,
+) -> Response:
+    response = await call_next(request)
+    if request.url.path.startswith("/dashboard/assets/"):
+        response.headers.update(NO_CACHE_HEADERS)
+    return response
+
+
 FINAL_TRANSFER_STATES = {"SETTLED", "COMPLETE", "COMPLETED", "CONFIRMED"}
 
 
