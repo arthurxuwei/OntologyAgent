@@ -7,6 +7,7 @@ services:
     ports:
       - "8092:8092"
     environment:
+      LEDGER_DB_PATH: ${LEDGER_DB_PATH:-/app/data/offchain_ledger.sqlite3}
       LEDGER_STATE_PATH: ${LEDGER_STATE_PATH:-/app/data/offchain_ledger.json}
       COINBASE_ONRAMP_MOCK: ${COINBASE_ONRAMP_MOCK:-false}
       COINBASE_ONRAMP_API_BASE_URL: ${COINBASE_ONRAMP_API_BASE_URL:-https://api.developer.coinbase.com}

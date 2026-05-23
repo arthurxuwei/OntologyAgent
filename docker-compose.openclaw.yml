@@ -1,0 +1,24 @@
+name: chief-openclaw
+
+services:
+  openclaw-x:
+    image: ghcr.io/openclaw/openclaw:latest
+    container_name: openclaw-X
+    ports:
+      - "127.0.0.1:18789:18789"
+    environment:
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN_X:-openclaw-X-local-token}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      BRAIN_AGENT_MODEL: ${BRAIN_AGENT_MODEL:-glm-5}
+      HTTP_PROXY: ${HTTP_PROXY:-http://host.docker.internal:7897}
+      HTTPS_PROXY: ${HTTPS_PROXY:-http://host.docker.internal:7897}
+      ALL_PROXY: ${ALL_PROXY:-http://host.docker.internal:7897}
+      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,host.docker.internal}
+      EIGENFLUX_HOME: /home/node/.openclaw/workspace/.eigenflux
+    volumes:
+      - ./runtime-openclaw-x/config:/home/node/.openclaw
+      - ./runtime-openclaw-x/workspace:/home/node/.openclaw/workspace
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped

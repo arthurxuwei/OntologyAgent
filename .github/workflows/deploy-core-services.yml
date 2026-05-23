@@ -171,10 +171,14 @@ jobs:
           GITHUB_CLIENT_SECRET: ${{ secrets.CHIEF_GITHUB_CLIENT_SECRET }}
           AUTH_SESSION_SECRET: ${{ secrets.AUTH_SESSION_SECRET }}
           PUBLIC_BASE_URL: ${{ secrets.PUBLIC_BASE_URL }}
+          CIRCLE_API_KEY: ${{ secrets.CIRCLE_API_KEY }}
+          CIRCLE_ENTITY_SECRET: ${{ secrets.CIRCLE_ENTITY_SECRET }}
+          CIRCLE_WALLET_SET_ID: ${{ secrets.CIRCLE_WALLET_SET_ID }}
+          CIRCLE_USDC_TOKEN_ID: ${{ secrets.CIRCLE_USDC_TOKEN_ID }}
         run: |
           remote="${LIGHTHOUSE_USER}@${LIGHTHOUSE_HOST}"
           {
-            printf 'GHCR_IMAGE_PREFIX=%s\nIMAGE_TAG=%s\nCHIEF_DATA_ROOT=/opt/chief/data\nCLOUDFLARE_TUNNEL_TOKEN=%s\nCOINBASE_ONRAMP_BEARER_TOKEN=%s\nCOINBASE_API_KEY_ID=%s\nCOINBASE_API_PRIVATE_KEY=%s\n' \
+            printf 'GHCR_IMAGE_PREFIX=%s\nIMAGE_TAG=%s\nCHIEF_DATA_ROOT=/opt/chief/data\nCHAIN_PROFILE=base-mainnet\nCIRCLE_BLOCKCHAIN=BASE\nCHAIN_MOCK=false\nCLOUDFLARE_TUNNEL_TOKEN=%s\nCOINBASE_ONRAMP_BEARER_TOKEN=%s\nCOINBASE_API_KEY_ID=%s\nCOINBASE_API_PRIVATE_KEY=%s\n' \
               "${IMAGE_PREFIX}" \
               "${IMAGE_TAG}" \
               "${CLOUDFLARE_TUNNEL_TOKEN}" \
@@ -185,6 +189,10 @@ jobs:
             if [ -n "${GITHUB_CLIENT_SECRET}" ]; then printf 'GITHUB_CLIENT_SECRET=%s\n' "${GITHUB_CLIENT_SECRET}"; fi
             if [ -n "${AUTH_SESSION_SECRET}" ]; then printf 'AUTH_SESSION_SECRET=%s\n' "${AUTH_SESSION_SECRET}"; fi
             if [ -n "${PUBLIC_BASE_URL}" ]; then printf 'PUBLIC_BASE_URL=%s\n' "${PUBLIC_BASE_URL}"; fi
+            if [ -n "${CIRCLE_API_KEY}" ]; then printf 'CIRCLE_API_KEY=%s\n' "${CIRCLE_API_KEY}"; fi
+            if [ -n "${CIRCLE_ENTITY_SECRET}" ]; then printf 'CIRCLE_ENTITY_SECRET=%s\n' "${CIRCLE_ENTITY_SECRET}"; fi
+            if [ -n "${CIRCLE_WALLET_SET_ID}" ]; then printf 'CIRCLE_WALLET_SET_ID=%s\n' "${CIRCLE_WALLET_SET_ID}"; fi
+            if [ -n "${CIRCLE_USDC_TOKEN_ID}" ]; then printf 'CIRCLE_USDC_TOKEN_ID=%s\n' "${CIRCLE_USDC_TOKEN_ID}"; fi
           } | ssh -i ~/.ssh/lighthouse_key "${remote}" 'cat > /opt/chief/.env.deploy'
 
       - name: Pull and restart services

@@ -70,9 +70,9 @@ def route_payment_intent(intent: PaymentIntent) -> PaymentRouteDecision:
 
     if intent.deliveryMode == "withdrawal":
         return {
-            "method": "circle_withdrawal",
+            "method": "gateway_withdrawal",
             "reason": (
-                "Agent Wallet USDC withdrawals settle from the bound Circle wallet "
+                "Agent Wallet USDC withdrawals settle from Circle Gateway "
                 "to an external Base address, then the ledger records the outflow."
             ),
             "allowedTools": ["agent_wallet_settle_ledger_transfer"],

@@ -297,6 +297,10 @@ export type AgentWalletGatewayWithdrawResult = {
   asset: "USDC";
   amount: string;
   amountAtomic: string;
+  estimatedGasFeeAtomic: string;
+  estimatedGasFee: string;
+  netAmountAtomic: string;
+  netAmount: string;
   tokenAddress: string;
   gatewayWallet: string;
   gatewayMinter: string;
@@ -304,6 +308,7 @@ export type AgentWalletGatewayWithdrawResult = {
   gatewayTransferId: string | null;
   mintTransactionId: string | null;
   mintTransactionHash: string | null;
+  transactionHash: string | null;
   mintState: string | null;
   gatewayBalance: {
     availableAtomic: string;
@@ -327,6 +332,10 @@ export type AgentWalletTransferResult = {
   amount: string;
   amountEth: string | null;
   amountAtomic: string | null;
+  estimatedGasFeeAtomic?: string;
+  estimatedGasFee?: string;
+  netAmountAtomic?: string;
+  netAmount?: string;
   tokenId: string | null;
   tokenAddress: string;
   blockchain: CircleBlockchain;
