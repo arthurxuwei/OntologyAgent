@@ -45,7 +45,7 @@ class TestDashboardClaims(LedgerServiceTestCase):
         self.assertNotIn("window.location.href = `/auth/github/login?returnTo=", source)
         self.assertNotIn("function DeepLinkClaimRunner()", source)
         self.assertNotIn("<DeepLinkClaimRunner />", source)
-        self.assertIn("fetch(`/dashboard/claimable-agents?claimed=${claimed}`)", source)
+        self.assertIn("fetch(`/dashboard/claimable-agents?claimed=${claimed}&email=${owner}`)", source)
         self.assertIn(
             "const shouldOpenDeepLinkClaim = !!(claimToken && deepLinkAgentId && !claimedAgents.includes(deepLinkAgentId));",
             source,

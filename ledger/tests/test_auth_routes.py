@@ -281,6 +281,15 @@ class TestAuthRoutes(LedgerServiceTestCase):
         self.assertIn("chief_ledger_session=", set_cookie)
         self.assertIn("Max-Age=0", set_cookie)
 
+    def test_auth_logout_get_clears_session_cookie_and_returns_to_dashboard(self) -> None:
+        response = self.client.get("/auth/logout", follow_redirects=False)
+
+        self.assertEqual(response.status_code, 307)
+        self.assertEqual(response.headers["location"], "/dashboard")
+        set_cookie = response.headers["set-cookie"]
+        self.assertIn("chief_ledger_session=", set_cookie)
+        self.assertIn("Max-Age=0", set_cookie)
+
     def test_coinbase_auth_supports_cdp_key_id_and_base64_private_key(self) -> None:
         private_key = ed25519.Ed25519PrivateKey.generate()
         seed = private_key.private_bytes_raw()
@@ -367,13 +376,16 @@ class TestAuthRoutes(LedgerServiceTestCase):
         self.assertIn("claimedAgentIds: payload.claimedAgentIds || []", source)
         self.assertIn("const nextAgents = Array.isArray(opts.claimedAgentIds) ? opts.claimedAgentIds.filter(Boolean) : null;", source)
         self.assertIn("fetch('/auth/logout', { method: 'POST', credentials: 'same-origin' })", source)
+        self.assertIn(".finally(() => window.location.reload())", source)
         self.assertIn("signOut({ remote: false });", source)
         self.assertIn("const { authChecked, registered, claimed, currentUser } = window.useAppState();", source)
         self.assertIn("if (!registered || !currentUser) return <window.MvpGithubAuthScreen />", source)
         self.assertIn("if (!claimed)    return <window.MvpClaimScreen />", source)
         self.assertIn("window.ClaimForm = ClaimForm", source)
-        self.assertIn("fetch(`/dashboard/claimable-agents?claimed=${claimed}`)", source)
-        self.assertNotIn("email=${email}", source)
+        self.assertIn("const owner = encodeURIComponent(ownerEmail || '');", source)
+        self.assertIn("fetch(`/dashboard/claimable-agents?claimed=${claimed}&email=${owner}`)", source)
+        self.assertIn("if (response.status === 403) throw new Error('owner_mismatch');", source)
+        self.assertIn("setErrorKey(error.message === 'owner_mismatch'", source)
         self.assertNotIn("function ResetLink()", source)
         self.assertNotIn("<ResetLink />", source)
         self.assertNotIn("↻ {t('mvp.dash.reset')}", source)

@@ -161,7 +161,8 @@
       const url = new URL(window.location.href);
       url.searchParams.delete('reset');
       window.history.replaceState({}, '', url.toString());
-      window.location.reload();
+      fetch('/auth/logout', { method: 'POST', credentials: 'same-origin' })
+        .finally(() => window.location.reload());
     }, [isReset]);
 
     // Order matters: currentUser runs first so its migration (legacy email →

@@ -18,8 +18,9 @@
     React.useEffect(() => {
       let cancelled = false;
       const claimed = encodeURIComponent(claimedAgents.join(','));
+      const owner = encodeURIComponent(ownerEmail || '');
       setStatus('loading');
-      fetch(`/dashboard/claimable-agents?claimed=${claimed}`)
+      fetch(`/dashboard/claimable-agents?claimed=${claimed}&email=${owner}`)
         .then((response) => {
           if (!response.ok) throw new Error(`claimable agents ${response.status}`);
           return response.json();
@@ -36,7 +37,7 @@
           setStatus('error');
         });
       return () => { cancelled = true; };
-    }, [claimedAgents]);
+    }, [claimedAgents, ownerEmail]);
 
     const trimmedCode = code.trim();
     const canValidate = trimmedCode.length > 0;
@@ -87,6 +88,7 @@
         }),
       })
         .then((response) => {
+          if (response.status === 403) throw new Error('owner_mismatch');
           if (!response.ok) throw new Error(`dashboard claim ${response.status}`);
           return response.json();
         })
@@ -101,8 +103,10 @@
           window.history.replaceState({}, '', cleanUrl.toString());
           if (onClaimed) onClaimed(candidate.agentId);
         })
-        .catch(() => {
-          setErrorKey('mvp.dash.claim.error_load_failed');
+        .catch((error) => {
+          setErrorKey(error.message === 'owner_mismatch'
+            ? 'mvp.dash.claim.error_owner_mismatch'
+            : 'mvp.dash.claim.error_load_failed');
           setStep('input');
         });
     };
