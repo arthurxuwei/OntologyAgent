@@ -285,6 +285,17 @@ async def github_callback(
 async def auth_logout() -> Response:
     response = Response(content='{"ok":true}', media_type="application/json")
     response.delete_cookie(SESSION_COOKIE)
+    response.delete_cookie(OAUTH_STATE_COOKIE)
+    response.delete_cookie(OAUTH_RETURN_COOKIE)
+    return response
+
+
+@app.get("/auth/logout")
+async def auth_logout_redirect() -> RedirectResponse:
+    response = RedirectResponse("/dashboard", status_code=307)
+    response.delete_cookie(SESSION_COOKIE)
+    response.delete_cookie(OAUTH_STATE_COOKIE)
+    response.delete_cookie(OAUTH_RETURN_COOKIE)
     return response
 
 

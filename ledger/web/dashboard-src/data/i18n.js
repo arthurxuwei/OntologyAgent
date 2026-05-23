@@ -251,6 +251,7 @@
     'mvp.dash.claim.validate_button':        { en: 'Validate code',                           zh: '验证' },
     'mvp.dash.claim.error_loading':          { en: 'Still loading claim codes. Try again in a moment.', zh: 'claim code 还在加载,稍后再试。' },
     'mvp.dash.claim.error_load_failed':      { en: 'Unable to load claim codes. Try again after the ledger service is available.', zh: '暂时加载不了 claim code,等 ledger 服务恢复后再试。' },
+    'mvp.dash.claim.error_owner_mismatch':   { en: 'This claim code belongs to a different GitHub email. Sign out and use the owner account.', zh: '这串 claim code 属于另一个 GitHub 邮箱。请退出后使用 owner 账号登录。' },
     'mvp.dash.claim.error_not_found':        { en: 'Code not recognized. Check for typos.',   zh: '没识别到这串 code,检查一下有没有打错。' },
     'mvp.dash.claim.error_already_claimed':  { en: "You've already claimed this agent.",      zh: '这个 agent 已经认领过了。' },
     'mvp.dash.claim.no_agents':              { en: 'No unclaimed agents available.',          zh: '当前没有可认领的 agent。' },
