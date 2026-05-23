@@ -385,10 +385,14 @@ async def dashboard_claimable_agents(email: str = "", claimed: str = "") -> dict
 
 
 @app.post("/dashboard/claims")
-async def dashboard_claim(request: DashboardClaimRequest) -> dict[str, Any]:
-    owner_email = normalize_email(request.email)
+async def dashboard_claim(
+    request: DashboardClaimRequest,
+    session_cookie: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+) -> dict[str, Any]:
+    session_user = verify_auth_session(session_cookie)
+    owner_email = normalize_email((session_user or {}).get("email")) or normalize_email(request.email)
     if owner_email is None:
-        raise HTTPException(status_code=400, detail="email is required")
+        raise HTTPException(status_code=400, detail="dashboard email is required")
     state = get_store().load().model_dump()
     account = next(
         (

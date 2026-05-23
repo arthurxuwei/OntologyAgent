@@ -250,7 +250,7 @@ class DashboardClaimRequest(BaseModel):
 
     agentId: str = Field(min_length=1)
     claimCode: str = Field(min_length=1)
-    email: str = Field(min_length=1)
+    email: Optional[str] = None
 
 
 class GatewayDepositRequest(BaseModel):

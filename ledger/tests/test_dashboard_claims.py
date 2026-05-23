@@ -722,7 +722,7 @@ class TestDashboardClaims(LedgerServiceTestCase):
         self.assertEqual(data["balance"]["pendingSettlement"], 0.5)
         self.assertEqual(data["balance"]["pendingSettlementAtomic"], "500000")
 
-    def test_dashboard_claimable_agents_come_from_unclaimed_email_accounts(self) -> None:
+    def test_dashboard_claimable_agents_come_from_unclaimed_eoa_accounts(self) -> None:
         store = main.get_store()
         store.bind_account_wallet(
             agent_id="agent_alpha",
@@ -771,8 +771,8 @@ class TestDashboardClaims(LedgerServiceTestCase):
         payload = response.json()
         self.assertEqual(payload["email"], "owner@example.com")
         self.assertEqual(payload["source"], "ledger-accounts")
-        self.assertEqual(len(payload["agents"]), 1)
-        candidate = payload["agents"][0]
+        self.assertEqual({agent["agentId"] for agent in payload["agents"]}, {"agent_beta", "agent_other"})
+        candidate = next(agent for agent in payload["agents"] if agent["agentId"] == "agent_beta")
         self.assertEqual(candidate["agentId"], "agent_beta")
         self.assertEqual(candidate["agentName"], "Beta Research")
         self.assertEqual(candidate["ownerEmail"], "owner@example.com")
@@ -908,6 +908,66 @@ class TestDashboardClaims(LedgerServiceTestCase):
             "/dashboard/claimable-agents?email=owner@example.com"
         ).json()
         self.assertEqual(claimable["agents"], [])
+
+    def test_dashboard_claimable_agents_does_not_scope_by_dashboard_email(self) -> None:
+        store = main.get_store()
+        account = store.bind_account_wallet(
+            agent_id="agent_cross_email",
+            agent_name="Cross Email Agent",
+            email="agent-owner@example.com",
+            wallet_address="0x1111111111111111111111111111111111111111",
+            circle_wallet_id="circle-cross-email",
+            account_type="EOA",
+        )
+        claim_code = main.claim_code_for_account(account.model_dump(), "agent-owner@example.com")
+
+        response = self.client.get(
+            "/dashboard/claimable-agents?email=dashboard-user@example.com"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(len(payload["agents"]), 1)
+        self.assertEqual(payload["agents"][0]["agentId"], "agent_cross_email")
+        self.assertEqual(payload["agents"][0]["claimCode"], claim_code)
+
+    def test_dashboard_claim_endpoint_uses_signed_in_dashboard_email(self) -> None:
+        store = main.get_store()
+        account = store.bind_account_wallet(
+            agent_id="agent_session_claim",
+            agent_name="Session Claim Agent",
+            email="agent-owner@example.com",
+            wallet_address="0x1111111111111111111111111111111111111111",
+            circle_wallet_id="circle-session-claim",
+            account_type="EOA",
+        )
+        claim_code = main.claim_code_for_account(account.model_dump(), "agent-owner@example.com")
+
+        with patch.dict(os.environ, {"AUTH_SESSION_SECRET": "session-secret"}):
+            session = main.sign_auth_session(
+                {
+                    "provider": "github",
+                    "login": "dashboard-user",
+                    "name": "Dashboard User",
+                    "email": "dashboard-user@example.com",
+                    "avatar_url": None,
+                }
+            )
+            response = self.client.post(
+                "/dashboard/claims",
+                json={
+                    "agentId": "agent_session_claim",
+                    "claimCode": claim_code,
+                },
+                headers={"Cookie": f"chief_ledger_session={session}"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["agentId"], "agent_session_claim")
+        self.assertEqual(payload["ownerEmail"], "dashboard-user@example.com")
+        claimed = main.get_store().load().accounts[0]
+        self.assertEqual(claimed.dashboardClaimedByEmail, "dashboard-user@example.com")
 
     def test_claim_link_endpoint_rejects_non_eoa_wallets(self) -> None:
         class FakeWalletClient:

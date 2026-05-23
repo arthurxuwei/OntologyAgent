@@ -203,12 +203,12 @@
     'mvp.s7.final_button':   { en: 'Restart demo',            zh: '重新播放' },
     'mvp.s7.final_dashboard':{ en: 'Open dashboard →',        zh: '打开 dashboard →' },
 
-    // ── Onboarding · GitHub OAuth and real email ownership ────────────────
+    // ── Onboarding · GitHub OAuth and claim-code ownership ────────────────
     'mvp.dash.auth.slug':                  { en: 'CHIEF · SIGN IN', zh: 'CHIEF · 登录' },
     'mvp.dash.auth.headline':              { en: 'Sign in to your agent wallet.', zh: '登录你的 agent 钱包。' },
     'mvp.dash.auth.subhead': {
-      en: 'Continue with GitHub. Chief uses your verified GitHub email to find the ledger agents assigned to you.',
-      zh: '使用 GitHub 登录。Chief 会用 GitHub 已验证邮箱查找分配给你的 ledger agent。',
+      en: 'Continue with GitHub. Chief uses your account email to record claims after you enter a claim code.',
+      zh: '使用 GitHub 登录。输入 claim code 后,Chief 会用当前账号邮箱记录认领关系。',
     },
     'mvp.dash.auth.github_button':         { en: 'Continue with GitHub',  zh: '用 GitHub 继续' },
     'mvp.dash.auth.error':                 { en: 'GitHub authorization was cancelled or failed. Please try again.', zh: 'GitHub 授权已取消或失败,请重试。' },

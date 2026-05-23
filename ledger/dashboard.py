@@ -573,8 +573,6 @@ def build_claimable_agents(
         if account.get("dashboardClaimedAt"):
             continue
         account_email = normalize_email(account.get("email"))
-        if normalized_email and account_email != normalized_email:
-            continue
         account_type = normalize_wallet_account_type(account.get("accountType"))
         has_circle_wallet = bool(
             str(account.get("walletAddress") or "").strip()
