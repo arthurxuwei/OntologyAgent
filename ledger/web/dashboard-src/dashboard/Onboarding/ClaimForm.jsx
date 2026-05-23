@@ -38,7 +38,7 @@
     }, [claimedAgents]);
 
     const trimmedCode = code.trim();
-    const canValidate = trimmedCode.length > 0;
+    const canValidate = trimmedCode.length > 0 && status !== 'loading';
     const handleValidate = () => {
       if (!canValidate) return;
       if (status === 'loading') {

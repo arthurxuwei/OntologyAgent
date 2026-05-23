@@ -441,7 +441,7 @@ class TestAuthRoutes(LedgerServiceTestCase):
         self.assertNotIn("<ResetLink />", source)
         self.assertNotIn("↻ {t('mvp.dash.reset')}", source)
         self.assertIn("t('mvp.dash.claim.code_label')", source)
-        self.assertIn("const canValidate = trimmedCode.length > 0", source)
+        self.assertIn("const canValidate = trimmedCode.length > 0 && status !== 'loading'", source)
         self.assertIn("candidate.claimCode", source)
         self.assertIn("fetch('/dashboard/claims'", source)
         self.assertIn("{t('mvp.dash.claim.validate_button')} →", source)
