@@ -349,10 +349,17 @@ class OffchainLedgerStore:
                 return account
         raise LookupError(f"ledger account email not found: {normalized}")
 
-    def claim_dashboard_account(self, *, agent_id: str, email: str) -> LedgerAccount:
+    def claim_dashboard_account(
+        self,
+        *,
+        agent_id: str,
+        email: str,
+        dashboard_email: Optional[str] = None,
+    ) -> LedgerAccount:
         normalized = normalize_email(email)
         if normalized is None:
             raise ValueError("email must not be empty")
+        normalized_dashboard_email = normalize_email(dashboard_email) or normalized
 
         def mutate(state: LedgerState) -> LedgerAccount:
             account, account_index = self._account_for_update(
@@ -365,6 +372,7 @@ class OffchainLedgerStore:
             updated = account.model_copy(
                 update={
                     "dashboardClaimedAt": account.dashboardClaimedAt or now_iso(),
+                    "dashboardClaimedByEmail": normalized_dashboard_email,
                     "updatedAt": now_iso(),
                 }
             )

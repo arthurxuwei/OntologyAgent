@@ -241,6 +241,7 @@ class TestAuthRoutes(LedgerServiceTestCase):
         main.get_store().claim_dashboard_account(
             agent_id="agent_existing",
             email="owner@example.com",
+            dashboard_email="owner@example.com",
         )
         main.get_store().bind_account_wallet(
             agent_id="agent_unclaimed",
@@ -382,8 +383,8 @@ class TestAuthRoutes(LedgerServiceTestCase):
         self.assertIn("if (!registered || !currentUser) return <window.MvpGithubAuthScreen />", source)
         self.assertIn("if (!claimed)    return <window.MvpClaimScreen />", source)
         self.assertIn("window.ClaimForm = ClaimForm", source)
-        self.assertIn("const owner = encodeURIComponent(ownerEmail || '');", source)
-        self.assertIn("fetch(`/dashboard/claimable-agents?claimed=${claimed}&email=${owner}`)", source)
+        self.assertIn("fetch(`/dashboard/claimable-agents?claimed=${claimed}`)", source)
+        self.assertNotIn("claimable-agents?claimed=${claimed}&email=${owner}", source)
         self.assertIn("if (response.status === 403) throw new Error('owner_mismatch');", source)
         self.assertIn("setErrorKey(error.message === 'owner_mismatch'", source)
         self.assertNotIn("function ResetLink()", source)
