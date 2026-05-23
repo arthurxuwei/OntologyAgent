@@ -9,63 +9,6 @@
 // MVP dashboard state is fully isolated from the main project's dashboard).
 
 (function () {
-  function DeepLinkClaimRunner() {
-    const {
-      authChecked, claimToken, deepLinkAgentId, currentUser,
-      agents: claimedAgents, claimAgent,
-    } = window.useAppState();
-    const consumedRef = React.useRef(false);
-    const [candidates, setCandidates] = React.useState([]);
-    const [status, setStatus] = React.useState('idle');
-
-    React.useEffect(() => {
-      if (!authChecked || consumedRef.current || !claimToken || !deepLinkAgentId || !currentUser) {
-        setCandidates([]);
-        setStatus('idle');
-        return;
-      }
-      let cancelled = false;
-      const claimed = encodeURIComponent(claimedAgents.join(','));
-      setStatus('loading');
-      fetch(`/dashboard/claimable-agents?claimed=${claimed}`)
-        .then((response) => {
-          if (!response.ok) throw new Error(`claimable agents ${response.status}`);
-          return response.json();
-        })
-        .then((payload) => {
-          if (cancelled) return;
-          const next = Array.isArray(payload.agents) ? payload.agents : [];
-          setCandidates(next);
-          setStatus(next.length ? 'ready' : 'empty');
-        })
-        .catch(() => {
-          if (cancelled) return;
-          setCandidates([]);
-          setStatus('error');
-        });
-      return () => { cancelled = true; };
-    }, [authChecked, claimToken, deepLinkAgentId, currentUser, claimedAgents]);
-
-    React.useEffect(() => {
-      if (!authChecked || consumedRef.current || !claimToken || !deepLinkAgentId || status !== 'ready') return;
-      const lowered = claimToken.trim().toLowerCase();
-      const normalizedDeepLinkAgentId = deepLinkAgentId.trim();
-      const candidate = candidates.find((candidate) => (
-        String(candidate.agentId || '').trim() === normalizedDeepLinkAgentId &&
-        String(candidate.claimCode || '').trim().toLowerCase() === lowered
-      ));
-      if (!candidate) return;
-      consumedRef.current = true;
-      claimAgent(candidate.agentId);
-      const cleanUrl = new URL(window.location.href);
-      cleanUrl.searchParams.delete('claimCode');
-      cleanUrl.searchParams.delete('agentId');
-      window.history.replaceState({}, '', cleanUrl.toString());
-    }, [authChecked, claimToken, deepLinkAgentId, status, candidates, claimAgent]);
-
-    return null;
-  }
-
   function DashboardRouter() {
     const { authChecked, registered, claimed } = window.useAppState();
     if (!authChecked) return <AuthCheckingScreen />;
@@ -94,7 +37,7 @@
   }
 
   function DashboardSurface() {
-    const { currentUser, ownerEmail, mockState, agents: claimedAgents, activeAgentId, setActiveAgent } =
+    const { currentUser, ownerEmail, mockState, agents: claimedAgents, activeAgentId, setActiveAgent, claimToken, deepLinkAgentId } =
       window.useAppState();
     // ?tab=<id> lets dev/test land on a specific tab. Default portfolio.
     // ?onramp=1 opens the Coinbase onramp modal on mount (screenshot helper).
@@ -122,7 +65,7 @@
       }
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
-    const [addAgentOpen, setAddAgentOpen] = React.useState(false);
+    const [addAgentOpen, setAddAgentOpen] = React.useState(() => !!(claimToken && deepLinkAgentId));
     const [ledgerDashboardState, setLedgerDashboardState] = React.useState(null);
 
     React.useEffect(() => {
@@ -247,7 +190,6 @@
             >
               <window.LangSwitcher />
             </div>
-            <DeepLinkClaimRunner />
             <DashboardRouter />
           </div>
         </window.AppStateProvider>

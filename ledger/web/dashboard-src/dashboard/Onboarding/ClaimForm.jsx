@@ -9,7 +9,7 @@
     const [candidates, setCandidates] = React.useState([]);
     const [status, setStatus] = React.useState('loading');
     const [code, setCode] = React.useState(() =>
-      (mode === 'initial' && claimToken) ? claimToken : ''
+      ((mode === 'initial' || mode === 'add') && claimToken) ? claimToken : ''
     );
     const [step, setStep] = React.useState('input');
     const [matched, setMatched] = React.useState(null);
@@ -78,6 +78,10 @@
     const handleClaim = (candidate) => {
       if (!candidate) return;
       claimAgent(candidate.agentId);
+      const cleanUrl = new URL(window.location.href);
+      cleanUrl.searchParams.delete('claimCode');
+      cleanUrl.searchParams.delete('agentId');
+      window.history.replaceState({}, '', cleanUrl.toString());
       if (onClaimed) onClaimed(candidate.agentId);
     };
 

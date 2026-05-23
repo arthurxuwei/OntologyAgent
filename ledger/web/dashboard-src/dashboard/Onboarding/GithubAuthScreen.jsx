@@ -9,6 +9,8 @@
     const t = window.useT();
     const params = React.useMemo(() => new URLSearchParams(window.location.search), []);
     const authError = params.get('auth_error');
+    const returnTo = window.location.pathname + window.location.search;
+    const githubLoginHref = `/auth/github/login?returnTo=${encodeURIComponent(returnTo)}`;
 
     return (
       <div
@@ -54,7 +56,7 @@
           </div>
 
           <a
-            href="/auth/github/login"
+            href={githubLoginHref}
             className="font-body"
             style={{
               marginTop: '32px',

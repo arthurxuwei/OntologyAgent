@@ -308,10 +308,6 @@
           if (payload && payload.authenticated && payload.user) {
             signIn(payload.user);
           } else {
-            if (claimToken && deepLinkAgentId) {
-              window.location.href = `/auth/github/login?returnTo=${encodeURIComponent(window.location.pathname + window.location.search)}`;
-              return;
-            }
             signOut();
           }
         })
