@@ -10,9 +10,9 @@
 
 (function () {
   function DashboardRouter() {
-    const { authChecked, registered, claimed } = window.useAppState();
+    const { authChecked, registered, claimed, currentUser } = window.useAppState();
     if (!authChecked) return <AuthCheckingScreen />;
-    if (!registered) return <window.MvpGithubAuthScreen />;
+    if (!registered || !currentUser) return <window.MvpGithubAuthScreen />;
     if (!claimed)    return <window.MvpClaimScreen />;
     return <DashboardSurface />;
   }

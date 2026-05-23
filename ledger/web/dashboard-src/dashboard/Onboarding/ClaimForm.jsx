@@ -77,12 +77,34 @@
 
     const handleClaim = (candidate) => {
       if (!candidate) return;
-      claimAgent(candidate.agentId);
-      const cleanUrl = new URL(window.location.href);
-      cleanUrl.searchParams.delete('claimCode');
-      cleanUrl.searchParams.delete('agentId');
-      window.history.replaceState({}, '', cleanUrl.toString());
-      if (onClaimed) onClaimed(candidate.agentId);
+      fetch('/dashboard/claims', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          agentId: candidate.agentId,
+          claimCode: trimmedCode,
+          email: ownerEmail,
+        }),
+      })
+        .then((response) => {
+          if (!response.ok) throw new Error(`dashboard claim ${response.status}`);
+          return response.json();
+        })
+        .then(() => {
+          claimAgent(candidate.agentId);
+          const cleanUrl = new URL(window.location.href);
+          cleanUrl.searchParams.delete('claimCode');
+          cleanUrl.searchParams.delete('claimcode');
+          cleanUrl.searchParams.delete('claim_code');
+          cleanUrl.searchParams.delete('code');
+          cleanUrl.searchParams.delete('agentId');
+          window.history.replaceState({}, '', cleanUrl.toString());
+          if (onClaimed) onClaimed(candidate.agentId);
+        })
+        .catch(() => {
+          setErrorKey('mvp.dash.claim.error_load_failed');
+          setStep('input');
+        });
     };
 
     const handleUseDifferent = () => {

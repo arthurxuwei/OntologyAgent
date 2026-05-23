@@ -238,6 +238,17 @@ class TestAuthRoutes(LedgerServiceTestCase):
             wallet_address="0x1111111111111111111111111111111111111111",
             circle_wallet_id="circle-existing",
         )
+        main.get_store().claim_dashboard_account(
+            agent_id="agent_existing",
+            email="owner@example.com",
+        )
+        main.get_store().bind_account_wallet(
+            agent_id="agent_unclaimed",
+            agent_name="Unclaimed Agent",
+            email="owner@example.com",
+            wallet_address="0x2222222222222222222222222222222222222222",
+            circle_wallet_id="circle-unclaimed",
+        )
         with patch.dict(os.environ, {"AUTH_SESSION_SECRET": "session-secret"}):
             session = main.sign_auth_session(
                 {
@@ -260,6 +271,15 @@ class TestAuthRoutes(LedgerServiceTestCase):
         self.assertEqual(payload["user"]["login"], "octo")
         self.assertEqual(payload["user"]["email"], "owner@example.com")
         self.assertEqual(payload["claimedAgentIds"], ["agent_existing"])
+
+    def test_auth_logout_clears_session_cookie(self) -> None:
+        response = self.client.post("/auth/logout")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"ok": True})
+        set_cookie = response.headers["set-cookie"]
+        self.assertIn("chief_ledger_session=", set_cookie)
+        self.assertIn("Max-Age=0", set_cookie)
 
     def test_coinbase_auth_supports_cdp_key_id_and_base64_private_key(self) -> None:
         private_key = ed25519.Ed25519PrivateKey.generate()
@@ -346,7 +366,10 @@ class TestAuthRoutes(LedgerServiceTestCase):
         self.assertIn("fetch('/auth/session'", source)
         self.assertIn("claimedAgentIds: payload.claimedAgentIds || []", source)
         self.assertIn("const nextAgents = Array.isArray(opts.claimedAgentIds) ? opts.claimedAgentIds.filter(Boolean) : null;", source)
-        self.assertIn("if (!registered) return <window.MvpGithubAuthScreen />", source)
+        self.assertIn("fetch('/auth/logout', { method: 'POST', credentials: 'same-origin' })", source)
+        self.assertIn("signOut({ remote: false });", source)
+        self.assertIn("const { authChecked, registered, claimed, currentUser } = window.useAppState();", source)
+        self.assertIn("if (!registered || !currentUser) return <window.MvpGithubAuthScreen />", source)
         self.assertIn("if (!claimed)    return <window.MvpClaimScreen />", source)
         self.assertIn("window.ClaimForm = ClaimForm", source)
         self.assertIn("fetch(`/dashboard/claimable-agents?claimed=${claimed}`)", source)
@@ -357,6 +380,7 @@ class TestAuthRoutes(LedgerServiceTestCase):
         self.assertIn("t('mvp.dash.claim.code_label')", source)
         self.assertIn("const canValidate = trimmedCode.length > 0", source)
         self.assertIn("candidate.claimCode", source)
+        self.assertIn("fetch('/dashboard/claims'", source)
         self.assertIn("{t('mvp.dash.claim.validate_button')} →", source)
         self.assertIn("pending_settle", source)
         self.assertIn("pending_inbound_chain", source)

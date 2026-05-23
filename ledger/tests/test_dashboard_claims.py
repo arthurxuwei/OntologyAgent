@@ -37,7 +37,8 @@ class TestDashboardClaims(LedgerServiceTestCase):
 
         self.assertEqual(response.status_code, 200)
         source = self.dashboard_source(response.text)
-        self.assertIn("params.get('claimCode')", source)
+        self.assertIn("function readClaimToken(params)", source)
+        self.assertIn("params.get('claimCode') || params.get('claimcode') || params.get('claim_code') || params.get('code') || ''", source)
         self.assertIn("params.get('agentId')", source)
         self.assertIn("githubLoginHref", source)
         self.assertIn("returnTo=${encodeURIComponent(returnTo)}", source)
@@ -873,6 +874,39 @@ class TestDashboardClaims(LedgerServiceTestCase):
         ).json()
         self.assertEqual(len(claimable["agents"]), 1)
         self.assertEqual(claimable["agents"][0]["agentId"], "312586087945994240")
+
+    def test_dashboard_claim_endpoint_marks_manual_claims_for_session(self) -> None:
+        store = main.get_store()
+        account = store.bind_account_wallet(
+            agent_id="agent_manual",
+            agent_name="Manual Agent",
+            email="owner@example.com",
+            wallet_address="0x1111111111111111111111111111111111111111",
+            circle_wallet_id="circle-manual",
+            account_type="EOA",
+        )
+        claim_code = main.claim_code_for_account(account.model_dump(), "owner@example.com")
+
+        response = self.client.post(
+            "/dashboard/claims",
+            json={
+                "agentId": "agent_manual",
+                "claimCode": claim_code,
+                "email": "OWNER@example.com",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["agentId"], "agent_manual")
+        self.assertTrue(payload["claimed"])
+        claimed = main.get_store().load().accounts[0]
+        self.assertIsNotNone(claimed.dashboardClaimedAt)
+
+        claimable = self.client.get(
+            "/dashboard/claimable-agents?email=owner@example.com"
+        ).json()
+        self.assertEqual(claimable["agents"], [])
 
     def test_claim_link_endpoint_rejects_non_eoa_wallets(self) -> None:
         class FakeWalletClient:

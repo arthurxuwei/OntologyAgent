@@ -76,6 +76,10 @@
     return agents[0] || null;
   }
 
+  function readClaimToken(params) {
+    return params.get('claimCode') || params.get('claimcode') || params.get('claim_code') || params.get('code') || '';
+  }
+
   // Normalize an entry — fills in defaults for fields added after the schema
   // shipped (e.g. `chain`). Older saved wallets are upgraded transparently.
   function normalizeWallet(w) {
@@ -118,7 +122,7 @@
 
   function MvpAppStateProvider({ children }) {
     const params = React.useMemo(() => new URLSearchParams(window.location.search), []);
-    const claimToken = params.get('claimCode') || '';
+    const claimToken = readClaimToken(params);
     const deepLinkAgentId = params.get('agentId') || '';
     const internalMode = params.get('internal') === '1';
     const isReset = params.get('reset') === '1';
@@ -289,7 +293,7 @@
       setRegisteredState(true);
     }, [writeActiveAgent]);
 
-    const signOut = React.useCallback(() => {
+    const clearLocalAuthState = React.useCallback(() => {
       window.localStorage.removeItem(STORAGE_KEYS.user);
       window.localStorage.removeItem(STORAGE_KEYS.agents);
       window.localStorage.removeItem(STORAGE_KEYS.activeAgent);
@@ -299,6 +303,13 @@
       writeBool(STORAGE_KEYS.registered, false);
       setRegisteredState(false);
     }, []);
+
+    const signOut = React.useCallback((opts = {}) => {
+      clearLocalAuthState();
+      if (opts.remote === false) return;
+      fetch('/auth/logout', { method: 'POST', credentials: 'same-origin' })
+        .catch(() => {});
+    }, [clearLocalAuthState]);
 
     React.useEffect(() => {
       if (params.get('seed')) {
@@ -316,11 +327,11 @@
           if (payload && payload.authenticated && payload.user) {
             signIn(payload.user, { claimedAgentIds: payload.claimedAgentIds || [] });
           } else {
-            signOut();
+            signOut({ remote: false });
           }
         })
         .catch(() => {
-          if (!cancelled) signOut();
+          if (!cancelled) signOut({ remote: false });
         })
         .finally(() => {
           if (!cancelled) setAuthChecked(true);

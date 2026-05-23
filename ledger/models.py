@@ -18,6 +18,7 @@ class LedgerAccount(BaseModel):
     walletAddress: Optional[str] = None
     circleWalletId: Optional[str] = None
     accountType: Optional[str] = None
+    dashboardClaimedAt: Optional[str] = None
     asset: str = DEFAULT_ASSET
     availableAtomic: str = "0"
     lockedAtomic: str = "0"
@@ -241,6 +242,14 @@ class ClaimLinkResponse(BaseModel):
     walletAddress: Optional[str] = None
     circleWalletId: Optional[str] = None
     accountType: Optional[str] = None
+
+
+class DashboardClaimRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    agentId: str = Field(min_length=1)
+    claimCode: str = Field(min_length=1)
+    email: str = Field(min_length=1)
 
 
 class GatewayDepositRequest(BaseModel):
