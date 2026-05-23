@@ -265,7 +265,7 @@
     // (provider + identity fields). Persists to localStorage and flips
     // `registered` true. Replaces the older `setRegistered(true, {email})`
     // pattern; that shim still exists below for any leftover callers.
-    const signIn = React.useCallback((user) => {
+    const signIn = React.useCallback((user, opts = {}) => {
       if (!user || !user.provider) return;
       const previousEmail = readInitialUser()?.email || '';
       const nextEmail = user.email || '';
@@ -277,9 +277,17 @@
       }
       window.localStorage.setItem(STORAGE_KEYS.user, JSON.stringify(user));
       setCurrentUserState(user);
+      const nextAgents = Array.isArray(opts.claimedAgentIds) ? opts.claimedAgentIds.filter(Boolean) : null;
+      if (nextAgents && nextAgents.length > 0) {
+        window.localStorage.setItem(STORAGE_KEYS.agents, JSON.stringify(nextAgents));
+        setAgentsState(nextAgents);
+        if (!window.localStorage.getItem(STORAGE_KEYS.activeAgent)) {
+          writeActiveAgent(nextAgents[0]);
+        }
+      }
       writeBool(STORAGE_KEYS.registered, true);
       setRegisteredState(true);
-    }, []);
+    }, [writeActiveAgent]);
 
     const signOut = React.useCallback(() => {
       window.localStorage.removeItem(STORAGE_KEYS.user);
@@ -306,7 +314,7 @@
         .then((payload) => {
           if (cancelled) return;
           if (payload && payload.authenticated && payload.user) {
-            signIn(payload.user);
+            signIn(payload.user, { claimedAgentIds: payload.claimedAgentIds || [] });
           } else {
             signOut();
           }

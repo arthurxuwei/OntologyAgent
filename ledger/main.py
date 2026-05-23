@@ -206,7 +206,21 @@ async def auth_session(
     session_cookie: str | None = Cookie(default=None, alias=SESSION_COOKIE),
 ) -> dict[str, Any]:
     user = verify_auth_session(session_cookie)
-    return {"authenticated": user is not None, "user": user}
+    if user is None:
+        return {"authenticated": False, "user": None}
+    owner_email = normalize_email(user.get("email"))
+    claimed_agent_ids = []
+    if owner_email:
+        claimed_agent_ids = [
+            account.agentId
+            for account in get_store().load().accounts
+            if normalize_email(account.email) == owner_email
+        ]
+    return {
+        "authenticated": True,
+        "user": user,
+        "claimedAgentIds": claimed_agent_ids,
+    }
 
 
 @app.get("/auth/github/login")

@@ -231,6 +231,13 @@ class TestAuthRoutes(LedgerServiceTestCase):
         self.assertIn("GITHUB_CLIENT_ID", response.json()["detail"])
 
     def test_auth_session_returns_signed_github_user(self) -> None:
+        main.get_store().bind_account_wallet(
+            agent_id="agent_existing",
+            agent_name="Existing Agent",
+            email="owner@example.com",
+            wallet_address="0x1111111111111111111111111111111111111111",
+            circle_wallet_id="circle-existing",
+        )
         with patch.dict(os.environ, {"AUTH_SESSION_SECRET": "session-secret"}):
             session = main.sign_auth_session(
                 {
@@ -252,6 +259,7 @@ class TestAuthRoutes(LedgerServiceTestCase):
         self.assertEqual(payload["user"]["provider"], "github")
         self.assertEqual(payload["user"]["login"], "octo")
         self.assertEqual(payload["user"]["email"], "owner@example.com")
+        self.assertEqual(payload["claimedAgentIds"], ["agent_existing"])
 
     def test_coinbase_auth_supports_cdp_key_id_and_base64_private_key(self) -> None:
         private_key = ed25519.Ed25519PrivateKey.generate()
@@ -336,6 +344,8 @@ class TestAuthRoutes(LedgerServiceTestCase):
         self.assertIn("githubLoginHref", source)
         self.assertIn('href={githubLoginHref}', source)
         self.assertIn("fetch('/auth/session'", source)
+        self.assertIn("claimedAgentIds: payload.claimedAgentIds || []", source)
+        self.assertIn("const nextAgents = Array.isArray(opts.claimedAgentIds) ? opts.claimedAgentIds.filter(Boolean) : null;", source)
         self.assertIn("if (!registered) return <window.MvpGithubAuthScreen />", source)
         self.assertIn("if (!claimed)    return <window.MvpClaimScreen />", source)
         self.assertIn("window.ClaimForm = ClaimForm", source)
