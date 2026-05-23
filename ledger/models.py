@@ -19,6 +19,7 @@ class LedgerAccount(BaseModel):
     circleWalletId: Optional[str] = None
     accountType: Optional[str] = None
     dashboardClaimedAt: Optional[str] = None
+    dashboardClaimedByEmail: Optional[str] = None
     asset: str = DEFAULT_ASSET
     availableAtomic: str = "0"
     lockedAtomic: str = "0"

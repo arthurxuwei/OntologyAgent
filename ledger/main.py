@@ -214,8 +214,8 @@ async def auth_session(
         claimed_agent_ids = [
             account.agentId
             for account in get_store().load().accounts
-            if normalize_email(account.email) == owner_email
-            and account.dashboardClaimedAt
+            if account.dashboardClaimedAt
+            and normalize_email(account.dashboardClaimedByEmail or account.email) == owner_email
         ]
     return {
         "authenticated": True,
@@ -401,20 +401,23 @@ async def dashboard_claim(request: DashboardClaimRequest) -> dict[str, Any]:
     )
     if account is None:
         raise HTTPException(status_code=404, detail="agent account not found")
-    if normalize_email(account.get("email")) != owner_email:
-        raise HTTPException(status_code=403, detail="agent is not assigned to this email")
-    expected_code = claim_code_for_account(account, owner_email)
+    account_email = normalize_email(account.get("email"))
+    if account_email is None:
+        raise HTTPException(status_code=400, detail="agent account email is required")
+    expected_code = claim_code_for_account(account, account_email)
     if not secrets.compare_digest(expected_code, request.claimCode.strip()):
         raise HTTPException(status_code=400, detail="invalid claim code")
     claimed = get_store().claim_dashboard_account(
         agent_id=request.agentId,
-        email=owner_email,
+        email=account_email,
+        dashboard_email=owner_email,
     )
     return {
         "agentId": claimed.agentId,
         "ownerEmail": owner_email,
         "claimed": True,
         "dashboardClaimedAt": claimed.dashboardClaimedAt,
+        "dashboardClaimedByEmail": claimed.dashboardClaimedByEmail,
     }
 
 

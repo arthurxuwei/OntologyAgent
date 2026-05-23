@@ -45,7 +45,7 @@ class TestDashboardClaims(LedgerServiceTestCase):
         self.assertNotIn("window.location.href = `/auth/github/login?returnTo=", source)
         self.assertNotIn("function DeepLinkClaimRunner()", source)
         self.assertNotIn("<DeepLinkClaimRunner />", source)
-        self.assertIn("fetch(`/dashboard/claimable-agents?claimed=${claimed}&email=${owner}`)", source)
+        self.assertIn("fetch(`/dashboard/claimable-agents?claimed=${claimed}`)", source)
         self.assertIn(
             "const shouldOpenDeepLinkClaim = !!(claimToken && deepLinkAgentId && !claimedAgents.includes(deepLinkAgentId));",
             source,
@@ -892,7 +892,7 @@ class TestDashboardClaims(LedgerServiceTestCase):
             json={
                 "agentId": "agent_manual",
                 "claimCode": claim_code,
-                "email": "OWNER@example.com",
+                "email": "DASHBOARD-USER@example.com",
             },
         )
 
@@ -902,6 +902,7 @@ class TestDashboardClaims(LedgerServiceTestCase):
         self.assertTrue(payload["claimed"])
         claimed = main.get_store().load().accounts[0]
         self.assertIsNotNone(claimed.dashboardClaimedAt)
+        self.assertEqual(claimed.dashboardClaimedByEmail, "dashboard-user@example.com")
 
         claimable = self.client.get(
             "/dashboard/claimable-agents?email=owner@example.com"

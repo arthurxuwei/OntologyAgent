@@ -18,9 +18,8 @@
     React.useEffect(() => {
       let cancelled = false;
       const claimed = encodeURIComponent(claimedAgents.join(','));
-      const owner = encodeURIComponent(ownerEmail || '');
       setStatus('loading');
-      fetch(`/dashboard/claimable-agents?claimed=${claimed}&email=${owner}`)
+      fetch(`/dashboard/claimable-agents?claimed=${claimed}`)
         .then((response) => {
           if (!response.ok) throw new Error(`claimable agents ${response.status}`);
           return response.json();
@@ -37,7 +36,7 @@
           setStatus('error');
         });
       return () => { cancelled = true; };
-    }, [claimedAgents, ownerEmail]);
+    }, [claimedAgents]);
 
     const trimmedCode = code.trim();
     const canValidate = trimmedCode.length > 0;
