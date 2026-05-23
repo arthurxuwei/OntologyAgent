@@ -95,6 +95,36 @@ class TestWalletsOnrampState(LedgerServiceTestCase):
         self.assertEqual(state["accounts"][0]["accountType"], "EOA")
         self.assertEqual(state["entries"], [])
 
+    def test_wallet_get_or_create_rejects_missing_email_without_creating_account(self) -> None:
+        class FakeWalletClient:
+            called = False
+
+            async def get_or_create(self, request):
+                self.called = True
+                return {
+                    "circleWalletId": "circle-wallet-1",
+                    "walletAddress": "0x1111111111111111111111111111111111111111",
+                    "accountType": "EOA",
+                    "mode": "circle",
+                }
+
+        fake_client = FakeWalletClient()
+        with patch.object(services, "get_ledger_wallet_client", return_value=fake_client):
+            response = self.client.post(
+                "/ledger/wallets/get-or-create",
+                json={
+                    "agentName": "X",
+                    "agentId": "x",
+                    "email": "   ",
+                },
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["detail"], "email is required")
+        self.assertFalse(fake_client.called)
+        state = self.client.get("/admin/ledger/state").json()
+        self.assertEqual(state["accounts"], [])
+
     def test_gateway_deposit_proxies_to_wallet_rest_client(self) -> None:
         class FakeWalletClient:
             async def gateway_deposit(self, request):
@@ -449,6 +479,7 @@ class TestWalletsOnrampState(LedgerServiceTestCase):
                 json={
                     "agentName": "Research Agent",
                     "agentId": "agent_research",
+                    "email": "agent@example.com",
                 },
             )
 
@@ -483,6 +514,7 @@ class TestWalletsOnrampState(LedgerServiceTestCase):
                 json={
                     "agentName": "Research Agent",
                     "agentId": "agent_research",
+                    "email": "agent@example.com",
                 },
             )
 
@@ -517,6 +549,7 @@ class TestWalletsOnrampState(LedgerServiceTestCase):
                 json={
                     "agentName": "Research Agent",
                     "agentId": "agent_research",
+                    "email": "agent@example.com",
                     "circleWalletId": "circle-wallet-1",
                 },
             )
