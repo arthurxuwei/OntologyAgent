@@ -11,6 +11,18 @@ test("loadConfig defaults to Base Sepolia and x402 v2 settings", () => {
   assert.equal(config.x402.network, "eip155:84532");
   assert.equal(config.x402.facilitatorUrl, "https://x402.org/facilitator");
   assert.equal(config.x402.usdcAssetAddress, "0x036CbD53842c5426634e7929541eC2318f3dCF7e");
+  assert.equal(config.circle.blockchain, "BASE-SEPOLIA");
+});
+
+test("loadConfig supports Base mainnet profile defaults", () => {
+  const config = loadConfig({ CHAIN_PROFILE: "base-mainnet" });
+
+  assert.equal(config.network.expectedChainId, 8453);
+  assert.equal(config.network.rpcUrl, "https://mainnet.base.org");
+  assert.equal(config.x402.network, "eip155:8453");
+  assert.equal(config.x402.facilitatorUrl, "https://gateway-api.circle.com");
+  assert.equal(config.x402.usdcAssetAddress, "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913");
+  assert.equal(config.circle.blockchain, "BASE");
 });
 
 test("loadConfig normalizes private keys with missing 0x prefix", () => {

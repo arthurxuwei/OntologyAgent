@@ -143,10 +143,12 @@ export type AgentWalletInitCommand = {
   email?: string;
 };
 
+export type CircleBlockchain = "BASE-SEPOLIA" | "BASE";
+
 export type AgentWalletInitResult = {
   circleWalletId: string;
   circleWalletSetId: string | null;
-  blockchain: "BASE-SEPOLIA";
+  blockchain: CircleBlockchain;
   walletAddress: string;
   mode: "mock" | "circle";
   accountType?: "SCA" | "EOA";
@@ -168,7 +170,7 @@ export type AgentWalletBinding = {
   walletAddress: string;
   circleWalletId: string | null;
   circleWalletSetId: string | null;
-  blockchain: "BASE-SEPOLIA";
+  blockchain: CircleBlockchain;
   mode: "mock" | "circle";
   accountType?: "SCA" | "EOA";
   gatewayDelegateWalletId?: string | null;
@@ -179,7 +181,7 @@ export type AgentWalletBinding = {
 export type AgentWalletStatusResult = {
   circleWalletId: string | null;
   circleWalletSetId: string | null;
-  blockchain: "BASE-SEPOLIA";
+  blockchain: CircleBlockchain;
   walletAddress: string;
   status: "created" | "available" | "unknown";
   balances: Record<string, string>;
@@ -261,7 +263,7 @@ export type AgentWalletGatewayDepositResult = {
   amountAtomic: string;
   tokenAddress: string;
   gatewayWallet: string;
-  blockchain: "BASE-SEPOLIA";
+  blockchain: CircleBlockchain;
   approvalTransactionId: string | null;
   approvalState: string | null;
   depositTransactionId: string | null;
@@ -298,7 +300,7 @@ export type AgentWalletGatewayWithdrawResult = {
   tokenAddress: string;
   gatewayWallet: string;
   gatewayMinter: string;
-  blockchain: "BASE-SEPOLIA";
+  blockchain: CircleBlockchain;
   gatewayTransferId: string | null;
   mintTransactionId: string | null;
   mintTransactionHash: string | null;
@@ -327,7 +329,7 @@ export type AgentWalletTransferResult = {
   amountAtomic: string | null;
   tokenId: string | null;
   tokenAddress: string;
-  blockchain: "BASE-SEPOLIA";
+  blockchain: CircleBlockchain;
   transactionId: string | null;
   transactionHash: string | null;
   state: string | null;
@@ -356,7 +358,7 @@ export type AgentWalletFaucetCommand = {
 
 export type AgentWalletFaucetResult = {
   address: string;
-  blockchain: "BASE-SEPOLIA";
+  blockchain: CircleBlockchain;
   native: boolean;
   usdc: boolean;
   status: "requested";

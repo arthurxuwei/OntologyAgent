@@ -99,6 +99,14 @@ class LedgerServiceTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "ok")
 
+    def test_configured_usdc_asset_address_follows_base_mainnet_profile(self) -> None:
+        with patch.dict(os.environ, {"CHAIN_PROFILE": "base-mainnet"}, clear=False):
+            os.environ.pop("X402_USDC_ASSET_ADDRESS", None)
+            self.assertEqual(
+                main.configured_usdc_asset_address(),
+                "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+            )
+
     def test_ledger_state_loads_legacy_record_result_fields(self) -> None:
         now = main.now_iso()
         legacy_transport_url_key = "chain" + "M" + "cpUrl"

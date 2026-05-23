@@ -2115,6 +2115,80 @@ test("CircleWalletService returns Gateway balance and pending deposits", async (
   assert.equal(result.formattedPendingBatch, "0.1");
 });
 
+test("CircleWalletService uses Base mainnet Circle blockchain and Gateway API", async () => {
+  const createBodies: unknown[] = [];
+  const listUrls: string[] = [];
+  const gatewayUrls: string[] = [];
+  const service = new CircleWalletService(
+    liveCircleConfig({
+      CHAIN_PROFILE: "base-mainnet",
+      CIRCLE_WALLET_SET_ID: "circle-wallet-set",
+    }),
+    {
+      createEntitySecretCiphertext: async () => "entity-secret-ciphertext",
+      fetchImpl: async (input, init) => {
+        const url = String(input);
+        if (url === "https://circle.test/v1/w3s/developer/wallets") {
+          createBodies.push(JSON.parse(String(init?.body)));
+          return new Response(
+            JSON.stringify({
+              data: {
+                wallets: [
+                  {
+                    id: "wallet-mainnet",
+                    walletSetId: "circle-wallet-set",
+                    address: "0x3333333333333333333333333333333333333333",
+                    blockchain: "BASE",
+                    accountType: "EOA",
+                  },
+                ],
+              },
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        if (url.startsWith("https://circle.test/v1/w3s/wallets?")) {
+          listUrls.push(url);
+          return new Response(
+            JSON.stringify({
+              data: {
+                wallets: [
+                  {
+                    id: "wallet-mainnet",
+                    walletSetId: "circle-wallet-set",
+                    address: "0x3333333333333333333333333333333333333333",
+                    blockchain: "BASE",
+                    accountType: "EOA",
+                  },
+                ],
+              },
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        if (url === "https://gateway-api.circle.com/v1/balances") {
+          gatewayUrls.push(url);
+          return new Response(JSON.stringify({ balances: [{ balance: "0" }] }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        throw new Error(`unexpected URL ${url}`);
+      },
+    },
+  );
+
+  const created = await service.createWallet("Mainnet Agent");
+  const wallets = await service.listWallets();
+  await service.getGatewayBalance("0x3333333333333333333333333333333333333333", 6);
+
+  assert.equal(created.blockchain, "BASE");
+  assert.deepEqual(createBodies.map((body: any) => body.blockchains), [["BASE"]]);
+  assert.equal(wallets[0].blockchain, "BASE");
+  assert.equal(listUrls[0], "https://circle.test/v1/w3s/wallets?walletSetId=circle-wallet-set&blockchain=BASE");
+  assert.deepEqual(gatewayUrls, ["https://gateway-api.circle.com/v1/balances"]);
+});
+
 test("CircleWalletService serializes bigint typed data and adds EIP712Domain for Circle signing", async () => {
   let signedPayload: unknown;
   const service = new CircleWalletService(liveCircleConfig(), {

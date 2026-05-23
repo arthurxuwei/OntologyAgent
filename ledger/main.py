@@ -43,6 +43,7 @@ DEFAULT_WALLET_HTTP_URL = "http://circle:8093"
 DEFAULT_CHAIN_RECORDER_ADDRESS = "0x000000000000000000000000000000000000dEaD"
 DEFAULT_CIRCLE_PUBLIC_KEY_BASE_URL = "https://api.circle.com/v2/notifications/publicKey"
 DEFAULT_BASE_SEPOLIA_USDC_ASSET_ADDRESS = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+DEFAULT_BASE_MAINNET_USDC_ASSET_ADDRESS = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 GATEWAY_SWEEP_MIN_WALLET_BALANCE_ATOMIC = 2_000_000
 GITHUB_AUTHORIZE_URL = "https://github.com/login/oauth/authorize"
 GITHUB_TOKEN_URL = "https://github.com/login/oauth/access_token"
@@ -2819,10 +2820,7 @@ def circle_webhook_usdc_amount_atomic(notification: dict[str, Any]) -> Optional[
         or circle_webhook_nested_text(notification, "token", "contractAddress")
         or circle_webhook_nested_text(notification, "asset", "address")
     )
-    expected_token_address = os.getenv(
-        "X402_USDC_ASSET_ADDRESS",
-        DEFAULT_BASE_SEPOLIA_USDC_ASSET_ADDRESS,
-    ).lower()
+    expected_token_address = configured_usdc_asset_address().lower()
     if token_address is not None and token_address.lower() != expected_token_address:
         return None
 
@@ -2843,6 +2841,16 @@ def circle_webhook_usdc_amount_atomic(notification: dict[str, Any]) -> Optional[
     if amount_atomic is None or parse_nonnegative_atomic(amount_atomic) <= 0:
         return None
     return amount_atomic
+
+
+def configured_usdc_asset_address() -> str:
+    configured = os.getenv("X402_USDC_ASSET_ADDRESS")
+    if configured and configured.strip():
+        return configured.strip()
+    chain_profile = os.getenv("CHAIN_PROFILE", "base-sepolia").strip().lower()
+    if chain_profile in {"base-mainnet", "base", "mainnet"}:
+        return DEFAULT_BASE_MAINNET_USDC_ASSET_ADDRESS
+    return DEFAULT_BASE_SEPOLIA_USDC_ASSET_ADDRESS
 
 
 def circle_wallet_status_usdc_amount_atomic(status: dict[str, Any]) -> Optional[str]:
