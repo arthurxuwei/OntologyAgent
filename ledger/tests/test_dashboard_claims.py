@@ -45,7 +45,11 @@ class TestDashboardClaims(LedgerServiceTestCase):
         self.assertNotIn("function DeepLinkClaimRunner()", source)
         self.assertNotIn("<DeepLinkClaimRunner />", source)
         self.assertIn("fetch(`/dashboard/claimable-agents?claimed=${claimed}`)", source)
-        self.assertIn("const [addAgentOpen, setAddAgentOpen] = React.useState(() => !!(claimToken && deepLinkAgentId));", source)
+        self.assertIn(
+            "const shouldOpenDeepLinkClaim = !!(claimToken && deepLinkAgentId && !claimedAgents.includes(deepLinkAgentId));",
+            source,
+        )
+        self.assertIn("const [addAgentOpen, setAddAgentOpen] = React.useState(() => shouldOpenDeepLinkClaim);", source)
         self.assertIn("(mode === 'initial' || mode === 'add') && claimToken", source)
         self.assertIn("<DashboardRouter />", source)
 

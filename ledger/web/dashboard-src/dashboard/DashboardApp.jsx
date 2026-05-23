@@ -65,7 +65,8 @@
       }
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
-    const [addAgentOpen, setAddAgentOpen] = React.useState(() => !!(claimToken && deepLinkAgentId));
+    const shouldOpenDeepLinkClaim = !!(claimToken && deepLinkAgentId && !claimedAgents.includes(deepLinkAgentId));
+    const [addAgentOpen, setAddAgentOpen] = React.useState(() => shouldOpenDeepLinkClaim);
     const [ledgerDashboardState, setLedgerDashboardState] = React.useState(null);
 
     React.useEffect(() => {
