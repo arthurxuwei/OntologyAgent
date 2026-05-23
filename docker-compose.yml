@@ -108,26 +108,3 @@ services:
     volumes:
       - ./chain/data:/app/data
     restart: unless-stopped
-
-  x402-seller:
-    build:
-      context: ./x402-seller
-    container_name: x402-seller
-    ports:
-      - "8001:8000"
-    environment:
-      X402_PAY_TO: ${X402_PAY_TO:-}
-      X402_PRICE: ${X402_PRICE:-0.01}
-      CHAIN_PROFILE: ${CHAIN_PROFILE:-base-sepolia}
-      X402_NETWORK: ${X402_NETWORK:-}
-      X402_FACILITATOR_URL: ${X402_FACILITATOR_URL:-}
-      X402_USDC_ASSET_ADDRESS: ${X402_USDC_ASSET_ADDRESS:-}
-      X402_TIMEOUT_SECONDS: ${X402_TIMEOUT_SECONDS:-20}
-      X402_GATEWAY_VERIFYING_CONTRACT: ${X402_GATEWAY_VERIFYING_CONTRACT:-}
-    restart: unless-stopped
-
-  x402-mock:
-    build:
-      context: ./x402-mock
-    container_name: x402-mock
-    restart: unless-stopped
