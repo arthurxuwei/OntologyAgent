@@ -21,6 +21,14 @@ from helpers import LedgerServiceTestCase
 
 
 class TestWebhooks(LedgerServiceTestCase):
+    def test_configured_usdc_asset_address_follows_base_mainnet_profile(self) -> None:
+        with patch.dict(os.environ, {"CHAIN_PROFILE": "base-mainnet"}, clear=False):
+            os.environ.pop("X402_USDC_ASSET_ADDRESS", None)
+            self.assertEqual(
+                webhooks.configured_usdc_asset_address(),
+                "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+            )
+
     def test_circle_wallet_webhook_sweeps_inbound_usdc_to_gateway_once(self) -> None:
         main.get_store().bind_account_wallet(
             agent_id="agent_research",

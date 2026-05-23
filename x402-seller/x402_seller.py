@@ -14,6 +14,9 @@ from fastapi.responses import JSONResponse
 BASE_SEPOLIA_NETWORK = "eip155:84532"
 BASE_SEPOLIA_USDC = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
 BASE_SEPOLIA_GATEWAY_WALLET_BATCHED = "0x0077777d7EBA4688BDeF3E311b846F25870A19B9"
+BASE_MAINNET_NETWORK = "eip155:8453"
+BASE_MAINNET_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+BASE_MAINNET_GATEWAY_WALLET_BATCHED = "0x77777777Dcc4d5A8B6E418Fd04D8997ef11000eE"
 USDC_DECIMALS = 6
 GATEWAY_WALLET_BATCHED_NAME = "GatewayWalletBatched"
 GATEWAY_WALLET_BATCHED_VERSION = "1"
@@ -368,4 +371,12 @@ def price_to_atomic(price: str, decimals: int) -> str:
 def default_gateway_verifying_contract(network: str) -> str | None:
     if network == BASE_SEPOLIA_NETWORK:
         return BASE_SEPOLIA_GATEWAY_WALLET_BATCHED
+    if network == BASE_MAINNET_NETWORK:
+        return BASE_MAINNET_GATEWAY_WALLET_BATCHED
     return None
+
+
+def default_usdc_asset(network: str) -> str:
+    if network == BASE_MAINNET_NETWORK:
+        return BASE_MAINNET_USDC
+    return BASE_SEPOLIA_USDC

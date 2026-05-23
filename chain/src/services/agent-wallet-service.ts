@@ -100,7 +100,7 @@ export class AgentWalletService {
 
     if (hasNonEmptyValue(command.agentId)) {
       const existingBinding = await this.stateStore.findBindingByAgentId(command.agentId);
-      if (existingBinding && isUsableBinding(existingBinding)) {
+      if (existingBinding && isUsableBinding(existingBinding) && this.isCurrentBlockchain(existingBinding)) {
         const binding = await this.stateStore.saveBinding({
           agentName,
           agentId: command.agentId,
@@ -123,7 +123,7 @@ export class AgentWalletService {
     }
 
     const localWallet = await this.stateStore.findByAgentName(agentName);
-    if (localWallet) {
+    if (localWallet && this.isCurrentBlockchain(localWallet)) {
       const binding = await this.stateStore.saveBinding({
         agentName,
         agentId: command.agentId,
@@ -220,22 +220,29 @@ export class AgentWalletService {
       circleWalletId: command.circleWalletId,
     });
     if (localWallet) {
+      if (!this.isCurrentBlockchain(localWallet)) {
+        return this.mockStatus(command);
+      }
       return this.withLiveBalances(localWallet);
     }
     const boundWallet = await this.stateStore.findBindingByWallet({
       walletAddress: command.walletAddress,
       circleWalletId: command.circleWalletId,
     });
-    if (boundWallet && isUsableBinding(boundWallet)) {
+    if (boundWallet && isUsableBinding(boundWallet) && this.isCurrentBlockchain(boundWallet)) {
       return this.withLiveBalances(statusFromBinding(boundWallet));
     }
 
+    return this.mockStatus(command);
+  }
+
+  private mockStatus(command: AgentWalletStatusCommand): AgentWalletStatusResult {
     return {
       circleWalletId: hasNonEmptyValue(command.circleWalletId)
         ? command.circleWalletId.trim()
         : null,
       circleWalletSetId: MOCK_CIRCLE_WALLET_SET_ID,
-      blockchain: "BASE-SEPOLIA",
+      blockchain: this.config.circle.blockchain,
       walletAddress: hasNonEmptyValue(command.walletAddress)
         ? normalizeRequestAddress(command.walletAddress, "walletAddress")
         : MOCK_WALLET_ADDRESS,
@@ -369,7 +376,7 @@ export class AgentWalletService {
       amountAtomic: null,
       tokenId,
       tokenAddress,
-      blockchain: "BASE-SEPOLIA",
+      blockchain: this.config.circle.blockchain,
       transactionId: transaction.id,
       transactionHash: transaction.txHash,
       state: transaction.state,
@@ -435,7 +442,7 @@ export class AgentWalletService {
       netAmount: atomicUsdcToDecimal(netAmountAtomic.toString()),
       tokenId,
       tokenAddress,
-      blockchain: "BASE-SEPOLIA",
+      blockchain: this.config.circle.blockchain,
       transactionId: transaction.id,
       transactionHash: transaction.txHash,
       state: transaction.state,
@@ -507,7 +514,7 @@ export class AgentWalletService {
       amountAtomic: amountAtomic.toString(),
       tokenAddress,
       gatewayWallet,
-      blockchain: "BASE-SEPOLIA",
+      blockchain: this.config.circle.blockchain,
       approvalTransactionId: approvalTransaction.id,
       approvalState: approvalTransaction.state,
       depositTransactionId: depositTransaction.id,
@@ -630,7 +637,7 @@ export class AgentWalletService {
       tokenAddress,
       gatewayWallet,
       gatewayMinter,
-      blockchain: "BASE-SEPOLIA",
+      blockchain: this.config.circle.blockchain,
       gatewayTransferId,
       mintTransactionId: mintTransaction?.id ?? null,
       mintTransactionHash: mintTransaction?.txHash ?? null,
@@ -765,7 +772,7 @@ export class AgentWalletService {
       amountAtomic: input.amountAtomic.toString(),
       tokenId: null,
       tokenAddress,
-      blockchain: "BASE-SEPOLIA",
+      blockchain: this.config.circle.blockchain,
       transactionId: transaction,
       transactionHash: transaction,
       state: "SETTLED",
@@ -797,6 +804,14 @@ export class AgentWalletService {
   }
 
   async requestTestnetFunds(command: AgentWalletFaucetCommand): Promise<AgentWalletFaucetResult> {
+    if (this.config.circle.blockchain !== "BASE-SEPOLIA") {
+      throw new AppError(
+        "NETWORK_MISMATCH",
+        "Circle testnet faucet is only available for BASE-SEPOLIA",
+        400,
+        { blockchain: this.config.circle.blockchain },
+      );
+    }
     const binding = await this.resolveBinding({
       agentId: command.agentId,
       agentName: command.agentName,
@@ -832,19 +847,23 @@ export class AgentWalletService {
   }) {
     if (hasNonEmptyValue(command.agentId)) {
       const binding = await this.stateStore.findBindingByAgentId(command.agentId);
-      if (binding) {
+      if (binding && this.isCurrentBlockchain(binding)) {
         return binding;
       }
     }
 
     if (hasNonEmptyValue(command.agentName)) {
       const binding = await this.stateStore.findBindingByAgentName(command.agentName);
-      if (binding) {
+      if (binding && this.isCurrentBlockchain(binding)) {
         return binding;
       }
     }
 
     return null;
+  }
+
+  private isCurrentBlockchain(record: { blockchain?: string | null }): boolean {
+    return record.blockchain === this.config.circle.blockchain;
   }
 
   private async withLiveBalances(
@@ -1019,9 +1038,12 @@ function gatewayChainConfig(network: string): {
   if (network === "eip155:84532") {
     return CHAIN_CONFIGS.baseSepolia;
   }
+  if (network === "eip155:8453") {
+    return CHAIN_CONFIGS.base;
+  }
   throw new AppError(
     "NETWORK_MISMATCH",
-    `Circle Gateway agent transfers are only configured for eip155:84532, got ${network}`,
+    `Circle Gateway agent transfers are only configured for eip155:84532 or eip155:8453, got ${network}`,
     400,
   );
 }

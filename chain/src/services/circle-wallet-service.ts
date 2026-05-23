@@ -8,12 +8,13 @@ import { formatUnits, parseUnits } from "ethers";
 
 import type { AppConfig } from "../config.js";
 import { AppError } from "../domain/errors.js";
+import type { CircleBlockchain } from "../domain/types.js";
 import { normalizeAddress } from "../security.js";
 
 export type CircleWalletCreateResult = {
   circleWalletId: string;
   circleWalletSetId: string;
-  blockchain: "BASE-SEPOLIA";
+  blockchain: CircleBlockchain;
   walletAddress: string;
   mode: "mock" | "circle";
   accountType?: "SCA" | "EOA";
@@ -176,7 +177,7 @@ export class CircleWalletService {
       return {
         circleWalletId: `mock-circle-wallet-${slug(agentName)}`,
         circleWalletSetId: "mock-circle-wallet-set",
-        blockchain: "BASE-SEPOLIA",
+        blockchain: this.config.circle.blockchain,
         walletAddress: mockAddress(agentName),
         mode: "mock",
         ...(accountType === "EOA" ? { accountType } : {}),
@@ -223,7 +224,7 @@ export class CircleWalletService {
         walletSetId,
         entitySecretCiphertext,
         accountType,
-        blockchains: ["BASE-SEPOLIA"],
+        blockchains: [this.config.circle.blockchain],
         count: 1,
         metadata: [
           {
@@ -254,7 +255,7 @@ export class CircleWalletService {
       );
     }
 
-    if (wallet.blockchain !== undefined && wallet.blockchain !== "BASE-SEPOLIA") {
+    if (wallet.blockchain !== undefined && wallet.blockchain !== this.config.circle.blockchain) {
       throw new AppError(
         "NETWORK_MISMATCH",
         `Circle returned unsupported blockchain ${String(wallet.blockchain)}`,
@@ -268,7 +269,7 @@ export class CircleWalletService {
       circleWalletId: wallet.id,
       circleWalletSetId:
         typeof wallet.walletSetId === "string" ? wallet.walletSetId : walletSetId,
-      blockchain: "BASE-SEPOLIA",
+      blockchain: this.config.circle.blockchain,
       walletAddress,
       mode: "circle",
       accountType:
@@ -311,7 +312,9 @@ export class CircleWalletService {
       );
     }
 
-    return extractWallets(payload).map((wallet) => normalizeCircleWalletRecord(wallet, payload));
+    return extractWallets(payload).map((wallet) =>
+      normalizeCircleWalletRecord(wallet, payload, this.config.circle.blockchain),
+    );
   }
 
   async getWalletBalances(circleWalletId: string): Promise<Record<string, string>> {
@@ -462,7 +465,7 @@ export class CircleWalletService {
       });
     }
 
-    const response = await this.fetchImpl(`${gatewayApiBaseUrl(this.config.x402.facilitatorUrl)}/balances`, {
+    const response = await this.fetchImpl(`${gatewayApiBaseUrl(this.config.x402.facilitatorUrl, this.config.x402.network)}/balances`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -541,7 +544,7 @@ export class CircleWalletService {
     }
 
     const facilitator = new BatchFacilitatorClient({
-      url: gatewayFacilitatorBaseUrl(this.config.x402.facilitatorUrl),
+      url: gatewayFacilitatorBaseUrl(this.config.x402.facilitatorUrl, this.config.x402.network),
     });
     const paymentPayload = withGatewayPaymentEnvelope(
       command.paymentPayload,
@@ -784,7 +787,7 @@ export class CircleWalletService {
     let gatewayStatus = 0;
     for (let attempt = 0; ; attempt += 1) {
       const gatewayResponse = await this.fetchImpl(
-        `${gatewayApiBaseUrl(this.config.x402.facilitatorUrl)}/transfer`,
+        `${gatewayApiBaseUrl(this.config.x402.facilitatorUrl, this.config.x402.network)}/transfer`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -898,10 +901,18 @@ export class CircleWalletService {
     native: boolean;
     usdc: boolean;
   }): Promise<void> {
+    if (this.config.circle.blockchain !== "BASE-SEPOLIA") {
+      throw new AppError(
+        "NETWORK_MISMATCH",
+        "Circle testnet faucet is only available for BASE-SEPOLIA",
+        400,
+        { blockchain: this.config.circle.blockchain },
+      );
+    }
     const client = this.requireClient();
     await client.requestTestnetTokens({
       address: normalizeAddress(command.walletAddress),
-      blockchain: this.config.circle.blockchain,
+      blockchain: "BASE-SEPOLIA",
       native: command.native,
       usdc: command.usdc,
     });
@@ -970,18 +981,20 @@ function circleSdkBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/v1\/w3s\/?$/, "");
 }
 
-function gatewayFacilitatorBaseUrl(configuredUrl: string): string {
-  return gatewayRootBaseUrl(configuredUrl);
+function gatewayFacilitatorBaseUrl(configuredUrl: string, network = "eip155:84532"): string {
+  return gatewayRootBaseUrl(configuredUrl, network);
 }
 
-function gatewayApiBaseUrl(configuredUrl: string): string {
-  return `${gatewayRootBaseUrl(configuredUrl)}/v1`;
+function gatewayApiBaseUrl(configuredUrl: string, network = "eip155:84532"): string {
+  return `${gatewayRootBaseUrl(configuredUrl, network)}/v1`;
 }
 
-function gatewayRootBaseUrl(configuredUrl: string): string {
+function gatewayRootBaseUrl(configuredUrl: string, network = "eip155:84532"): string {
   const trimmed = configuredUrl.trim().replace(/\/+$/, "");
   if (!trimmed || trimmed.includes("x402.org")) {
-    return "https://gateway-api-testnet.circle.com";
+    return network === "eip155:8453"
+      ? "https://gateway-api.circle.com"
+      : "https://gateway-api-testnet.circle.com";
   }
   return trimmed.replace(/\/v1(?:\/x402(?:\/[^/]+)?)?$/, "");
 }
@@ -1416,6 +1429,7 @@ function normalizeCircleAddress(address: string, payload: unknown): string {
 function normalizeCircleWalletRecord(
   wallet: CircleWalletResponseWallet,
   payload: unknown,
+  expectedBlockchain: CircleBlockchain,
 ): CircleWalletRecord {
   if (typeof wallet.id !== "string" || typeof wallet.address !== "string") {
     throw new AppError(
@@ -1426,7 +1440,7 @@ function normalizeCircleWalletRecord(
     );
   }
 
-  if (wallet.blockchain !== undefined && wallet.blockchain !== "BASE-SEPOLIA") {
+  if (wallet.blockchain !== undefined && wallet.blockchain !== expectedBlockchain) {
     throw new AppError(
       "NETWORK_MISMATCH",
       `Circle returned unsupported blockchain ${String(wallet.blockchain)}`,
@@ -1451,7 +1465,7 @@ function normalizeCircleWalletRecord(
             typeof payload.data.walletSetId === "string"
           ? payload.data.walletSetId
           : null) ?? null,
-    blockchain: "BASE-SEPOLIA",
+    blockchain: expectedBlockchain,
     walletAddress: normalizeCircleAddress(wallet.address, payload),
     mode: "circle",
     ...(wallet.accountType === "SCA" || wallet.accountType === "EOA"

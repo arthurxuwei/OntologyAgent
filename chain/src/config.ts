@@ -1,4 +1,5 @@
 import { parseEther, parseUnits } from "ethers";
+import type { CircleBlockchain } from "./domain/types.js";
 
 export type AppConfig = {
   http: {
@@ -43,7 +44,7 @@ export type AppConfig = {
     entitySecretCiphertext?: string;
     walletSetId?: string;
     baseUrl: string;
-    blockchain: "BASE-SEPOLIA";
+    blockchain: CircleBlockchain;
     usdcTokenId?: string;
   };
   agentWallet: {
@@ -51,13 +52,40 @@ export type AppConfig = {
   };
 };
 
-const DEFAULT_TESTNET_RPC_URL = "https://base-sepolia-rpc.publicnode.com";
-const DEFAULT_TESTNET_CHAIN_ID = 84532;
-const DEFAULT_X402_NETWORK = "eip155:84532";
-const DEFAULT_BASE_SEPOLIA_USDC = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
+type ChainProfile = "base-sepolia" | "base-mainnet";
+
 const DEFAULT_BASE_SEPOLIA_WETH = "0x4200000000000000000000000000000000000006";
 const DEFAULT_CIRCLE_BASE_URL = "https://api.circle.com/v1/w3s";
 const X402_USDC_DECIMALS = 6;
+
+const CHAIN_PROFILES: Record<ChainProfile, {
+  rpcUrl: string;
+  chainId: number;
+  x402Network: string;
+  x402FacilitatorUrl: string;
+  usdcAssetAddress: string;
+  wethAssetAddress: string;
+  circleBlockchain: CircleBlockchain;
+}> = {
+  "base-sepolia": {
+    rpcUrl: "https://base-sepolia-rpc.publicnode.com",
+    chainId: 84532,
+    x402Network: "eip155:84532",
+    x402FacilitatorUrl: "https://x402.org/facilitator",
+    usdcAssetAddress: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+    wethAssetAddress: DEFAULT_BASE_SEPOLIA_WETH,
+    circleBlockchain: "BASE-SEPOLIA",
+  },
+  "base-mainnet": {
+    rpcUrl: "https://mainnet.base.org",
+    chainId: 8453,
+    x402Network: "eip155:8453",
+    x402FacilitatorUrl: "https://gateway-api.circle.com",
+    usdcAssetAddress: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    wethAssetAddress: DEFAULT_BASE_SEPOLIA_WETH,
+    circleBlockchain: "BASE",
+  },
+};
 
 function parseEthEnv(
   env: NodeJS.ProcessEnv,
@@ -92,7 +120,7 @@ function parseNumberEnv(
   defaultValue: number,
 ): number {
   const rawValue = env[envName];
-  if (rawValue === undefined) {
+  if (rawValue === undefined || rawValue.trim() === "") {
     return defaultValue;
   }
 
@@ -142,6 +170,25 @@ function pickOptionalEnv(...values: Array<string | undefined>): string | undefin
   return undefined;
 }
 
+function parseChainProfile(env: NodeJS.ProcessEnv): ChainProfile {
+  const raw = (env.CHAIN_PROFILE ?? "base-sepolia").trim().toLowerCase();
+  if (raw === "base-sepolia" || raw === "testnet") {
+    return "base-sepolia";
+  }
+  if (raw === "base-mainnet" || raw === "base" || raw === "mainnet") {
+    return "base-mainnet";
+  }
+  throw new Error("CHAIN_PROFILE must be base-sepolia or base-mainnet");
+}
+
+function parseCircleBlockchain(value: string): CircleBlockchain {
+  const normalized = value.trim().toUpperCase();
+  if (normalized === "BASE-SEPOLIA" || normalized === "BASE") {
+    return normalized;
+  }
+  throw new Error("CIRCLE_BLOCKCHAIN must be BASE-SEPOLIA or BASE");
+}
+
 function normalizePrivateKey(value?: string): string | undefined {
   if (value === undefined) {
     return undefined;
@@ -164,14 +211,15 @@ export const HARDCODED_SINGLE_TX_CAP_WEI = parseEther("1.0");
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const chainMockEnv = env.CHAIN_MOCK ?? env.EXECUTOR_MOCK_CHAIN;
+  const profile = CHAIN_PROFILES[parseChainProfile(env)];
 
   return {
     http: {
       port: parseNumberEnv(env, "CHAIN_HTTP_PORT", 8091),
     },
     network: {
-      rpcUrl: env.RPC_URL ?? DEFAULT_TESTNET_RPC_URL,
-      expectedChainId: parseNumberEnv(env, "CHAIN_ID", DEFAULT_TESTNET_CHAIN_ID),
+      rpcUrl: pickOptionalEnv(env.RPC_URL) ?? profile.rpcUrl,
+      expectedChainId: parseNumberEnv(env, "CHAIN_ID", profile.chainId),
       mockChain: parseBooleanEnv({ ...env, CHAIN_MOCK: chainMockEnv }, "CHAIN_MOCK", false),
       mockBalanceWei: parseEthEnv(env, "CHAIN_MOCK_BALANCE_ETH", "1.0"),
       mockUsdcBalanceAtomic: parseUnitsEnv(env, "CHAIN_MOCK_USDC_BALANCE", "0", X402_USDC_DECIMALS),
@@ -189,16 +237,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     execution: {
       bundlerRpcUrl: env.BUNDLER_RPC_URL,
       tradeIntentPair: env.TRADE_INTENT_PAIR ?? "ETH/USDC",
-      tradeIntentSellToken: env.TRADE_INTENT_SELL_TOKEN ?? DEFAULT_BASE_SEPOLIA_USDC,
-      tradeIntentBuyToken: env.TRADE_INTENT_BUY_TOKEN ?? DEFAULT_BASE_SEPOLIA_WETH,
+      tradeIntentSellToken: pickOptionalEnv(env.TRADE_INTENT_SELL_TOKEN) ?? profile.usdcAssetAddress,
+      tradeIntentBuyToken: pickOptionalEnv(env.TRADE_INTENT_BUY_TOKEN) ?? profile.wethAssetAddress,
     },
     x402: {
-      facilitatorUrl: env.X402_FACILITATOR_URL ?? "https://x402.org/facilitator",
-      network: env.X402_NETWORK ?? DEFAULT_X402_NETWORK,
+      facilitatorUrl: pickOptionalEnv(env.X402_FACILITATOR_URL) ?? profile.x402FacilitatorUrl,
+      network: pickOptionalEnv(env.X402_NETWORK) ?? profile.x402Network,
       buyerPrivateKey: normalizePrivateKey(
         pickOptionalEnv(env.X402_BUYER_PRIVATE_KEY, env.PRIVATE_KEY),
       ),
-      usdcAssetAddress: env.X402_USDC_ASSET_ADDRESS ?? DEFAULT_BASE_SEPOLIA_USDC,
+      usdcAssetAddress: pickOptionalEnv(env.X402_USDC_ASSET_ADDRESS) ?? profile.usdcAssetAddress,
       usdcDecimals: X402_USDC_DECIMALS,
       usdcSingleCapAtomic: parseUnitsEnv(env, "X402_USDC_SINGLE_CAP", "1.0", X402_USDC_DECIMALS),
       usdcDailyCapAtomic: parseUnitsEnv(env, "X402_USDC_DAILY_CAP", "2.0", X402_USDC_DECIMALS),
@@ -209,7 +257,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       entitySecretCiphertext: pickOptionalEnv(env.CIRCLE_ENTITY_SECRET_CIPHERTEXT),
       walletSetId: pickOptionalEnv(env.CIRCLE_WALLET_SET_ID),
       baseUrl: env.CIRCLE_BASE_URL ?? DEFAULT_CIRCLE_BASE_URL,
-      blockchain: "BASE-SEPOLIA",
+      blockchain: parseCircleBlockchain(
+        pickOptionalEnv(env.CIRCLE_BLOCKCHAIN) ?? profile.circleBlockchain,
+      ),
       usdcTokenId: pickOptionalEnv(env.CIRCLE_USDC_TOKEN_ID),
     },
     agentWallet: {

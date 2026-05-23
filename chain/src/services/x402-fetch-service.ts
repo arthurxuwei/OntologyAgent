@@ -1,5 +1,5 @@
 import { createPublicClient, http } from "viem";
-import { baseSepolia } from "viem/chains";
+import { base, baseSepolia } from "viem/chains";
 import { privateKeyToAccount } from "viem/accounts";
 import { x402Client, x402HTTPClient } from "@x402/core/client";
 import { ExactEvmScheme, toClientEvmSigner } from "@x402/evm";
@@ -126,8 +126,9 @@ export class X402FetchService {
     }
 
     const account = privateKeyToAccount(this.config.x402.buyerPrivateKey as `0x${string}`);
+    const chain = this.config.network.expectedChainId === 8453 ? base : baseSepolia;
     const publicClient = createPublicClient({
-      chain: baseSepolia,
+      chain,
       transport: http(this.config.network.rpcUrl),
     });
     const signer = toClientEvmSigner(account, publicClient);
@@ -137,7 +138,7 @@ export class X402FetchService {
     registerBatchScheme(client, {
       signer,
       fallbackScheme: new ExactEvmScheme(signer, {
-        84532: {
+        [this.config.network.expectedChainId]: {
           rpcUrl: this.config.network.rpcUrl,
         },
       }),

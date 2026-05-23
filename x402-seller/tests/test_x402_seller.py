@@ -25,6 +25,8 @@ class X402SellerTests(unittest.TestCase):
         os.environ["X402_GATEWAY_VERIFYING_CONTRACT"] = (
             "0x0077777d7EBA4688BDeF3E311b846F25870A19B9"
         )
+        os.environ.pop("CHAIN_PROFILE", None)
+        os.environ.pop("X402_USDC_ASSET_ADDRESS", None)
         main.get_x402_seller_service.cache_clear()
 
     def tearDown(self) -> None:
@@ -201,6 +203,57 @@ class X402SellerTests(unittest.TestCase):
         self.assertEqual(
             gateway_accept["extra"]["verifyingContract"],
             "0x0077777d7EBA4688BDeF3E311b846F25870A19B9",
+        )
+
+    def test_circle_nanopayment_resource_uses_base_mainnet_gateway_default_contract(self) -> None:
+        os.environ["X402_NETWORK"] = "eip155:8453"
+        os.environ.pop("X402_GATEWAY_VERIFYING_CONTRACT", None)
+        main.get_x402_seller_service.cache_clear()
+        client = TestClient(main.app)
+
+        response = client.get("/x402/agent-services/research-summary/nanopayments")
+
+        self.assertEqual(response.status_code, 402)
+        gateway_accept = next(
+            item
+            for item in response.json()["accepts"]
+            if item["extra"]["name"] == "GatewayWalletBatched"
+        )
+        self.assertEqual(gateway_accept["network"], "eip155:8453")
+        self.assertEqual(
+            gateway_accept["asset"],
+            "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        )
+        self.assertEqual(
+            gateway_accept["extra"]["verifyingContract"],
+            "0x77777777Dcc4d5A8B6E418Fd04D8997ef11000eE",
+        )
+
+    def test_circle_nanopayment_resource_follows_base_mainnet_profile_defaults(self) -> None:
+        os.environ["CHAIN_PROFILE"] = "base-mainnet"
+        os.environ["X402_NETWORK"] = ""
+        os.environ["X402_USDC_ASSET_ADDRESS"] = ""
+        os.environ["X402_FACILITATOR_URL"] = ""
+        os.environ.pop("X402_GATEWAY_VERIFYING_CONTRACT", None)
+        main.get_x402_seller_service.cache_clear()
+        client = TestClient(main.app)
+
+        response = client.get("/x402/agent-services/research-summary/nanopayments")
+
+        self.assertEqual(response.status_code, 402)
+        gateway_accept = next(
+            item
+            for item in response.json()["accepts"]
+            if item["extra"]["name"] == "GatewayWalletBatched"
+        )
+        self.assertEqual(gateway_accept["network"], "eip155:8453")
+        self.assertEqual(
+            gateway_accept["asset"],
+            "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        )
+        self.assertEqual(
+            gateway_accept["extra"]["verifyingContract"],
+            "0x77777777Dcc4d5A8B6E418Fd04D8997ef11000eE",
         )
 
     def test_circle_nanopayment_resource_uses_selected_gateway_accept_entry(self) -> None:

@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
-import type { AgentWalletBinding, AgentWalletStatusResult } from "../domain/types.js";
+import type { AgentWalletBinding, AgentWalletStatusResult, CircleBlockchain } from "../domain/types.js";
 import { normalizeAddress } from "../security.js";
 import type { CircleWalletRecord } from "./circle-wallet-service.js";
 
@@ -17,7 +17,7 @@ export type SaveAgentWalletBindingCommand = {
   email?: string;
   circleWalletId?: string | null;
   circleWalletSetId?: string | null;
-  blockchain: "BASE-SEPOLIA";
+  blockchain: CircleBlockchain;
   walletAddress: string;
   mode: "mock" | "circle";
   accountType?: "SCA" | "EOA";
@@ -323,7 +323,7 @@ function isWalletRecord(value: unknown): value is CircleWalletRecord {
     typeof value.agentName === "string" &&
     typeof value.circleWalletId === "string" &&
     (typeof value.circleWalletSetId === "string" || value.circleWalletSetId === null) &&
-    value.blockchain === "BASE-SEPOLIA" &&
+    isCircleBlockchain(value.blockchain) &&
     typeof value.walletAddress === "string" &&
     (
       value.accountType === undefined ||
@@ -345,7 +345,7 @@ function isAgentWalletBinding(value: unknown): value is AgentWalletBinding {
     typeof value.walletAddress === "string" &&
     (typeof value.circleWalletId === "string" || value.circleWalletId === null) &&
     (typeof value.circleWalletSetId === "string" || value.circleWalletSetId === null) &&
-    value.blockchain === "BASE-SEPOLIA" &&
+    isCircleBlockchain(value.blockchain) &&
     (value.mode === "circle" || value.mode === "mock") &&
     (
       value.accountType === undefined ||
@@ -364,6 +364,10 @@ function isAgentWalletBinding(value: unknown): value is AgentWalletBinding {
     ) &&
     typeof value.updatedAt === "string"
   );
+}
+
+function isCircleBlockchain(value: unknown): value is CircleBlockchain {
+  return value === "BASE-SEPOLIA" || value === "BASE";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

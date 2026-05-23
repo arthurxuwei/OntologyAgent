@@ -24,11 +24,6 @@ ZeroClaw 运行时使用 `docker-compose.zeroclaw.yml`。`chief` 由
 docker compose -f docker-compose.zeroclaw.yml up -d --force-recreate
 ```
 
-另外还有一个仅用于本地测试的辅助服务：
-
-- `x402-seller`：独立的 x402 seller demo 资源服务
-- `x402-mock`：独立的 mock facilitator，用于 `CHAIN_MOCK=true` 的本地 x402 回归
-
 ## 同时启动
 
 在仓库根目录执行：
@@ -47,9 +42,6 @@ docker compose up -d --build
 - `ledger` 管理页面：`http://localhost:8092/`
 - `ledger` 健康检查：`http://localhost:8092/health`
 - `ledger` 账本状态：`GET http://localhost:8092/ledger/state`
-- `x402-seller` 健康检查：`http://localhost:8001/health`
-- `x402-seller` 演示资源：`GET http://localhost:8001/x402/demo-resource`
-- `x402-seller` Circle Nanopayments 演示资源：`GET http://localhost:8001/x402/agent-services/research-summary/nanopayments`
 - `chain` REST：`http://localhost:8091/health`
 - `circle` REST：`http://localhost:8093/health`
 
@@ -297,21 +289,9 @@ AGENT_BASE_URL=http://localhost:8000 ./scripts/agent-chat.sh
 
 ### x402 Nanopayments 集成验证
 
-可以跑 buyer/seller/facilitator 集成用例。先让 compose 里的 `x402-seller`
-使用 mock facilitator，然后在 `chain` 容器里执行：
-
-```bash
-X402_PAY_TO=0x2222222222222222222222222222222222222222 \
-X402_FACILITATOR_URL=http://x402-mock:8000/x402/facilitator \
-docker compose up -d --build x402-mock x402-seller
-
-docker run --rm --network chief_default \
-  -v "$PWD/chain:/workspace" \
-  -w /workspace \
-  -e RUN_X402_NANOPAYMENTS_INTEGRATION=true \
-  chief-chain \
-  node --import tsx --test test/x402-nanopayments.integration.test.ts
-```
+默认 compose 不再启动本地 `x402-seller` / `x402-mock`。验证 x402
+Nanopayments 时，优先使用线上正在运行的 seller / facilitator，并显式传入
+`X402_LIVE_NANOPAYMENTS_RESOURCE_URL`。
 
 如需验证真实 Circle Gateway facilitator / live settlement，先准备：
 
@@ -326,14 +306,11 @@ docker run --rm --network chief_default \
 然后运行：
 
 ```bash
-X402_PAY_TO=0x... \
-X402_FACILITATOR_URL="${X402_LIVE_FACILITATOR_URL:-https://gateway-api-testnet.circle.com}" \
-docker compose up -d --build x402-seller
-
 docker run --rm --network chief_default \
   -v "$PWD/chain:/workspace" \
   -w /workspace \
   -e RUN_X402_NANOPAYMENTS_LIVE=true \
+  -e X402_LIVE_NANOPAYMENTS_RESOURCE_URL=https://seller.example/x402/agent-services/research-summary/nanopayments \
   -e X402_LIVE_BUYER_PRIVATE_KEY=0x... \
   -e X402_LIVE_PAY_TO=0x... \
   -e X402_LIVE_FACILITATOR_URL="${X402_LIVE_FACILITATOR_URL:-https://gateway-api-testnet.circle.com}" \
@@ -369,11 +346,15 @@ PRIVATE_KEY=0x... \
 
 ## 默认链与协议
 
-- 默认 RPC：`https://base-sepolia-rpc.publicnode.com`
-- 默认链 ID：`84532`
-- 默认 x402 网络：`eip155:84532`
-- 默认 facilitator：`https://x402.org/facilitator`
-- 默认 x402 资产：Base Sepolia USDC
+- 默认链 profile：`CHAIN_PROFILE=base-sepolia`
+- `base-sepolia` 默认 RPC：`https://base-sepolia-rpc.publicnode.com`
+- `base-sepolia` 默认链 ID / x402 网络：`84532` / `eip155:84532`
+- `base-sepolia` 默认 facilitator：`https://x402.org/facilitator`
+- `base-sepolia` 默认 x402 资产：Base Sepolia USDC
+- `base-mainnet` 默认 RPC：`https://mainnet.base.org`
+- `base-mainnet` 默认链 ID / x402 网络：`8453` / `eip155:8453`
+- `base-mainnet` 默认 facilitator：`https://gateway-api.circle.com`
+- `base-mainnet` 默认 x402 资产：Base Mainnet USDC
 - seller / buyer 使用标准头：
   - `PAYMENT-REQUIRED`
   - `PAYMENT-SIGNATURE`
@@ -406,7 +387,7 @@ PRIVATE_KEY=0x... \
 - `AGENT_WALLET_STATE_PATH`：Agent Wallet 本地 demo 状态文件，Docker 默认 `/app/data/agent_wallet_state.json`
 - `LEDGER_URL`：`agent` 访问独立链下账本服务的内部地址，默认 `http://ledger:8092`
 - `LEDGER_TIMEOUT_SECONDS`：`agent` 请求链下账本服务的超时时间，默认 `20`
-- `X402_SELLER_BASE_URL`：Agent Wallet UI 调用 seller 服务时使用的内部 base URL，默认 `http://x402-seller:8000`
+- `X402_SELLER_BASE_URL`：Agent Wallet UI 调用 seller 服务时使用的 seller base URL；默认 compose 不再启动本地 seller，如需使用请显式配置线上或外部服务地址
 
 
 `update_wealth_config` 和 `POST /autonomy/config` 可以在运行时修改以下自治配置，并会把覆盖值写入 `AUTONOMY_STATE_PATH`，重启后继续生效：
@@ -421,8 +402,9 @@ PRIVATE_KEY=0x... \
 
 - `CHAIN_HTTP_PORT`：chain REST 端口，默认 `8091`
 - `PRIVATE_KEY`：链上执行和 x402 buyer 默认签名私钥
-- `RPC_URL`：链 RPC 地址，默认 Base Sepolia
-- `CHAIN_ID`：期望连接的链 ID，默认 `84532`
+- `CHAIN_PROFILE`：链 profile，默认 `base-sepolia`；切主网使用 `base-mainnet`
+- `RPC_URL`：链 RPC 地址；为空时跟随 `CHAIN_PROFILE`
+- `CHAIN_ID`：期望连接的链 ID；为空时跟随 `CHAIN_PROFILE`
 - `DAILY_LIMIT`：每日可执行总额度，默认 `2.0`
 - `SINGLE_TX_CAP`：单笔 ETH 额度上限，默认 `1.0`
 - `WHITELISTED_RECIPIENTS`：额外白名单地址，逗号分隔
@@ -430,12 +412,13 @@ PRIVATE_KEY=0x... \
 - `CHAIN_MOCK_BALANCE_ETH`：mock 模式下链上钱包返回给自治账本的余额，默认 `1.0`
 - `CHAIN_MOCK_USDC_BALANCE`：mock 模式下 `chain_get_wallet_state` 返回的 USDC 余额，默认 `0`
 - `TRADE_INTENT_PAIR`：trade intent 默认交易对，默认 `ETH/USDC`
-- `TRADE_INTENT_SELL_TOKEN`：trade intent 默认卖出 Token，默认 Base Sepolia USDC
-- `TRADE_INTENT_BUY_TOKEN`：trade intent 默认买入 Token，默认 Base Sepolia WETH
+- `TRADE_INTENT_SELL_TOKEN`：trade intent 默认卖出 Token；为空时跟随 `CHAIN_PROFILE` 的 USDC
+- `TRADE_INTENT_BUY_TOKEN`：trade intent 默认买入 Token；为空时使用 Base WETH
 - `BUNDLER_RPC_URL`：ERC-4337 Bundler RPC
 - `ENTRY_POINT_ADDRESS`：ERC-4337 EntryPoint
-- `X402_FACILITATOR_URL`：x402 facilitator 地址
-- `X402_NETWORK`：x402 CAIP-2 网络标识
+- `X402_FACILITATOR_URL`：x402 facilitator 地址；为空时跟随 `CHAIN_PROFILE`
+- `X402_NETWORK`：x402 CAIP-2 网络标识；为空时跟随 `CHAIN_PROFILE`
+- `X402_USDC_ASSET_ADDRESS`：x402 USDC asset 地址；为空时跟随 `CHAIN_PROFILE`
 - `X402_BUYER_PRIVATE_KEY`：x402 buyer 专用私钥；为空时回退到 `PRIVATE_KEY`
 - `X402_USDC_SINGLE_CAP`：x402 单笔 USDC 上限，默认 `1.0`
 - `X402_USDC_DAILY_CAP`：x402 每日 USDC 上限，默认 `2.0`
@@ -444,11 +427,12 @@ PRIVATE_KEY=0x... \
 
 - `CIRCLE_HTTP_PORT`：circle REST 端口，默认 `8093`
 - `AGENT_WALLET_STATE_PATH`：Agent Wallet 本地 demo 状态文件，Docker 默认 `/app/data/agent_wallet_state.json`
-- `CIRCLE_API_KEY`：Circle sandbox API key；`CHAIN_MOCK=false` 且创建真实 Agent Wallet 时需要
+- `CIRCLE_API_KEY`：Circle API key；`CHAIN_MOCK=false` 且创建真实 Agent Wallet 时需要，主网 profile 需使用 live key
 - `CIRCLE_ENTITY_SECRET`：Circle entity secret；用于按请求生成 entity secret ciphertext
 - `CIRCLE_ENTITY_SECRET_CIPHERTEXT`：兼容旧配置，仅用于本地 mock/迁移场景；真实 Circle 请求会要求 `CIRCLE_ENTITY_SECRET`
 - `CIRCLE_WALLET_SET_ID`：已有 Circle wallet set id；为空时由 Circle wallet service 创建/使用默认流程
 - `CIRCLE_BASE_URL`：Circle Web3 Services base URL，默认 `https://api.circle.com/v1/w3s`
+- `CIRCLE_BLOCKCHAIN`：Circle Agent Wallet 链名；为空时跟随 `CHAIN_PROFILE`，testnet 为 `BASE-SEPOLIA`，mainnet 为 `BASE`
 - `CIRCLE_USDC_TOKEN_ID`：Circle USDC token id；真实 Circle transfer 时使用
 
 ### ledger
@@ -488,8 +472,8 @@ Agent Wallet MVP 在现有 Web Console 中增加了一个 `Agent Wallet MVP` 面
 - `CIRCLE_ENTITY_SECRET`
 - `CIRCLE_WALLET_SET_ID`
 - `X402_BUYER_PRIVATE_KEY`
-- `X402_NETWORK=eip155:84532`
-- `X402_USDC_ASSET_ADDRESS=0x036CbD53842c5426634e7929541eC2318f3dCF7e`
+- `CHAIN_PROFILE=base-mainnet`
+- `CIRCLE_BLOCKCHAIN=BASE`（可省略，由 `CHAIN_PROFILE` 推导）
 
 本地 demo 状态存储在 `AGENT_WALLET_STATE_PATH`，Docker 默认路径是 `/app/data/agent_wallet_state.json`。需要清空本地 Agent Wallet demo 状态时，可以调用：
 
@@ -498,15 +482,6 @@ curl -X POST http://localhost:8000/agent-wallet/reset
 ```
 
 独立链下账本状态存储在 `LEDGER_STATE_PATH`。本地清空账本可删除 `ledger/data/offchain_ledger.json` 后重启 `ledger` 服务。
-
-### x402-seller
-
-- `X402_PAY_TO`：seller 收款地址
-- `X402_PRICE`：seller 演示资源价格，默认 `$0.01`
-- `X402_NETWORK`：seller CAIP-2 网络，默认 `eip155:84532`
-- `X402_FACILITATOR_URL`：seller 使用的 facilitator，默认 `https://x402.org/facilitator`
-- `X402_TIMEOUT_SECONDS`：seller 请求 facilitator 的超时，默认 `20`
-- `X402_GATEWAY_VERIFYING_CONTRACT`：Circle Gateway `GatewayWalletBatched` verifying contract；Base Sepolia 默认 `0x0077777d7EBA4688BDeF3E311b846F25870A19B9`
 
 ## 交互式 Agent
 
@@ -528,23 +503,3 @@ curl -X POST http://localhost:8000/agent-wallet/reset
 1. `POST /agent/sessions` 创建 session
 2. `POST /agent/sessions/{sessionId}/messages` 持续发送消息
 3. `GET /agent/sessions/{sessionId}` 查看当前 session 状态
-
-## `x402-seller: GET /x402/demo-resource`
-
-这是独立 `x402-seller` 服务提供的标准 x402 seller 演示资源：
-
-- 首次访问会返回 `402 Payment Required`
-- 响应头包含 `PAYMENT-REQUIRED`
-- buyer 成功重试后，返回业务 JSON，并带 `PAYMENT-RESPONSE`
-
-## `x402-seller: GET /x402/agent-services/research-summary/nanopayments`
-
-这是独立 `x402-seller` 服务提供的 Circle Nanopayments 风格演示资源：
-
-- 首次访问会返回 `402 Payment Required`
-- `accepts` 同时包含标准 x402 `exact` 付款项和 Circle Gateway `GatewayWalletBatched` 付款项
-- seller 会按 buyer 在 `PAYMENT-SIGNATURE.accepted` 中选择的付款项执行 verify / settle，而不是固定使用第一项
-- buyer 可在 `chain_x402_fetch` 中传 `paymentPreference: "circle-gateway"`，优先选择 `GatewayWalletBatched`
-- buyer 成功重试后，返回 `research-summary-nanopayments` 业务 JSON，并带 `PAYMENT-RESPONSE`
-
-在 `CHAIN_MOCK=true` 的本地回归场景下，脚本会把 facilitator 切到独立的 `x402-mock` 服务，而不是 `agent` 本体。
