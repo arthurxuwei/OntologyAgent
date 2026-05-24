@@ -55,177 +55,6 @@
     });
   }
 
-  const atomicToUsdc = (value) => {
-    const parsed = Number.parseInt(String(value || '0'), 10);
-    if (!Number.isFinite(parsed)) return 0;
-    return parsed / 1_000_000;
-  };
-
-  const parseAtomic = (value) => {
-    const parsed = Number.parseInt(String(value || '0'), 10);
-    return Number.isFinite(parsed) ? parsed : 0;
-  };
-
-  const decimalUsdcToAtomic = (value) => {
-    const text = String(value ?? '').trim();
-    if (!text) return null;
-    const match = text.match(/^(\d+)(?:\.(\d{0,6})\d*)?$/);
-    if (!match) return null;
-    const whole = Number.parseInt(match[1], 10);
-    const fractional = Number.parseInt((match[2] || '').padEnd(6, '0'), 10);
-    if (!Number.isFinite(whole) || !Number.isFinite(fractional)) return null;
-    return whole * 1_000_000 + fractional;
-  };
-
-  function dashboardAvailableAtomic(account) {
-    const gatewayFallback = account.gatewayAvailableAtomic || account.gatewayTotalAtomic || account.availableAtomic;
-    const hasWalletBalance = account.circleAvailableAtomic || account.circleUsdcBalance;
-    const hasGatewayBalance = account.gatewayTotalAtomic || account.gatewayUsdcTotal || account.gatewayAvailableAtomic || account.gatewayUsdcAvailable;
-    if (!hasWalletBalance && !hasGatewayBalance) return String(gatewayFallback || '0');
-    const circleAtomic = account.circleAvailableAtomic
-      ? parseAtomic(account.circleAvailableAtomic)
-      : (decimalUsdcToAtomic(account.circleUsdcBalance) || 0);
-    const gatewayTotalAtomic = account.gatewayTotalAtomic
-      ? parseAtomic(account.gatewayTotalAtomic)
-      : (decimalUsdcToAtomic(account.gatewayUsdcTotal) || parseAtomic(account.gatewayAvailableAtomic));
-    const pendingDepositsAtomic = account.gatewayPendingDepositsAtomic
-      ? parseAtomic(account.gatewayPendingDepositsAtomic)
-      : (decimalUsdcToAtomic(account.gatewayUsdcPendingDeposits) || 0);
-    return String(Math.max(circleAtomic + gatewayTotalAtomic - pendingDepositsAtomic, 0));
-  }
-
-  const shortAddress = (value) => {
-    const text = String(value || '').trim();
-    if (!text) return 'none';
-    if (text.length <= 18) return text;
-    return `${text.slice(0, 10)}...${text.slice(-6)}`;
-  };
-
-  const entryAmountAtomic = (entry) => {
-    const metadataAmount = entry?.metadata?.amountAtomic;
-    if (metadataAmount) return String(metadataAmount);
-    const available = Number.parseInt(String(entry?.availableDeltaAtomic || '0'), 10);
-    const locked = Number.parseInt(String(entry?.lockedDeltaAtomic || '0'), 10);
-    return String(Math.abs(available || locked || 0));
-  };
-
-  function activeGatewayPendingEntryIds(account, entries) {
-    let remaining = parseAtomic(account.gatewayPendingBatchAtomic);
-    const activeEntryIds = new Set();
-    if (remaining <= 0) return activeEntryIds;
-    const newestFirst = [...entries].sort((left, right) => (
-      String(right.createdAt || '').localeCompare(String(left.createdAt || ''))
-    ));
-    for (const entry of newestFirst) {
-      if (entry?.entryType !== 'agent_transfer') continue;
-      if (entry?.metadata?.settlementMode !== 'gateway') continue;
-      if (entry?.metadata?.transactionState !== 'SETTLED') continue;
-      const amountAtomic = parseAtomic(entryAmountAtomic(entry));
-      if (amountAtomic <= 0 || amountAtomic > remaining) continue;
-      const entryId = String(entry.entryId || '');
-      if (!entryId) continue;
-      activeEntryIds.add(entryId);
-      remaining -= amountAtomic;
-      if (remaining <= 0) break;
-    }
-    return activeEntryIds;
-  }
-
-  const entryStatus = (entry, account, activePendingEntryIds) => {
-    if (activePendingEntryIds.has(String(entry.entryId || ''))) {
-      return 'pending_settle';
-    }
-    let status = entry?.metadata?.dashboardStatus;
-    if (
-      status === 'pending_settle'
-      && entry?.metadata?.transactionState === 'SETTLED'
-      && entry?.metadata?.gatewayStage === 'pending_batch'
-      && !activePendingEntryIds.has(String(entry.entryId || ''))
-    ) {
-      return 'released';
-    }
-    if (status) return status;
-    if (entry.entryType === 'credit') return 'onramp';
-    if (entry.entryType === 'escrow_lock') return 'locked';
-    if (entry.entryType === 'escrow_release' || entry.entryType === 'agent_transfer') return 'released';
-    if (entry.entryType === 'escrow_refund') return 'refunded';
-    return entry.entryType || 'processed';
-  };
-
-  function buildDashboardAgent(account, entries, escrows) {
-    const agentId = String(account.agentId || '');
-    const walletAddress = account.walletAddress || account.circleWalletId || agentId;
-    const lifetimeInAtomic = entries.reduce((sum, entry) => {
-      const delta = Number.parseInt(String(entry.availableDeltaAtomic || '0'), 10);
-      return delta > 0 ? sum + delta : sum;
-    }, 0);
-    const lifetimeOutAtomic = entries.reduce((sum, entry) => {
-      const delta = Number.parseInt(String(entry.availableDeltaAtomic || '0'), 10);
-      return delta < 0 ? sum + Math.abs(delta) : sum;
-    }, 0);
-    const linkedPendingEntryIds = new Set(
-      entries
-        .filter((entry) => (
-          entry.metadata?.dashboardStatus === 'credited'
-          && entry.metadata?.linkedEntryId
-        ))
-        .map((entry) => String(entry.metadata.linkedEntryId)),
-    );
-    const visibleEntries = entries.filter(
-      (entry) => !linkedPendingEntryIds.has(String(entry.entryId || '')),
-    );
-    const activePendingEntryIds = activeGatewayPendingEntryIds(account, visibleEntries);
-    const transactions = visibleEntries.map((entry) => {
-      const amountAtomic = entryAmountAtomic(entry);
-      const delta = Number.parseInt(String(entry.availableDeltaAtomic || '0'), 10);
-      const status = entryStatus(entry, account, activePendingEntryIds);
-      const escrow = escrows.find((item) => item.escrowId && item.escrowId === entry.escrowId);
-      const counterparty = entry.metadata?.counterpartyEmail
-        || entry.metadata?.counterparty
-        || entry.reason
-        || (escrow && (escrow.buyerAgentId === agentId ? escrow.sellerAgentId : escrow.buyerAgentId))
-        || 'Ledger';
-      return {
-        id: entry.entryId,
-        counterparty,
-        amount: atomicToUsdc(amountAtomic),
-        amountAtomic,
-        direction: delta < 0 || entry.entryType === 'escrow_lock' || entry.entryType === 'withdrawal' ? 'out' : 'in',
-        role: entry.entryType === 'withdrawal' || entry.entryType === 'withdrawal_submitted' ? 'withdrawal' : (delta < 0 ? 'payer' : 'payee'),
-        status,
-        timestamp: entry.createdAt,
-        network: entry.metadata?.network,
-        gatewayStage: entry.metadata?.gatewayStage,
-        gasFeeAtomic: entry.metadata?.gasFeeAtomic,
-        netAmountAtomic: entry.metadata?.netAmountAtomic,
-        txHash: entry.metadata?.txHash,
-      };
-    });
-    return {
-      agent: {
-        id: agentId,
-        name: String(account.agentName || agentId),
-        role: 'Agent Wallet Account',
-        walletAddress: shortAddress(walletAddress),
-        fullWalletAddress: String(walletAddress),
-        claimedDaysAgo: 0,
-        ownerEmail: account.email || account.dashboardClaimedByEmail || '',
-      },
-      balance: {
-        available: atomicToUsdc(dashboardAvailableAtomic(account)),
-        withdrawAvailable: atomicToUsdc(account.gatewayAvailableAtomic || account.gatewayWithdrawableAtomic || account.availableAtomic),
-        withdrawAvailableAtomic: String(account.gatewayAvailableAtomic || account.gatewayWithdrawableAtomic || account.availableAtomic || '0'),
-        locked: atomicToUsdc(account.lockedAtomic),
-        lifetimeIn: atomicToUsdc(lifetimeInAtomic),
-        lifetimeOut: atomicToUsdc(lifetimeOutAtomic),
-        pendingSettlement: atomicToUsdc(0),
-        pendingSettlementAtomic: '0',
-      },
-      transactions,
-      settings: { limits: { perTradeCap: 0.01 } },
-    };
-  }
-
   function emptyDashboardState() {
     return { agents: {}, defaultAgentId: null, source: 'ledger-domain' };
   }
@@ -296,34 +125,22 @@
         setLedgerDashboardState(emptyDashboardState());
         return () => { cancelled = true; };
       }
-      fetch(`/ledger/accounts?claimedByEmail=${encodeURIComponent(ownerEmail)}`, { cache: 'no-store' })
+      fetch(`/ledger/portfolio?ownerEmail=${encodeURIComponent(ownerEmail)}`, { cache: 'no-store' })
         .then((response) => {
-          if (!response.ok) throw new Error(`ledger accounts ${response.status}`);
+          if (!response.ok) throw new Error(`ledger portfolio ${response.status}`);
           return response.json();
         })
-        .then(async (accountsPayload) => {
-          const accounts = Array.isArray(accountsPayload.accounts) ? accountsPayload.accounts : [];
-          const agentPayloads = await Promise.all(accounts.map(async (account) => {
-            const agentId = encodeURIComponent(account.agentId);
-            const [entriesPayload, escrowsPayload] = await Promise.all([
-              fetch(`/ledger/accounts/${agentId}/entries?limit=100`, { cache: 'no-store' }).then((response) => response.json()),
-              fetch(`/ledger/accounts/${agentId}/escrows`, { cache: 'no-store' }).then((response) => response.json()),
-            ]);
-            return {
-              account,
-              entries: Array.isArray(entriesPayload.entries) ? entriesPayload.entries : [],
-              escrows: Array.isArray(escrowsPayload.escrows) ? escrowsPayload.escrows : [],
-            };
-          }));
+        .then((dashboardPayload) => {
           if (cancelled) return;
-          const agents = {};
-          for (const item of agentPayloads) {
-            agents[item.account.agentId] = buildDashboardAgent(item.account, item.entries, item.escrows);
-          }
-          const dashboardPayload = {
+          if (!dashboardPayload || typeof dashboardPayload !== 'object') return;
+          const agents = dashboardPayload.agents && typeof dashboardPayload.agents === 'object'
+            ? dashboardPayload.agents
+            : {};
+          dashboardPayload = {
+            ...dashboardPayload,
             agents,
-            defaultAgentId: Object.keys(agents)[0] || null,
-            source: 'ledger-domain',
+            defaultAgentId: dashboardPayload.defaultAgentId || Object.keys(agents)[0] || null,
+            source: dashboardPayload.source || 'ledger',
           };
           if (!dashboardPayload.defaultAgentId) return;
           window.DASH_MOCK.day1 = dashboardPayload;

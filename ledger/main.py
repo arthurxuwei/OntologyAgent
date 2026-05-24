@@ -390,6 +390,48 @@ async def list_ledger_accounts(
     return {"accounts": await enriched_account_payloads(accounts)}
 
 
+@app.get("/ledger/portfolio")
+async def ledger_portfolio(ownerEmail: str = "") -> dict[str, Any]:
+    owner_email = normalize_email(ownerEmail)
+    if owner_email is None:
+        return build_dashboard_data(
+            {
+                "accounts": [],
+                "entries": [],
+                "escrows": [],
+            },
+        )
+
+    store = get_store()
+    account_models = store.list_accounts(claimed_by_email=owner_email)
+    accounts = await enriched_account_payloads(account_models)
+    agent_ids = [
+        str(account.get("agentId") or "").strip()
+        for account in accounts
+        if str(account.get("agentId") or "").strip()
+    ]
+    entries: list[dict[str, Any]] = []
+    escrows_by_id: dict[str, dict[str, Any]] = {}
+    for agent_id in agent_ids:
+        entries.extend(
+            entry.model_dump()
+            for entry in store.list_entries(agent_id=agent_id, limit=500)
+        )
+        for escrow in store.list_escrows(agent_id=agent_id):
+            payload = escrow.model_dump()
+            escrow_id = str(payload.get("escrowId") or "").strip()
+            if escrow_id:
+                escrows_by_id[escrow_id] = payload
+
+    return build_dashboard_data(
+        {
+            "accounts": accounts,
+            "entries": entries,
+            "escrows": list(escrows_by_id.values()),
+        },
+    )
+
+
 @app.get("/ledger/accounts/{agent_id}/entries")
 def list_ledger_account_entries(agent_id: str, limit: int | None = None) -> dict[str, Any]:
     entries = get_store().list_entries(agent_id=agent_id, limit=_limit(limit, default=100))
