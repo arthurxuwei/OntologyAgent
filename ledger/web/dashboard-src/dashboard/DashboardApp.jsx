@@ -138,7 +138,18 @@
       const delta = Number.parseInt(String(entry.availableDeltaAtomic || '0'), 10);
       return delta < 0 ? sum + Math.abs(delta) : sum;
     }, 0);
-    const transactions = entries.map((entry) => {
+    const linkedPendingEntryIds = new Set(
+      entries
+        .filter((entry) => (
+          entry.metadata?.dashboardStatus === 'credited'
+          && entry.metadata?.linkedEntryId
+        ))
+        .map((entry) => String(entry.metadata.linkedEntryId)),
+    );
+    const visibleEntries = entries.filter(
+      (entry) => !linkedPendingEntryIds.has(String(entry.entryId || '')),
+    );
+    const transactions = visibleEntries.map((entry) => {
       const amountAtomic = entryAmountAtomic(entry);
       const delta = Number.parseInt(String(entry.availableDeltaAtomic || '0'), 10);
       const status = entryStatus(entry, account);

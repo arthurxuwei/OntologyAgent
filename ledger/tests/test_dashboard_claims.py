@@ -1138,3 +1138,15 @@ class TestDashboardClaims(LedgerServiceTestCase):
         self.assertIn("function waitForDashboardDependencies", source)
         self.assertIn("await waitForDashboardDependencies();", source)
         self.assertIn("root.render(<DashboardRoot />);", source)
+
+    def test_domain_dashboard_source_hides_linked_pending_inbound_rows(self) -> None:
+        response = self.client.get("/dashboard")
+
+        self.assertEqual(response.status_code, 200)
+        source = self.dashboard_source(response.text)
+        self.assertIn("const linkedPendingEntryIds = new Set(", source)
+        self.assertIn("entry.metadata?.dashboardStatus === 'credited'", source)
+        self.assertIn("entry.metadata?.linkedEntryId", source)
+        self.assertIn("const visibleEntries = entries.filter", source)
+        self.assertIn("!linkedPendingEntryIds.has(String(entry.entryId || ''))", source)
+        self.assertIn("visibleEntries.map((entry)", source)
