@@ -161,6 +161,26 @@ class TestDashboardClaims(LedgerServiceTestCase):
         self.assertEqual(alpha["balance"]["lifetimeIn"], 0.25)
         self.assertEqual(alpha["transactions"][0]["status"], "credited")
 
+    def test_dashboard_data_reports_nonzero_claimed_days_for_old_claims(self) -> None:
+        payload = main.build_dashboard_data(
+            {
+                "accounts": [
+                    {
+                        "agentId": "agent_old_claim",
+                        "agentName": "Old Claim Agent",
+                        "email": "agent-owner@example.com",
+                        "dashboardClaimedAt": "2000-01-01T00:00:00+00:00",
+                        "walletAddress": "0x1111111111111111111111111111111111111111",
+                    }
+                ],
+                "entries": [],
+                "escrows": [],
+            },
+        )
+
+        claimed_days_ago = payload["agents"]["agent_old_claim"]["agent"]["claimedDaysAgo"]
+        self.assertGreater(claimed_days_ago, 0)
+
     def test_dashboard_transaction_exposes_pending_settlement_and_gas_metadata(self) -> None:
         store = main.get_store()
         store.bind_account_wallet(

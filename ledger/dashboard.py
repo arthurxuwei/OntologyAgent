@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Optional
 
@@ -16,6 +17,20 @@ from utils import (
 
 
 FINAL_GATEWAY_TRANSFER_STATES = {"SETTLED", "COMPLETE", "COMPLETED", "CONFIRMED"}
+
+
+def dashboard_claimed_days_ago(account: dict[str, Any]) -> int:
+    claimed_at = account.get("dashboardClaimedAt")
+    if not isinstance(claimed_at, str) or not claimed_at.strip():
+        return 0
+    try:
+        claimed_at_dt = datetime.fromisoformat(claimed_at.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return 0
+    if claimed_at_dt.tzinfo is None:
+        claimed_at_dt = claimed_at_dt.replace(tzinfo=timezone.utc)
+    elapsed = datetime.now(timezone.utc) - claimed_at_dt.astimezone(timezone.utc)
+    return max(elapsed.days, 0)
 
 
 def dashboard_counterparty(
@@ -302,7 +317,7 @@ def empty_dashboard_agent(account: dict[str, Any]) -> dict[str, Any]:
             "role": "Agent Wallet Account",
             "walletAddress": short_address(wallet_address),
             "fullWalletAddress": str(wallet_address),
-            "claimedDaysAgo": 0,
+            "claimedDaysAgo": dashboard_claimed_days_ago(account),
             "ownerEmail": normalize_email(account.get("email")),
         },
         "balance": {
@@ -421,7 +436,7 @@ def build_dashboard_data(
                 "role": "Agent Wallet Account",
                 "walletAddress": short_address(wallet_address),
                 "fullWalletAddress": str(wallet_address),
-                "claimedDaysAgo": 0,
+                "claimedDaysAgo": dashboard_claimed_days_ago(account),
                 "ownerEmail": normalize_email(account.get("email")),
             },
             "balance": {
