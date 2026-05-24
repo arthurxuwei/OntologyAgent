@@ -508,6 +508,8 @@
             [
               { label: "Agent ID", render: (account) => `<span class="mono">${shortValue(account.agentId)}</span>` },
               { label: "Email", render: (account) => shortValue(account.email) },
+              { label: "Claimed", render: (account) => account.dashboardClaimedAt ? shortValue(account.dashboardClaimedByEmail || "yes") : `<span class="empty">no</span>` },
+              { label: "Claimed At", render: (account) => account.dashboardClaimedAt ? formatDate(account.dashboardClaimedAt) : `<span class="empty">none</span>` },
               { label: "Wallet Address", render: (account) => `<span class="mono">${shortValue(account.walletAddress || account.circleWalletId)}</span>` },
               { label: "Circle USDC Available", render: (account) => formatDecimal(account.circleUsdcBalance) },
               { label: "Gateway Available", render: (account) => formatDecimal(account.gatewayUsdcAvailable) },
