@@ -90,14 +90,16 @@ def dashboard_available_usdc(account: dict[str, Any]) -> float:
         fallback=atomic_decimal(account.get("availableAtomic")) / Decimal("1000000"),
     )
     gateway = decimal_usdc(
-        account.get("gatewayUsdcTotal"),
-        fallback=atomic_decimal(account.get("gatewayTotalAtomic")) / Decimal("1000000"),
+        account.get("gatewayUsdcAvailable"),
+        fallback=decimal_usdc(
+            account.get("gatewayUsdcTotal"),
+            fallback=atomic_decimal(
+                account.get("gatewayAvailableAtomic") or account.get("gatewayTotalAtomic")
+            )
+            / Decimal("1000000"),
+        ),
     )
-    pending_gateway_deposits = decimal_usdc(
-        account.get("gatewayUsdcPendingDeposits"),
-        fallback=atomic_decimal(account.get("gatewayPendingDepositsAtomic")) / Decimal("1000000"),
-    )
-    return float(max(wallet + gateway - pending_gateway_deposits, Decimal("0")))
+    return float(max(wallet + gateway, Decimal("0")))
 
 
 def dashboard_withdraw_available_atomic(account: dict[str, Any]) -> str:

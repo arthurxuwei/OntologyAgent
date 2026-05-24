@@ -494,7 +494,7 @@ class TestDashboardClaims(LedgerServiceTestCase):
         agent = state["agents"]["agent_topup"]
         txs = agent["transactions"]
 
-        self.assertEqual(agent["balance"]["available"], 14.102)
+        self.assertEqual(agent["balance"]["available"], 16.202)
         self.assertEqual([tx["id"] for tx in txs], ["entry_credit"])
         self.assertEqual(txs[0]["status"], "pending_inbound_chain")
         self.assertEqual(txs[0]["role"], "deposit")
@@ -1105,7 +1105,7 @@ class TestDashboardClaims(LedgerServiceTestCase):
             {"agent_stale_local"},
         )
 
-    def test_dashboard_data_uses_wallet_and_gateway_total_as_available_balance(self) -> None:
+    def test_dashboard_data_uses_wallet_and_gateway_available_as_available_balance(self) -> None:
         class FakeWalletClient:
             async def status(self, *, wallet_address=None, circle_wallet_id=None):
                 assert circle_wallet_id == "circle-wallet-1"
@@ -1141,7 +1141,7 @@ class TestDashboardClaims(LedgerServiceTestCase):
 
         self.assertEqual(
             dashboard["agents"]["agent_research"]["balance"]["available"],
-            3.23,
+            3.08,
         )
         self.assertEqual(
             dashboard["agents"]["agent_research"]["balance"]["withdrawAvailable"],
