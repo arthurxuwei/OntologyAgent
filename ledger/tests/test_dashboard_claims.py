@@ -121,6 +121,46 @@ class TestDashboardClaims(LedgerServiceTestCase):
         self.assertNotEqual(alpha["transactions"][0]["counterparty"], "remark should not render")
         self.assertEqual(alpha["transactions"][0]["status"], "released")
 
+    def test_ledger_portfolio_endpoint_returns_claimed_domain_dashboard_state(self) -> None:
+        store = main.get_store()
+        store.bind_account_wallet(
+            agent_id="agent_alpha",
+            agent_name="Alpha Research",
+            email="agent-owner@example.com",
+            wallet_address="0x1111111111111111111111111111111111111111",
+            circle_wallet_id="circle-alpha",
+        )
+        store.bind_account_wallet(
+            agent_id="agent_beta",
+            agent_name="Beta Research",
+            email="other@example.com",
+            wallet_address="0x2222222222222222222222222222222222222222",
+            circle_wallet_id="circle-beta",
+        )
+        store.claim_dashboard_account(
+            agent_id="agent_alpha",
+            email="agent-owner@example.com",
+            dashboard_email="dashboard-user@example.com",
+        )
+        store.credit(
+            agent_id="agent_alpha",
+            amount_atomic="250000",
+            reason="operator funding",
+            metadata={"dashboardStatus": "credited"},
+        )
+
+        response = self.client.get("/ledger/portfolio?ownerEmail=dashboard-user@example.com")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["source"], "ledger")
+        self.assertEqual(payload["defaultAgentId"], "agent_alpha")
+        self.assertEqual(set(payload["agents"].keys()), {"agent_alpha"})
+        alpha = payload["agents"]["agent_alpha"]
+        self.assertEqual(alpha["agent"]["name"], "Alpha Research")
+        self.assertEqual(alpha["balance"]["lifetimeIn"], 0.25)
+        self.assertEqual(alpha["transactions"][0]["status"], "credited")
+
     def test_dashboard_transaction_exposes_pending_settlement_and_gas_metadata(self) -> None:
         store = main.get_store()
         store.bind_account_wallet(
@@ -1113,16 +1153,19 @@ class TestDashboardClaims(LedgerServiceTestCase):
         )
         self.assertEqual(main.get_store().load().accounts[0].availableAtomic, "0")
 
-    def test_domain_dashboard_source_uses_gateway_balances_and_settled_transfer_status(self) -> None:
+    def test_dashboard_frontend_reads_domain_portfolio_without_rebuilding_transactions(self) -> None:
         response = self.client.get("/dashboard")
 
         self.assertEqual(response.status_code, 200)
         source = self.dashboard_source(response.text)
-        self.assertIn("function dashboardAvailableAtomic(account)", source)
-        self.assertIn("account.gatewayAvailableAtomic || account.gatewayTotalAtomic || account.availableAtomic", source)
-        self.assertIn("status === 'pending_settle'", source)
-        self.assertIn("entry?.metadata?.transactionState === 'SETTLED'", source)
-        self.assertIn("parseAtomic(account.gatewayPendingBatchAtomic)", source)
+        self.assertIn("fetch(`/ledger/portfolio?ownerEmail=${encodeURIComponent(ownerEmail)}`", source)
+        self.assertNotIn("function buildDashboardAgent", source)
+        self.assertNotIn("function dashboardAvailableAtomic", source)
+        self.assertNotIn("function activeGatewayPendingEntryIds", source)
+        self.assertNotIn("const entryStatus", source)
+        self.assertNotIn("fetch(`/ledger/accounts?claimedByEmail=", source)
+        self.assertNotIn("/entries?limit=100", source)
+        self.assertNotIn("/escrows", source)
 
     def test_dashboard_root_waits_for_babel_global_dependencies_before_render(self) -> None:
         response = self.client.get("/dashboard")
@@ -1138,27 +1181,3 @@ class TestDashboardClaims(LedgerServiceTestCase):
         self.assertIn("function waitForDashboardDependencies", source)
         self.assertIn("await waitForDashboardDependencies();", source)
         self.assertIn("root.render(<DashboardRoot />);", source)
-
-    def test_domain_dashboard_source_hides_linked_pending_inbound_rows(self) -> None:
-        response = self.client.get("/dashboard")
-
-        self.assertEqual(response.status_code, 200)
-        source = self.dashboard_source(response.text)
-        self.assertIn("const linkedPendingEntryIds = new Set(", source)
-        self.assertIn("entry.metadata?.dashboardStatus === 'credited'", source)
-        self.assertIn("entry.metadata?.linkedEntryId", source)
-        self.assertIn("const visibleEntries = entries.filter", source)
-        self.assertIn("!linkedPendingEntryIds.has(String(entry.entryId || ''))", source)
-        self.assertIn("visibleEntries.map((entry)", source)
-
-    def test_domain_dashboard_source_assigns_current_pending_batch_to_latest_gateway_transfers(self) -> None:
-        response = self.client.get("/dashboard")
-
-        self.assertEqual(response.status_code, 200)
-        source = self.dashboard_source(response.text)
-        self.assertIn("function activeGatewayPendingEntryIds(account, entries)", source)
-        self.assertIn("let remaining = parseAtomic(account.gatewayPendingBatchAtomic)", source)
-        self.assertIn("entry?.metadata?.settlementMode !== 'gateway'", source)
-        self.assertIn("entry?.metadata?.transactionState !== 'SETTLED'", source)
-        self.assertIn("activePendingEntryIds.has(String(entry.entryId || ''))", source)
-        self.assertIn("return 'pending_settle';", source)
