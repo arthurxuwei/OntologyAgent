@@ -405,8 +405,7 @@ async def enrich_accounts_with_circle_balances(accounts: list[dict[str, Any]]) -
             account["circleUsdcBalance"] = usdc_balance
             circle_available_atomic = decimal_usdc_to_atomic_string(usdc_balance)
             if circle_available_atomic is not None:
-                account["availableAtomic"] = circle_available_atomic
-                account["balanceSource"] = "circle"
+                account["circleAvailableAtomic"] = circle_available_atomic
         gateway_balance = status.get("gatewayBalance")
         if isinstance(gateway_balance, dict):
             formatted_available = gateway_balance.get("formattedAvailable")
