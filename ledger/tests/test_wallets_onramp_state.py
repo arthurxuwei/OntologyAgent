@@ -341,7 +341,7 @@ class TestWalletsOnrampState(LedgerServiceTestCase):
             ["owner_task"],
         )
 
-    def test_ledger_state_uses_circle_balance_as_agent_visible_available(self) -> None:
+    def test_ledger_state_keeps_ledger_available_separate_from_wallet_balances(self) -> None:
         class FakeWalletClient:
             async def status(self, *, wallet_address=None, circle_wallet_id=None):
                 assert circle_wallet_id == "circle-wallet-1"
@@ -380,9 +380,7 @@ class TestWalletsOnrampState(LedgerServiceTestCase):
         self.assertEqual(account["gatewayUsdcWithdrawing"], "0.5")
         self.assertEqual(account["gatewayUsdcPendingDeposits"], "2.25")
         self.assertEqual(account["gatewayPendingDepositsAtomic"], "2250000")
-        self.assertEqual(account["availableAtomic"], "1980000")
-        self.assertNotIn("ledgerAvailableAtomic", account)
-        self.assertEqual(account["balanceSource"], "circle")
+        self.assertEqual(account["availableAtomic"], "0")
         self.assertEqual(state["entries"], [])
         self.assertEqual(state_after_second_read["entries"], [])
         self.assertEqual(main.get_store().load().accounts[0].availableAtomic, "0")
@@ -417,11 +415,10 @@ class TestWalletsOnrampState(LedgerServiceTestCase):
 
         account = state["accounts"][0]
         self.assertEqual(account["circleUsdcBalance"], "0")
-        self.assertEqual(account["availableAtomic"], "0")
-        self.assertEqual(account["balanceSource"], "circle")
+        self.assertEqual(account["availableAtomic"], "3000000")
         self.assertEqual(account["gatewayUsdcTotal"], "1.922")
 
-    def test_ledger_state_helper_uses_circle_balance_as_agent_visible_available(
+    def test_ledger_state_helper_keeps_ledger_available_separate_from_wallet_balances(
         self,
     ) -> None:
         class FakeWalletClient:
@@ -460,9 +457,7 @@ class TestWalletsOnrampState(LedgerServiceTestCase):
         self.assertEqual(account["gatewayUsdcWithdrawing"], "0.5")
         self.assertEqual(account["gatewayUsdcPendingDeposits"], "2.25")
         self.assertEqual(account["gatewayPendingDepositsAtomic"], "2250000")
-        self.assertEqual(account["availableAtomic"], "1980000")
-        self.assertNotIn("ledgerAvailableAtomic", account)
-        self.assertEqual(account["balanceSource"], "circle")
+        self.assertEqual(account["availableAtomic"], "0")
 
     def test_wallet_get_or_create_requires_circle_binding_agent_id_to_match_request(self) -> None:
         class FakeWalletClient:
