@@ -1,6 +1,6 @@
 // MVP ClaimForm fused with the real ledger dashboard: the surface keeps the
 // prototype's validate/confirm shape, but candidates come from the logged-in
-// claim code via /dashboard/claimable-agents.
+// claim code via /ledger/claims/candidates.
 
 (function () {
   function ClaimForm({ mode = 'initial', onClaimed, onDismiss }) {
@@ -18,14 +18,26 @@
     React.useEffect(() => {
       let cancelled = false;
       setStatus('loading');
-      fetch('/dashboard/claimable-agents')
+      fetch('/ledger/claims/candidates', { cache: 'no-store' })
         .then((response) => {
-          if (!response.ok) throw new Error(`claimable agents ${response.status}`);
+          if (!response.ok) throw new Error(`claim candidates ${response.status}`);
           return response.json();
         })
         .then((payload) => {
           if (cancelled) return;
-          const next = Array.isArray(payload.agents) ? payload.agents : [];
+          const next = Array.isArray(payload.candidates)
+            ? payload.candidates.map((candidate) => ({
+              ...candidate,
+              agentId: candidate.account?.agentId,
+              agentName: candidate.account?.agentName || candidate.account?.agentId,
+              ownerEmail: candidate.account?.email,
+              walletAddress: candidate.account?.walletAddress || candidate.account?.circleWalletId,
+              displayWalletAddress: candidate.account?.walletAddress || candidate.account?.circleWalletId || candidate.account?.agentId,
+              circleWalletId: candidate.account?.circleWalletId,
+              accountType: candidate.account?.accountType,
+              claimStatus: 'unclaimed',
+            }))
+            : [];
           setCandidates(next);
           setStatus(next.length ? 'ready' : 'empty');
         })
@@ -76,7 +88,7 @@
 
     const handleClaim = (candidate) => {
       if (!candidate) return;
-      fetch('/dashboard/claims', {
+      fetch('/ledger/claims', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

@@ -351,7 +351,7 @@ def credit_gateway_deposit_resumed_from_gas_topup(
     if not isinstance(agent_id, str) or not isinstance(ref_id, str):
         return None
 
-    state = services.get_store().load()
+    state = services.get_store().load_for_agent(agent_id)
     pending_entry: Optional[LedgerEntry] = None
     for entry in state.entries:
         if entry.agentId != agent_id or entry.entryType != "pending_inbound":
@@ -498,7 +498,7 @@ async def process_circle_wallet_webhook(payload: dict[str, Any]) -> dict[str, An
     gateway_ref_id = f"circle-webhook:{notification_id}"
 
     def matching_entry(entry_type: str, dashboard_status: str) -> Optional[LedgerEntry]:
-        for entry in services.get_store().load().entries:
+        for entry in services.get_store().load_for_agent(account.agentId).entries:
             if entry.entryType != entry_type or entry.agentId != account.agentId:
                 continue
             metadata = entry.metadata
@@ -547,7 +547,7 @@ async def process_circle_wallet_webhook(payload: dict[str, Any]) -> dict[str, An
         }
 
     def credit_linked_to_pending(pending: LedgerEntry) -> Optional[LedgerEntry]:
-        state = services.get_store().load()
+        state = services.get_store().load_for_agent(account.agentId)
         pending_transaction_id = pending.metadata.get("circleTransactionId")
         for entry in state.entries:
             if entry.entryType != "credit" or entry.agentId != account.agentId:
@@ -566,7 +566,7 @@ async def process_circle_wallet_webhook(payload: dict[str, Any]) -> dict[str, An
     def pending_inbounds_covered_by_sweep(swept_amount_atomic: str) -> list[LedgerEntry]:
         remaining = parse_nonnegative_atomic(swept_amount_atomic)
         covered: list[LedgerEntry] = []
-        state = services.get_store().load()
+        state = services.get_store().load_for_agent(account.agentId)
         for entry in state.entries:
             if entry.entryType != "pending_inbound" or entry.agentId != account.agentId:
                 continue

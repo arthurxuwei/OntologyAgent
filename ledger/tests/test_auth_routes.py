@@ -344,7 +344,7 @@ class TestAuthRoutes(LedgerServiceTestCase):
         self.assertNotIn('id="escrow-form"', html)
         self.assertNotIn("Create Escrow", html)
         self.assertIn('id="settlement-form"', html)
-        self.assertIn("/admin/ledger/state", html)
+        self.assertIn("/ledger/admin/summary", html)
         self.assertNotIn("/onramp/sessions", html)
         self.assertIn("/ledger/escrows", html)
         self.assertIn("Onramp Sessions", html)
@@ -433,7 +433,7 @@ class TestAuthRoutes(LedgerServiceTestCase):
         self.assertIn("if (!registered || !currentUser) return <window.MvpGithubAuthScreen />", source)
         self.assertIn("if (!claimed)    return <window.MvpClaimScreen />", source)
         self.assertIn("window.ClaimForm = ClaimForm", source)
-        self.assertIn("fetch('/dashboard/claimable-agents')", source)
+        self.assertIn("fetch('/ledger/claims/candidates'", source)
         self.assertNotIn("claimable-agents?claimed=${claimed}", source)
         self.assertIn("if (response.status === 403) throw new Error('owner_mismatch');", source)
         self.assertIn("setErrorKey(error.message === 'owner_mismatch'", source)
@@ -443,7 +443,7 @@ class TestAuthRoutes(LedgerServiceTestCase):
         self.assertIn("t('mvp.dash.claim.code_label')", source)
         self.assertIn("const canValidate = trimmedCode.length > 0 && status !== 'loading'", source)
         self.assertIn("candidate.claimCode", source)
-        self.assertIn("fetch('/dashboard/claims'", source)
+        self.assertIn("fetch('/ledger/claims'", source)
         self.assertIn("{t('mvp.dash.claim.validate_button')} →", source)
         self.assertIn("pending_settle", source)
         self.assertIn("pending_inbound_chain", source)
@@ -538,7 +538,7 @@ class TestAuthRoutes(LedgerServiceTestCase):
         self.assertNotIn('type="email"', source)
         self.assertNotIn('placeholder="you@example.com"', source)
         self.assertNotIn("<window.MockStateToggle />", source)
-        self.assertIn("fetch('/dashboard/data')", source)
+        self.assertIn("fetch(`/ledger/accounts?claimedByEmail=", source)
         self.assertNotIn("const emailQuery = ownerEmail", source)
         self.assertIn("fetch('/onramp/sessions'", source)
         self.assertIn("fullWalletAddress", source)
@@ -619,12 +619,11 @@ class TestAuthRoutes(LedgerServiceTestCase):
                 "};"
                 "global.fetch = async (url, options = {}) => {"
                 "fetchCalls.push({ url, method: options.method || 'GET', body: options.body || null });"
-                "if (url === '/admin/ledger/state') return { ok: true, json: async () => ({"
-                "accounts: [{ agentId: 'agent_buyer', email: 'buyer@example.com', walletAddress: '0x1111111111111111111111111111111111111111', circleUsdcBalance: '1.98', gatewayUsdcAvailable: '0.75', gatewayUsdcTotal: '1.25', gatewayUsdcWithdrawable: '0.5', gatewayUsdcWithdrawing: '0.5', gatewayUsdcPendingDeposits: '2.25', gatewayPendingDepositsAtomic: '2250000', gatewayUsdcPendingBatch: '0.1', gatewayPendingBatchAtomic: '100000', availableAtomic: '5000000', lockedAtomic: '3000000' }],"
-                "entries: [{ entryId: 'entry_1', entryType: 'credit', agentId: 'agent_buyer' }],"
-                "escrows: [{ escrowId: 'escrow_1', buyerAgentId: 'agent_buyer', sellerAgentId: 'agent_seller', amountAtomic: '3000000', status: 'locked' }],"
-                "onrampSessions: [{ sessionId: 'onramp_1', agentId: 'agentA', paymentAmount: '10.00', status: 'created', onrampUrl: 'https://pay.coinbase.com/buy/select-asset?sessionToken=abc' }]"
-                "}) };"
+                "if (url === '/ledger/admin/summary') return { ok: true, json: async () => ({ accounts: 1, circleUsdcAvailable: '1.98', gatewayUsdcAvailable: '0.75', pendingDeposits: '2.25', pendingBatch: '0.1', ledgerLockedAtomic: '3000000', escrows: 1, onrampSessions: 1 }) };"
+                "if (url === '/ledger/accounts') return { ok: true, json: async () => ({ accounts: [{ agentId: 'agent_buyer', email: 'buyer@example.com', walletAddress: '0x1111111111111111111111111111111111111111', circleUsdcBalance: '1.98', gatewayUsdcAvailable: '0.75', gatewayUsdcTotal: '1.25', gatewayUsdcWithdrawable: '0.5', gatewayUsdcWithdrawing: '0.5', gatewayUsdcPendingDeposits: '2.25', gatewayPendingDepositsAtomic: '2250000', gatewayUsdcPendingBatch: '0.1', gatewayPendingBatchAtomic: '100000', availableAtomic: '5000000', lockedAtomic: '3000000' }] }) };"
+                "if (url === '/ledger/entries?limit=50') return { ok: true, json: async () => ({ entries: [{ entryId: 'entry_1', entryType: 'credit', agentId: 'agent_buyer' }] }) };"
+                "if (url === '/ledger/escrows') return { ok: true, json: async () => ({ escrows: [{ escrowId: 'escrow_1', buyerAgentId: 'agent_buyer', sellerAgentId: 'agent_seller', amountAtomic: '3000000', status: 'locked' }] }) };"
+                "if (url === '/ledger/onramp-sessions?limit=50') return { ok: true, json: async () => ({ onrampSessions: [{ sessionId: 'onramp_1', agentId: 'agentA', paymentAmount: '10.00', status: 'created', onrampUrl: 'https://pay.coinbase.com/buy/select-asset?sessionToken=abc' }] }) };"
                 "if (url === '/ledger/wallets/get-or-create') return { ok: true, json: async () => ({"
                 "wallet: { walletAddress: '0x1111111111111111111111111111111111111111', circleWalletId: 'circle-wallet-1' },"
                 "account: { agentId: 'agent_research', availableAtomic: '0', lockedAtomic: '0' }"
@@ -646,7 +645,7 @@ class TestAuthRoutes(LedgerServiceTestCase):
                 "escrowSelection: selectedEscrowId(),"
                 "walletListener: listeners.get('wallet-form:submit'),"
                 "settlementListener: listeners.get('settlement-form:submit'),"
-                "stateCall: fetchCalls.find((call) => call.url === '/admin/ledger/state'),"
+                "stateCall: fetchCalls.find((call) => call.url === '/ledger/admin/summary'),"
                 "walletCall: fetchCalls.find((call) => call.url === '/ledger/wallets/get-or-create'),"
                 "openCall: window.openCalls[0] || null,"
                 "walletOutput: elements.get('wallet-output').textContent"

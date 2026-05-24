@@ -490,17 +490,18 @@
         const entries = Array.isArray(state?.entries) ? state.entries : [];
         const escrows = Array.isArray(state?.escrows) ? state.escrows : [];
         const onrampSessions = Array.isArray(state?.onrampSessions) ? state.onrampSessions : [];
-        const recentEntries = entries.slice(-6).reverse();
+        const summary = state?.summary || {};
+        const recentEntries = entries.slice(0, 6);
         ledgerStateEl.innerHTML = [
           `<div class="ledger-state">`,
           `<div class="metric-grid">`,
-          `<div class="metric"><span>Accounts</span><strong>${accounts.length}</strong></div>`,
-          `<div class="metric"><span>Circle USDC Available</span><strong>${formatDecimal(sumDecimal(accounts, "circleUsdcBalance"))}</strong></div>`,
-          `<div class="metric"><span>Gateway USDC Available</span><strong>${formatDecimal(sumDecimal(accounts, "gatewayUsdcAvailable"))}</strong></div>`,
-          `<div class="metric"><span>Pending Deposits</span><strong>${formatDecimal(sumDecimal(accounts, "gatewayUsdcPendingDeposits"))}</strong></div>`,
-          `<div class="metric"><span>Pending Batch</span><strong>${formatDecimal(sumDecimal(accounts, "gatewayUsdcPendingBatch"))}</strong></div>`,
-          `<div class="metric"><span>Ledger Locked</span><strong>${formatAtomic(sumAtomic(accounts, "lockedAtomic"))}</strong></div>`,
-          `<div class="metric"><span>Escrows / Onramps</span><strong>${escrows.length} / ${onrampSessions.length}</strong></div>`,
+          `<div class="metric"><span>Accounts</span><strong>${summary.accounts ?? accounts.length}</strong></div>`,
+          `<div class="metric"><span>Circle USDC Available</span><strong>${formatDecimal(summary.circleUsdcAvailable ?? sumDecimal(accounts, "circleUsdcBalance"))}</strong></div>`,
+          `<div class="metric"><span>Gateway USDC Available</span><strong>${formatDecimal(summary.gatewayUsdcAvailable ?? sumDecimal(accounts, "gatewayUsdcAvailable"))}</strong></div>`,
+          `<div class="metric"><span>Pending Deposits</span><strong>${formatDecimal(summary.pendingDeposits ?? sumDecimal(accounts, "gatewayUsdcPendingDeposits"))}</strong></div>`,
+          `<div class="metric"><span>Pending Batch</span><strong>${formatDecimal(summary.pendingBatch ?? sumDecimal(accounts, "gatewayUsdcPendingBatch"))}</strong></div>`,
+          `<div class="metric"><span>Ledger Locked</span><strong>${formatAtomic(summary.ledgerLockedAtomic ?? sumAtomic(accounts, "lockedAtomic"))}</strong></div>`,
+          `<div class="metric"><span>Escrows / Onramps</span><strong>${summary.escrows ?? escrows.length} / ${summary.onrampSessions ?? onrampSessions.length}</strong></div>`,
           `</div>`,
           renderStateSection(
             "Accounts",
@@ -584,8 +585,20 @@
       }
 
       async function refreshLedgerState() {
-        const state = await requestJson("/admin/ledger/state", { method: "GET" });
-        renderLedgerState(state);
+        const [summary, accounts, entries, escrows, onrampSessions] = await Promise.all([
+          requestJson("/ledger/admin/summary", { method: "GET" }),
+          requestJson("/ledger/accounts", { method: "GET" }),
+          requestJson("/ledger/entries?limit=50", { method: "GET" }),
+          requestJson("/ledger/escrows", { method: "GET" }),
+          requestJson("/ledger/onramp-sessions?limit=50", { method: "GET" }),
+        ]);
+        renderLedgerState({
+          summary,
+          accounts: accounts.accounts || [],
+          entries: entries.entries || [],
+          escrows: escrows.escrows || [],
+          onrampSessions: onrampSessions.onrampSessions || [],
+        });
       }
 
       async function getOrCreateWallet(event) {

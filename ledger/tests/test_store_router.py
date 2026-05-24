@@ -133,9 +133,94 @@ class TestStoreRouter(LedgerServiceTestCase):
         self.assertEqual(account["availableAtomic"], "5000000")
         self.assertEqual(account["lockedAtomic"], "0")
 
-        state = self.client.get("/ledger/state?agentId=agent_buyer").json()
-        self.assertEqual(len(state["entries"]), 1)
-        self.assertEqual(state["entries"][0]["entryType"], "credit")
+        entries = self.client.get("/ledger/accounts/agent_buyer/entries").json()["entries"]
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["entryType"], "credit")
+
+    def test_legacy_state_routes_are_removed(self) -> None:
+        self.assertEqual(self.client.get("/ledger/state").status_code, 404)
+        self.assertEqual(self.client.get("/admin/ledger/state").status_code, 404)
+        self.assertEqual(self.client.get("/dashboard/data").status_code, 404)
+        self.assertEqual(self.client.get("/dashboard/claimable-agents").status_code, 404)
+
+    def test_domain_account_entry_escrow_and_admin_routes(self) -> None:
+        store = main.get_store()
+        store.bind_account_wallet(
+            agent_id="agent_alpha",
+            agent_name="Alpha",
+            email="alpha@example.com",
+            wallet_address="0x1111111111111111111111111111111111111111",
+            circle_wallet_id="circle-alpha",
+            account_type="EOA",
+        )
+        store.credit(
+            agent_id="agent_alpha",
+            amount_atomic="5000000",
+            reason="operator funding",
+            metadata={},
+        )
+        escrow, _entry = store.create_escrow(
+            buyer_agent_id="agent_alpha",
+            seller_agent_id="agent_beta",
+            amount_atomic="2000000",
+            task_id="task_123",
+            description="Research task",
+            metadata={},
+        )
+
+        accounts = self.client.get("/ledger/accounts?ownerEmail=alpha@example.com").json()
+        self.assertEqual([account["agentId"] for account in accounts["accounts"]], ["agent_alpha"])
+        self.assertEqual(accounts["accounts"][0]["availableAtomic"], "3000000")
+
+        account = self.client.get("/ledger/accounts/agent_alpha").json()["account"]
+        self.assertEqual(account["agentName"], "Alpha")
+
+        entries = self.client.get("/ledger/accounts/agent_alpha/entries?limit=1").json()["entries"]
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["entryType"], "escrow_lock")
+
+        escrows = self.client.get("/ledger/accounts/agent_alpha/escrows").json()["escrows"]
+        self.assertEqual([item["escrowId"] for item in escrows], [escrow.escrowId])
+
+        filtered_escrows = self.client.get("/ledger/escrows?agentId=agent_alpha&status=locked").json()["escrows"]
+        self.assertEqual([item["escrowId"] for item in filtered_escrows], [escrow.escrowId])
+
+        summary = self.client.get("/ledger/admin/summary").json()
+        self.assertEqual(summary["accounts"], 1)
+        self.assertEqual(summary["ledgerLockedAtomic"], "2000000")
+        self.assertEqual(summary["escrows"], 1)
+
+    def test_claim_domain_routes_do_not_require_matching_owner_email(self) -> None:
+        store = main.get_store()
+        account = store.bind_account_wallet(
+            agent_id="agent_claim",
+            agent_name="Claimable",
+            email="agent-owner@example.com",
+            wallet_address="0x1111111111111111111111111111111111111111",
+            circle_wallet_id="circle-claim",
+            account_type="EOA",
+        )
+
+        candidates = self.client.get("/ledger/claims/candidates").json()["candidates"]
+        candidate = next(item for item in candidates if item["account"]["agentId"] == "agent_claim")
+        self.assertEqual(candidate["account"]["email"], "agent-owner@example.com")
+        self.assertTrue(candidate["claimCode"].startswith("clm_"))
+
+        response = self.client.post(
+            "/ledger/claims",
+            json={
+                "agentId": account.agentId,
+                "claimCode": candidate["claimCode"],
+                "email": "dashboard-user@example.com",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["claimed"])
+        self.assertEqual(payload["ownerEmail"], "dashboard-user@example.com")
+        claimed = self.client.get("/ledger/accounts?claimedByEmail=dashboard-user@example.com").json()["accounts"]
+        self.assertEqual([item["agentId"] for item in claimed], ["agent_claim"])
 
     def test_rejects_non_integer_amounts(self) -> None:
         response = self.client.post(
@@ -175,10 +260,10 @@ class TestStoreRouter(LedgerServiceTestCase):
         main.get_store.cache_clear()
         reloaded_client = TestClient(main.app)
 
-        state = reloaded_client.get("/ledger/state?agentId=agent_buyer").json()
+        state = reloaded_client.get("/ledger/accounts/agent_buyer").json()
 
-        self.assertEqual(state["accounts"][0]["agentId"], "agent_buyer")
-        self.assertEqual(state["accounts"][0]["availableAtomic"], "5000000")
+        self.assertEqual(state["account"]["agentId"], "agent_buyer")
+        self.assertEqual(state["account"]["availableAtomic"], "5000000")
         self.assertTrue(Path(self.db_path).exists())
 
     def test_sqlite_store_writes_records_to_relation_tables(self) -> None:
@@ -197,9 +282,12 @@ class TestStoreRouter(LedgerServiceTestCase):
             entry = connection.execute(
                 "SELECT agentId, entryType, metadata FROM ledger_entries"
             ).fetchone()
-            old_records = connection.execute(
-                "SELECT COUNT(*) FROM ledger_records"
-            ).fetchone()[0]
+            old_records_table = connection.execute(
+                """
+                SELECT name FROM sqlite_master
+                WHERE type = 'table' AND name = 'ledger_records'
+                """
+            ).fetchone()
         finally:
             connection.close()
 
@@ -207,7 +295,94 @@ class TestStoreRouter(LedgerServiceTestCase):
         self.assertEqual(entry[0], "agent_buyer")
         self.assertEqual(entry[1], "credit")
         self.assertEqual(json.loads(entry[2]), {})
-        self.assertEqual(old_records, 0)
+        self.assertIsNone(old_records_table)
+
+    def test_sqlite_store_drops_empty_legacy_records_table_after_relation_writes(self) -> None:
+        self.client.post(
+            "/ledger/accounts/agent_buyer/credit",
+            json={"amountAtomic": "5000000", "reason": "demo funding"},
+        )
+
+        import sqlite3
+
+        connection = sqlite3.connect(self.db_path)
+        try:
+            connection.execute(
+                """
+                CREATE TABLE ledger_records (
+                    collection TEXT NOT NULL,
+                    record_id TEXT NOT NULL,
+                    position INTEGER NOT NULL,
+                    payload TEXT NOT NULL,
+                    PRIMARY KEY (collection, record_id)
+                )
+                """
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        main.get_store().load()
+
+        connection = sqlite3.connect(self.db_path)
+        try:
+            old_records_table = connection.execute(
+                """
+                SELECT name FROM sqlite_master
+                WHERE type = 'table' AND name = 'ledger_records'
+                """
+            ).fetchone()
+        finally:
+            connection.close()
+
+        self.assertIsNone(old_records_table)
+
+    def test_scoped_ledger_state_does_not_load_full_store(self) -> None:
+        self.client.post(
+            "/ledger/accounts/agent_buyer/credit",
+            json={"amountAtomic": "5000000", "reason": "demo funding"},
+        )
+
+        store = main.get_store()
+        with patch.object(store, "load", side_effect=AssertionError("full load is not allowed")):
+            response = self.client.get("/ledger/accounts/agent_buyer/entries")
+
+        self.assertEqual(response.status_code, 200)
+        entries = response.json()["entries"]
+        self.assertEqual(entries[0]["agentId"], "agent_buyer")
+
+    def test_wallet_and_webhook_lookup_do_not_load_full_store(self) -> None:
+        store = main.get_store()
+        account = store.bind_account_wallet(
+            agent_id="agent_lookup",
+            agent_name="Lookup Agent",
+            email="lookup@example.com",
+            wallet_address="0x1111111111111111111111111111111111111111",
+            circle_wallet_id="circle-wallet-lookup",
+            account_type="EOA",
+        )
+        event = main.circle_webhook_event_record(
+            notification_id="notification-lookup",
+            notification_type="transactions.inbound",
+            status="processed",
+            payload={"notification": {"id": "tx-lookup"}},
+            transaction_id="tx-lookup",
+            agent_id=account.agentId,
+            wallet_address=account.walletAddress,
+            circle_wallet_id=account.circleWalletId,
+            reason="test",
+        )
+        store.save_circle_webhook_event(event)
+
+        with patch.object(store, "load", side_effect=AssertionError("full load is not allowed")):
+            found_account = store.find_account_by_wallet(
+                wallet_address=account.walletAddress,
+                circle_wallet_id=None,
+            )
+            found_event = store.get_circle_webhook_event("notification-lookup")
+
+        self.assertEqual(found_account.agentId, "agent_lookup")
+        self.assertEqual(found_event.transactionId, "tx-lookup")
 
     def test_sqlite_store_imports_existing_json_once(self) -> None:
         now = main.now_iso()
@@ -394,16 +569,19 @@ class TestStoreRouter(LedgerServiceTestCase):
                 WHERE notificationId = 'notification_payload'
                 """
             ).fetchone()
-            old_records = connection.execute(
-                "SELECT COUNT(*) FROM ledger_records"
-            ).fetchone()[0]
+            old_records_table = connection.execute(
+                """
+                SELECT name FROM sqlite_master
+                WHERE type = 'table' AND name = 'ledger_records'
+                """
+            ).fetchone()
         finally:
             connection.close()
         self.assertEqual(account, ("agent_payload", "9000000"))
         self.assertEqual(json.loads(entry[0]), {"source": "legacy-records"})
         self.assertEqual(json.loads(circle_event[0]), {"mode": "gateway_deposit"})
         self.assertEqual(json.loads(circle_event[1]), {"legacy": True})
-        self.assertEqual(old_records, 0)
+        self.assertIsNone(old_records_table)
 
     def test_health_migrates_legacy_payload_records_to_relation_tables(self) -> None:
         now = main.now_iso()
@@ -460,13 +638,16 @@ class TestStoreRouter(LedgerServiceTestCase):
                 WHERE agentId = 'agent_health_migrate'
                 """
             ).fetchone()
-            old_records = connection.execute(
-                "SELECT COUNT(*) FROM ledger_records"
-            ).fetchone()[0]
+            old_records_table = connection.execute(
+                """
+                SELECT name FROM sqlite_master
+                WHERE type = 'table' AND name = 'ledger_records'
+                """
+            ).fetchone()
         finally:
             connection.close()
         self.assertEqual(migrated, ("agent_health_migrate", "4000000"))
-        self.assertEqual(old_records, 0)
+        self.assertIsNone(old_records_table)
 
     def test_route_payment_intent_is_served_by_ledger_rest(self) -> None:
         response = self.client.post(
@@ -551,10 +732,10 @@ class TestStoreRouter(LedgerServiceTestCase):
         released = self.client.post(f"/ledger/escrows/{escrow['escrowId']}/release").json()[
             "escrow"
         ]
-        state = self.client.get("/admin/ledger/state").json()
+        accounts_state = self.client.get("/ledger/accounts").json()
 
         self.assertEqual(released["status"], "released")
-        accounts = {item["agentId"]: item for item in state["accounts"]}
+        accounts = {item["agentId"]: item for item in accounts_state["accounts"]}
         self.assertEqual(accounts["agent_buyer"]["availableAtomic"], "2000000")
         self.assertEqual(accounts["agent_buyer"]["lockedAtomic"], "0")
         self.assertEqual(accounts["agent_seller"]["availableAtomic"], "3000000")

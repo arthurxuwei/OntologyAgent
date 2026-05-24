@@ -100,3 +100,41 @@ class LedgerServiceTestCase(unittest.TestCase):
             os.environ.pop(name, None)
         else:
             os.environ[name] = previous
+
+    def ledger_domain_state(self, agent_id: str | None = None) -> dict:
+        if agent_id:
+            account_response = self.client.get(f"/ledger/accounts/{agent_id}")
+            accounts = (
+                [account_response.json()["account"]]
+                if account_response.status_code == 200
+                else []
+            )
+            entries = self.client.get(f"/ledger/accounts/{agent_id}/entries?limit=500").json()[
+                "entries"
+            ]
+            escrows = self.client.get(f"/ledger/accounts/{agent_id}/escrows").json()["escrows"]
+            onramp_sessions = self.client.get(
+                f"/ledger/onramp-sessions?agentId={agent_id}&limit=500"
+            ).json()["onrampSessions"]
+            state = main.get_store().load_for_agent(agent_id).model_dump()
+            state.update(
+                {
+                    "accounts": accounts,
+                    "entries": entries,
+                    "escrows": escrows,
+                    "onrampSessions": onramp_sessions,
+                }
+            )
+            return state
+        return {
+            "accounts": self.client.get("/ledger/accounts").json()["accounts"],
+            "entries": self.client.get("/ledger/entries?limit=500").json()["entries"],
+            "escrows": self.client.get("/ledger/escrows").json()["escrows"],
+            "onrampSessions": self.client.get("/ledger/onramp-sessions?limit=500").json()[
+                "onrampSessions"
+            ],
+            "onrampEvents": main.get_store().load().model_dump()["onrampEvents"],
+            "circleWebhookEvents": main.get_store().load().model_dump()["circleWebhookEvents"],
+            "chainRecords": main.get_store().load().model_dump()["chainRecords"],
+            "settlementRecords": main.get_store().load().model_dump()["settlementRecords"],
+        }

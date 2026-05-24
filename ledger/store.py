@@ -34,19 +34,20 @@ from utils import (
 )
 
 
+def clean_model_record(record: Any, model_type: type[BaseModel]) -> Any:
+    if not isinstance(record, dict):
+        return record
+    allowed_fields = set(model_type.model_fields)
+    return {
+        key: value
+        for key, value in record.items()
+        if key in allowed_fields
+    }
+
+
 def migrate_ledger_state_payload(raw: Any) -> Any:
     if not isinstance(raw, dict):
         return raw
-
-    def clean_model_record(record: Any, model_type: type[BaseModel]) -> Any:
-        if not isinstance(record, dict):
-            return record
-        allowed_fields = set(model_type.model_fields)
-        return {
-            key: value
-            for key, value in record.items()
-            if key in allowed_fields
-        }
 
     legacy_transport_url_key = "chain" + "M" + "cpUrl"
     for record in raw.get("chainRecords") or []:
@@ -221,22 +222,482 @@ def insert_record(
     )
 
 
+def record_to_model(record: dict[str, Any], model_type: type[BaseModel]) -> BaseModel:
+    return model_type.model_validate(clean_model_record(record, model_type))
+
+
 class OffchainLedgerStore:
     def __init__(self, path: str, *, legacy_json_path: Optional[str] = None) -> None:
         self.path = path
         self.legacy_json_path = legacy_json_path
         self._lock = threading.RLock()
 
-    def load(self) -> LedgerState:
+    def _read(self, operation):
         with self._lock:
-            return self._load_unlocked()
+            connection = self._connect()
+            try:
+                self._ensure_schema(connection)
+                self._maybe_import_legacy_json(connection)
+                return operation(connection)
+            finally:
+                connection.close()
+
+    def _write(self, operation):
+        with self._lock:
+            connection = self._connect()
+            try:
+                self._ensure_schema(connection)
+                connection.execute("BEGIN IMMEDIATE")
+                try:
+                    self._maybe_import_legacy_json(connection)
+                    result = operation(connection)
+                    connection.execute(
+                        """
+                        INSERT OR REPLACE INTO ledger_meta(key, value)
+                        VALUES ('updated_at', ?)
+                        """,
+                        (now_iso(),),
+                    )
+                    connection.commit()
+                    return result
+                except Exception:
+                    connection.rollback()
+                    raise
+            finally:
+                connection.close()
+
+    def _next_position(self, connection: sqlite3.Connection, table_name: str) -> int:
+        row = connection.execute(
+            f"SELECT COALESCE(MAX(position), -1) + 1 AS position FROM {quote_identifier(table_name)}"
+        ).fetchone()
+        return int(row["position"])
+
+    def _get_record_by_id(
+        self,
+        connection: sqlite3.Connection,
+        table_name: str,
+        model_type: type[BaseModel],
+        record_id: str,
+    ) -> Optional[BaseModel]:
+        row = connection.execute(
+            f"SELECT * FROM {quote_identifier(table_name)} WHERE record_id = ?",
+            (record_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return record_to_model(record_from_row(row, model_type), model_type)
+
+    def _list_records(
+        self,
+        connection: sqlite3.Connection,
+        table_name: str,
+        model_type: type[BaseModel],
+        where: str = "",
+        params: tuple[Any, ...] = (),
+        order_by: str = "position ASC, record_id ASC",
+    ) -> list[BaseModel]:
+        sql = f"SELECT * FROM {quote_identifier(table_name)}"
+        if where:
+            sql += f" WHERE {where}"
+        sql += f" ORDER BY {order_by}"
+        return [
+            record_to_model(record_from_row(row, model_type), model_type)
+            for row in connection.execute(sql, params).fetchall()
+        ]
+
+    def _upsert_record(
+        self,
+        connection: sqlite3.Connection,
+        table_name: str,
+        model_type: type[BaseModel],
+        record_id: str,
+        record: BaseModel | dict[str, Any],
+    ) -> BaseModel:
+        payload = record.model_dump() if isinstance(record, BaseModel) else record
+        existing = connection.execute(
+            f"SELECT position FROM {quote_identifier(table_name)} WHERE record_id = ?",
+            (record_id,),
+        ).fetchone()
+        position = (
+            int(existing["position"])
+            if existing is not None
+            else self._next_position(connection, table_name)
+        )
+        connection.execute(
+            f"DELETE FROM {quote_identifier(table_name)} WHERE record_id = ?",
+            (record_id,),
+        )
+        insert_record(connection, table_name, model_type, record_id, position, payload)
+        return record_to_model(payload, model_type)
+
+    def _append_record(
+        self,
+        connection: sqlite3.Connection,
+        table_name: str,
+        model_type: type[BaseModel],
+        base_record_id: str,
+        record: BaseModel | dict[str, Any],
+    ) -> BaseModel:
+        payload = record.model_dump() if isinstance(record, BaseModel) else record
+        position = self._next_position(connection, table_name)
+        record_id = base_record_id
+        existing_ids = {
+            row["record_id"]
+            for row in connection.execute(
+                f"SELECT record_id FROM {quote_identifier(table_name)}"
+            ).fetchall()
+        }
+        if record_id in existing_ids:
+            record_id = f"{base_record_id}#{position}"
+        while record_id in existing_ids:
+            record_id = f"{record_id}#duplicate"
+        insert_record(connection, table_name, model_type, record_id, position, payload)
+        return record_to_model(payload, model_type)
+
+    def _account_record_id_for_agent(self, agent_id: str) -> str:
+        return f"{DEFAULT_ASSET}:{agent_id}"
+
+    def _get_account(
+        self,
+        connection: sqlite3.Connection,
+        agent_id: str,
+        *,
+        create: bool,
+    ) -> LedgerAccount:
+        record_id = self._account_record_id_for_agent(agent_id)
+        account = self._get_record_by_id(
+            connection,
+            "ledger_accounts",
+            LedgerAccount,
+            record_id,
+        )
+        if isinstance(account, LedgerAccount):
+            return account
+        if not create:
+            raise ValueError("account not found")
+        current = now_iso()
+        account = LedgerAccount(agentId=agent_id, createdAt=current, updatedAt=current)
+        return self._save_account(connection, account)
+
+    def _find_account_row(
+        self,
+        connection: sqlite3.Connection,
+        agent_id: str,
+    ) -> Optional[LedgerAccount]:
+        account = self._get_record_by_id(
+            connection,
+            "ledger_accounts",
+            LedgerAccount,
+            self._account_record_id_for_agent(agent_id),
+        )
+        return account if isinstance(account, LedgerAccount) else None
+
+    def _save_account(
+        self,
+        connection: sqlite3.Connection,
+        account: LedgerAccount,
+    ) -> LedgerAccount:
+        return self._upsert_record(
+            connection,
+            "ledger_accounts",
+            LedgerAccount,
+            self._account_record_id_for_agent(account.agentId),
+            account,
+        )
+
+    def _save_entry(self, connection: sqlite3.Connection, entry: LedgerEntry) -> LedgerEntry:
+        return self._upsert_record(
+            connection,
+            "ledger_entries",
+            LedgerEntry,
+            entry.entryId,
+            entry,
+        )
+
+    def _save_escrow(self, connection: sqlite3.Connection, escrow: EscrowRecord) -> EscrowRecord:
+        return self._upsert_record(
+            connection,
+            "ledger_escrows",
+            EscrowRecord,
+            escrow.escrowId,
+            escrow,
+        )
+
+    def _save_onramp_session(
+        self,
+        connection: sqlite3.Connection,
+        session: OnrampSessionRecord,
+    ) -> OnrampSessionRecord:
+        return self._upsert_record(
+            connection,
+            "ledger_onramp_sessions",
+            OnrampSessionRecord,
+            session.sessionId,
+            session,
+        )
+
+    def _save_onramp_event(
+        self,
+        connection: sqlite3.Connection,
+        event: OnrampEventRecord,
+    ) -> OnrampEventRecord:
+        return self._upsert_record(
+            connection,
+            "ledger_onramp_events",
+            OnrampEventRecord,
+            event.eventId,
+            event,
+        )
+
+    def load(self) -> LedgerState:
+        return self._read(self._load_state_from_db)
+
+    def list_accounts(
+        self,
+        *,
+        owner_email: Optional[str] = None,
+        claimed_by_email: Optional[str] = None,
+        claimable: bool = False,
+    ) -> list[LedgerAccount]:
+        normalized_owner = normalize_email(owner_email)
+        normalized_claimed_by = normalize_email(claimed_by_email)
+
+        def read(connection: sqlite3.Connection) -> list[LedgerAccount]:
+            clauses: list[str] = []
+            params: list[Any] = []
+            if normalized_owner is not None:
+                clauses.append('LOWER("email") = ?')
+                params.append(normalized_owner)
+            if normalized_claimed_by is not None:
+                clauses.append('LOWER(COALESCE("dashboardClaimedByEmail", "email", "")) = ?')
+                params.append(normalized_claimed_by)
+                clauses.append('"dashboardClaimedAt" IS NOT NULL')
+            if claimable:
+                clauses.append('"dashboardClaimedAt" IS NULL')
+                clauses.append(
+                    '('
+                    'COALESCE("walletAddress", "circleWalletId", "") = "" '
+                    'OR UPPER(COALESCE("accountType", "")) IN ("", "EOA")'
+                    ')'
+                )
+            return self._list_records(
+                connection,
+                "ledger_accounts",
+                LedgerAccount,
+                " AND ".join(clauses),
+                tuple(params),
+                order_by='"updatedAt" DESC, position DESC, record_id DESC',
+            )
+
+        return self._read(read)
+
+    def load_for_agent(self, agent_id: str) -> LedgerState:
+        scoped_agent_id = str(agent_id or "").strip()
+        if not scoped_agent_id:
+            return LedgerState()
+
+        def read(connection: sqlite3.Connection) -> LedgerState:
+            accounts = self._list_records(
+                connection,
+                "ledger_accounts",
+                LedgerAccount,
+                '"agentId" = ?',
+                (scoped_agent_id,),
+            )
+            entries = self._list_records(
+                connection,
+                "ledger_entries",
+                LedgerEntry,
+                '"agentId" = ?',
+                (scoped_agent_id,),
+            )
+            entry_ids = {entry.entryId for entry in entries}
+            escrows = self._list_records(
+                connection,
+                "ledger_escrows",
+                EscrowRecord,
+                '"buyerAgentId" = ? OR "sellerAgentId" = ?',
+                (scoped_agent_id, scoped_agent_id),
+            )
+            escrow_ids = {escrow.escrowId for escrow in escrows}
+            onramp_sessions = self._list_records(
+                connection,
+                "ledger_onramp_sessions",
+                OnrampSessionRecord,
+                '"agentId" = ?',
+                (scoped_agent_id,),
+            )
+            session_ids = {session.sessionId for session in onramp_sessions}
+            onramp_events: list[OnrampEventRecord] = []
+            if session_ids:
+                placeholders = ", ".join("?" for _ in session_ids)
+                onramp_events = self._list_records(
+                    connection,
+                    "ledger_onramp_events",
+                    OnrampEventRecord,
+                    f'"sessionId" IN ({placeholders})',
+                    tuple(sorted(session_ids)),
+                )
+            circle_events = self._list_records(
+                connection,
+                "ledger_circle_webhook_events",
+                CircleWebhookEventRecord,
+                '"agentId" = ?',
+                (scoped_agent_id,),
+            )
+            chain_records = [
+                record
+                for record in self._list_records(connection, "ledger_chain_records", LedgerChainRecord)
+                if (
+                    (record.escrowId and record.escrowId in escrow_ids)
+                    or any(entry_id in entry_ids for entry_id in record.entryIds)
+                )
+            ]
+            settlement_records = self._list_records(
+                connection,
+                "ledger_settlement_records",
+                LedgerSettlementRecord,
+                '"fromAgentId" = ? OR "toAgentId" = ?',
+                (scoped_agent_id, scoped_agent_id),
+            )
+            if escrow_ids:
+                placeholders = ", ".join("?" for _ in escrow_ids)
+                escrow_settlement_records = self._list_records(
+                    connection,
+                    "ledger_settlement_records",
+                    LedgerSettlementRecord,
+                    f'"escrowId" IN ({placeholders})',
+                    tuple(sorted(escrow_ids)),
+                )
+                by_id = {record.recordId: record for record in settlement_records}
+                for record in escrow_settlement_records:
+                    by_id.setdefault(record.recordId, record)
+                settlement_records = list(by_id.values())
+            return LedgerState(
+                accounts=accounts,
+                entries=entries,
+                escrows=escrows,
+                onrampSessions=onramp_sessions,
+                onrampEvents=onramp_events,
+                circleWebhookEvents=circle_events,
+                chainRecords=chain_records,
+                settlementRecords=settlement_records,
+            )
+
+        return self._read(read)
+
+    def list_entries(
+        self,
+        *,
+        agent_id: Optional[str] = None,
+        entry_type: Optional[str] = None,
+        limit: Optional[int] = None,
+    ) -> list[LedgerEntry]:
+        scoped_agent_id = str(agent_id or "").strip()
+        scoped_entry_type = str(entry_type or "").strip()
+        safe_limit = max(0, min(int(limit or 0), 500)) if limit is not None else None
+
+        def read(connection: sqlite3.Connection) -> list[LedgerEntry]:
+            clauses: list[str] = []
+            params: list[Any] = []
+            if scoped_agent_id:
+                clauses.append('"agentId" = ?')
+                params.append(scoped_agent_id)
+            if scoped_entry_type:
+                clauses.append('"entryType" = ?')
+                params.append(scoped_entry_type)
+            sql = "SELECT * FROM ledger_entries"
+            if clauses:
+                sql += " WHERE " + " AND ".join(clauses)
+            sql += ' ORDER BY "createdAt" DESC, position DESC, record_id DESC'
+            if safe_limit is not None:
+                sql += " LIMIT ?"
+                params.append(safe_limit)
+            return [
+                record_to_model(record_from_row(row, LedgerEntry), LedgerEntry)
+                for row in connection.execute(sql, tuple(params)).fetchall()
+            ]
+
+        return self._read(read)
+
+    def list_escrows(
+        self,
+        *,
+        agent_id: Optional[str] = None,
+        status: Optional[str] = None,
+    ) -> list[EscrowRecord]:
+        scoped_agent_id = str(agent_id or "").strip()
+        scoped_status = str(status or "").strip()
+
+        def read(connection: sqlite3.Connection) -> list[EscrowRecord]:
+            clauses: list[str] = []
+            params: list[Any] = []
+            if scoped_agent_id:
+                clauses.append('("buyerAgentId" = ? OR "sellerAgentId" = ?)')
+                params.extend([scoped_agent_id, scoped_agent_id])
+            if scoped_status:
+                clauses.append('"status" = ?')
+                params.append(scoped_status)
+            return self._list_records(
+                connection,
+                "ledger_escrows",
+                EscrowRecord,
+                " AND ".join(clauses),
+                tuple(params),
+                order_by='"updatedAt" DESC, position DESC, record_id DESC',
+            )
+
+        return self._read(read)
+
+    def list_onramp_sessions(
+        self,
+        *,
+        agent_id: Optional[str] = None,
+        limit: Optional[int] = None,
+    ) -> list[OnrampSessionRecord]:
+        scoped_agent_id = str(agent_id or "").strip()
+        safe_limit = max(0, min(int(limit or 0), 500)) if limit is not None else None
+
+        def read(connection: sqlite3.Connection) -> list[OnrampSessionRecord]:
+            clauses: list[str] = []
+            params: list[Any] = []
+            if scoped_agent_id:
+                clauses.append('"agentId" = ?')
+                params.append(scoped_agent_id)
+            sql = "SELECT * FROM ledger_onramp_sessions"
+            if clauses:
+                sql += " WHERE " + " AND ".join(clauses)
+            sql += ' ORDER BY "updatedAt" DESC, position DESC, record_id DESC'
+            if safe_limit is not None:
+                sql += " LIMIT ?"
+                params.append(safe_limit)
+            return [
+                record_to_model(record_from_row(row, OnrampSessionRecord), OnrampSessionRecord)
+                for row in connection.execute(sql, tuple(params)).fetchall()
+            ]
+
+        return self._read(read)
+
+    def admin_summary(self) -> dict[str, Any]:
+        def read(connection: sqlite3.Connection) -> dict[str, Any]:
+            accounts = self._list_records(connection, "ledger_accounts", LedgerAccount)
+            escrows_count = connection.execute("SELECT COUNT(*) AS count FROM ledger_escrows").fetchone()["count"]
+            onramp_count = connection.execute("SELECT COUNT(*) AS count FROM ledger_onramp_sessions").fetchone()["count"]
+            return {
+                "accounts": len(accounts),
+                "circleUsdcAvailable": "0",
+                "gatewayUsdcAvailable": "0",
+                "pendingDeposits": "0",
+                "pendingBatch": "0",
+                "ledgerLockedAtomic": str(sum(int(account.lockedAtomic) for account in accounts)),
+                "escrows": int(escrows_count),
+                "onrampSessions": int(onramp_count),
+            }
+
+        return self._read(read)
 
     def ensure_account(self, agent_id: str) -> LedgerAccount:
-        def mutate(state: LedgerState) -> LedgerAccount:
-            account, _ = self._account_for_update(state, agent_id, create=True)
-            return account
-
-        return self._mutate(mutate)
+        return self._write(lambda connection: self._get_account(connection, agent_id, create=True))
 
     def bind_account_wallet(
         self,
@@ -248,10 +709,8 @@ class OffchainLedgerStore:
         circle_wallet_id: Optional[str],
         account_type: Optional[str] = None,
     ) -> LedgerAccount:
-        def mutate(state: LedgerState) -> LedgerAccount:
-            account, account_index = self._account_for_update(
-                state, agent_id, create=True
-            )
+        def write(connection: sqlite3.Connection) -> LedgerAccount:
+            account = self._get_account(connection, agent_id, create=True)
             updates: dict[str, Any] = {"updatedAt": now_iso()}
             if agent_name is not None:
                 updates["agentName"] = agent_name
@@ -264,10 +723,9 @@ class OffchainLedgerStore:
             if account_type is not None:
                 updates["accountType"] = account_type
             updated = account.model_copy(update=updates)
-            state.accounts[account_index] = updated
-            return updated
+            return self._save_account(connection, updated)
 
-        return self._mutate(mutate)
+        return self._write(write)
 
     def find_account_by_wallet(
         self,
@@ -288,44 +746,54 @@ class OffchainLedgerStore:
         if normalized_wallet_address is None and normalized_circle_wallet_id is None:
             return None
 
-        state = self.load()
-        for account in state.accounts:
-            if (
-                normalized_circle_wallet_id is not None
-                and account.circleWalletId == normalized_circle_wallet_id
-            ):
-                return account
-            if (
-                normalized_wallet_address is not None
-                and isinstance(account.walletAddress, str)
-                and account.walletAddress.lower() == normalized_wallet_address
-            ):
-                return account
-        return None
+        def read(connection: sqlite3.Connection) -> Optional[LedgerAccount]:
+            clauses: list[str] = []
+            params: list[Any] = []
+            if normalized_circle_wallet_id is not None:
+                clauses.append('"circleWalletId" = ?')
+                params.append(normalized_circle_wallet_id)
+            if normalized_wallet_address is not None:
+                clauses.append('LOWER("walletAddress") = ?')
+                params.append(normalized_wallet_address)
+            rows = self._list_records(
+                connection,
+                "ledger_accounts",
+                LedgerAccount,
+                " OR ".join(clauses),
+                tuple(params),
+                order_by="position ASC, record_id ASC",
+            )
+            return rows[0] if rows else None
+
+        return self._read(read)
 
     def get_circle_webhook_event(
         self,
         notification_id: str,
     ) -> Optional[CircleWebhookEventRecord]:
-        state = self.load()
-        for event in state.circleWebhookEvents:
-            if event.notificationId == notification_id:
-                return event
-        return None
+        event = self._read(
+            lambda connection: self._get_record_by_id(
+                connection,
+                "ledger_circle_webhook_events",
+                CircleWebhookEventRecord,
+                notification_id,
+            )
+        )
+        return event if isinstance(event, CircleWebhookEventRecord) else None
 
     def save_circle_webhook_event(
         self,
         event: CircleWebhookEventRecord,
     ) -> CircleWebhookEventRecord:
-        def mutate(state: LedgerState) -> CircleWebhookEventRecord:
-            for index, existing in enumerate(state.circleWebhookEvents):
-                if existing.notificationId == event.notificationId:
-                    state.circleWebhookEvents[index] = event
-                    return event
-            state.circleWebhookEvents.append(event)
-            return event
-
-        return self._mutate(mutate)
+        return self._write(
+            lambda connection: self._upsert_record(
+                connection,
+                "ledger_circle_webhook_events",
+                CircleWebhookEventRecord,
+                event.notificationId,
+                event,
+            )
+        )
 
     def credit(
         self,
@@ -337,8 +805,8 @@ class OffchainLedgerStore:
     ) -> tuple[LedgerAccount, LedgerEntry]:
         amount = parse_positive_atomic(amount_atomic)
 
-        def mutate(state: LedgerState) -> tuple[LedgerAccount, LedgerEntry]:
-            account, account_index = self._account_for_update(state, agent_id, create=True)
+        def write(connection: sqlite3.Connection) -> tuple[LedgerAccount, LedgerEntry]:
+            account = self._get_account(connection, agent_id, create=True)
             current = now_iso()
             updated = account.model_copy(
                 update={
@@ -346,7 +814,6 @@ class OffchainLedgerStore:
                     "updatedAt": current,
                 }
             )
-            state.accounts[account_index] = updated
             entry = self._entry(
                 entry_type="credit",
                 agent_id=agent_id,
@@ -354,10 +821,9 @@ class OffchainLedgerStore:
                 reason=reason,
                 metadata=metadata,
             )
-            state.entries.append(entry)
-            return updated, entry
+            return self._save_account(connection, updated), self._save_entry(connection, entry)
 
-        return self._mutate(mutate)
+        return self._write(write)
 
     def record_dashboard_event(
         self,
@@ -372,11 +838,10 @@ class OffchainLedgerStore:
         metadata: dict[str, Any],
         escrow_id: Optional[str] = None,
     ) -> tuple[LedgerAccount, LedgerEntry]:
-        def mutate(state: LedgerState) -> tuple[LedgerAccount, LedgerEntry]:
-            account, account_index = self._account_for_update(state, agent_id, create=True)
+        def write(connection: sqlite3.Connection) -> tuple[LedgerAccount, LedgerEntry]:
+            account = self._get_account(connection, agent_id, create=True)
             current = now_iso()
             updated = account.model_copy(update={"updatedAt": current})
-            state.accounts[account_index] = updated
             entry = self._entry(
                 entry_type=entry_type,
                 agent_id=agent_id,
@@ -384,10 +849,9 @@ class OffchainLedgerStore:
                 reason=reason,
                 metadata=metadata,
             )
-            state.entries.append(entry)
-            return updated, entry
+            return self._save_account(connection, updated), self._save_entry(connection, entry)
 
-        return self._mutate(mutate)
+        return self._write(write)
 
     def validate_agent_transfer(
         self,
@@ -397,15 +861,18 @@ class OffchainLedgerStore:
         amount_atomic: str,
     ) -> None:
         parse_positive_atomic(amount_atomic)
-        state = self.load()
-        sender = self._find_account(state, from_agent_id)
-        receiver = self._find_account(state, to_agent_id)
-        if sender is None:
-            raise ValueError("sender account not found")
-        if receiver is None:
-            raise ValueError("receiver account not found")
-        self._require_circle_wallet(sender, "sender")
-        self._require_circle_wallet(receiver, "receiver")
+
+        def read(connection: sqlite3.Connection) -> None:
+            sender = self._find_account_row(connection, from_agent_id)
+            receiver = self._find_account_row(connection, to_agent_id)
+            if sender is None:
+                raise ValueError("sender account not found")
+            if receiver is None:
+                raise ValueError("receiver account not found")
+            self._require_circle_wallet(sender, "sender")
+            self._require_circle_wallet(receiver, "receiver")
+
+        self._read(read)
 
     def validate_withdrawal(
         self,
@@ -417,29 +884,62 @@ class OffchainLedgerStore:
         available_label: str = "available balance",
     ) -> LedgerAccount:
         amount = parse_positive_atomic(amount_atomic)
-        state = self.load()
-        account = self._find_account(state, agent_id)
-        if account is None:
-            raise ValueError("agent account not found")
-        self._require_circle_wallet(account, "source")
-        balance_basis = (
-            parse_nonnegative_atomic(available_atomic)
-            if available_atomic is not None
-            else parse_nonnegative_atomic(account.availableAtomic)
-        )
-        if balance_basis < amount:
-            raise ValueError(f"amount exceeds {available_label}")
-        return account
+        def read(connection: sqlite3.Connection) -> LedgerAccount:
+            account = self._find_account_row(connection, agent_id)
+            if account is None:
+                raise ValueError("agent account not found")
+            self._require_circle_wallet(account, "source")
+            balance_basis = (
+                parse_nonnegative_atomic(available_atomic)
+                if available_atomic is not None
+                else parse_nonnegative_atomic(account.availableAtomic)
+            )
+            if balance_basis < amount:
+                raise ValueError(f"amount exceeds {available_label}")
+            return account
+
+        return self._read(read)
 
     def account_by_email(self, email: str) -> LedgerAccount:
         normalized = normalize_email(email)
         if normalized is None:
             raise ValueError("email must not be empty")
-        state = self.load()
-        for account in state.accounts:
-            if normalize_email(account.email) == normalized:
-                return account
-        raise LookupError(f"ledger account email not found: {normalized}")
+        def read(connection: sqlite3.Connection) -> LedgerAccount:
+            accounts = self._list_records(
+                connection,
+                "ledger_accounts",
+                LedgerAccount,
+                'LOWER("email") = ?',
+                (normalized,),
+            )
+            if accounts:
+                return accounts[0]
+            raise LookupError(f"ledger account email not found: {normalized}")
+
+        return self._read(read)
+
+    def claimed_agent_ids_for_dashboard_email(self, email: str) -> list[str]:
+        normalized = normalize_email(email)
+        if normalized is None:
+            return []
+
+        def read(connection: sqlite3.Connection) -> list[str]:
+            accounts = self._list_records(
+                connection,
+                "ledger_accounts",
+                LedgerAccount,
+                '"dashboardClaimedAt" IS NOT NULL',
+            )
+            return [
+                account.agentId
+                for account in accounts
+                if normalize_email(account.dashboardClaimedByEmail or account.email) == normalized
+            ]
+
+        return self._read(read)
+
+    def get_account(self, agent_id: str) -> Optional[LedgerAccount]:
+        return self._read(lambda connection: self._find_account_row(connection, agent_id))
 
     def claim_dashboard_account(
         self,
@@ -453,12 +953,8 @@ class OffchainLedgerStore:
             raise ValueError("email must not be empty")
         normalized_dashboard_email = normalize_email(dashboard_email) or normalized
 
-        def mutate(state: LedgerState) -> LedgerAccount:
-            account, account_index = self._account_for_update(
-                state,
-                agent_id,
-                create=False,
-            )
+        def write(connection: sqlite3.Connection) -> LedgerAccount:
+            account = self._get_account(connection, agent_id, create=False)
             if normalize_email(account.email) != normalized:
                 raise ValueError("agent is not assigned to this email")
             updated = account.model_copy(
@@ -468,10 +964,9 @@ class OffchainLedgerStore:
                     "updatedAt": now_iso(),
                 }
             )
-            state.accounts[account_index] = updated
-            return updated
+            return self._save_account(connection, updated)
 
-        return self._mutate(mutate)
+        return self._write(write)
 
     def reset_dashboard_claims(
         self,
@@ -484,10 +979,23 @@ class OffchainLedgerStore:
             if str(agent_id).strip()
         }
 
-        def mutate(state: LedgerState) -> list[LedgerAccount]:
+        def write(connection: sqlite3.Connection) -> list[LedgerAccount]:
             updated_accounts: list[LedgerAccount] = []
             current = now_iso()
-            for index, account in enumerate(state.accounts):
+            where = ""
+            params: tuple[Any, ...] = ()
+            if requested:
+                placeholders = ", ".join("?" for _ in requested)
+                where = f'"agentId" IN ({placeholders})'
+                params = tuple(sorted(requested))
+            accounts = self._list_records(
+                connection,
+                "ledger_accounts",
+                LedgerAccount,
+                where,
+                params,
+            )
+            for account in accounts:
                 if requested and account.agentId not in requested:
                     continue
                 if not account.dashboardClaimedAt and not account.dashboardClaimedByEmail:
@@ -499,11 +1007,10 @@ class OffchainLedgerStore:
                         "updatedAt": current,
                     }
                 )
-                state.accounts[index] = updated
-                updated_accounts.append(updated)
+                updated_accounts.append(self._save_account(connection, updated))
             return updated_accounts
 
-        return self._mutate(mutate)
+        return self._write(write)
 
     def transfer_between_agents(
         self,
@@ -518,13 +1025,9 @@ class OffchainLedgerStore:
     ) -> tuple[LedgerAccount, LedgerAccount, list[LedgerEntry]]:
         amount = parse_positive_atomic(amount_atomic)
 
-        def mutate(state: LedgerState) -> tuple[LedgerAccount, LedgerAccount, list[LedgerEntry]]:
-            sender, _sender_index = self._account_for_update(
-                state, from_agent_id, create=False
-            )
-            receiver, _receiver_index = self._account_for_update(
-                state, to_agent_id, create=False
-            )
+        def write(connection: sqlite3.Connection) -> tuple[LedgerAccount, LedgerAccount, list[LedgerEntry]]:
+            sender = self._get_account(connection, from_agent_id, create=False)
+            receiver = self._get_account(connection, to_agent_id, create=False)
             self._require_circle_wallet(sender, "sender")
             self._require_circle_wallet(receiver, "receiver")
 
@@ -548,10 +1051,11 @@ class OffchainLedgerStore:
                 reason=reason or "agent transfer received",
                 metadata={**entry_metadata, "counterpartyAgentId": from_agent_id},
             )
-            state.entries.extend([sender_entry, receiver_entry])
+            self._save_entry(connection, sender_entry)
+            self._save_entry(connection, receiver_entry)
             return sender, receiver, [sender_entry, receiver_entry]
 
-        return self._mutate(mutate)
+        return self._write(write)
 
     def withdraw(
         self,
@@ -569,10 +1073,8 @@ class OffchainLedgerStore:
         amount = parse_positive_atomic(amount_atomic)
         destination = normalize_evm_address(destination_address)
 
-        def mutate(state: LedgerState) -> tuple[LedgerAccount, LedgerEntry]:
-            account, account_index = self._account_for_update(
-                state, agent_id, create=False
-            )
+        def write(connection: sqlite3.Connection) -> tuple[LedgerAccount, LedgerEntry]:
+            account = self._get_account(connection, agent_id, create=False)
             self._require_circle_wallet(account, "source")
             balance_basis = (
                 parse_nonnegative_atomic(available_atomic)
@@ -609,11 +1111,9 @@ class OffchainLedgerStore:
                 reason=reason or "withdrawal",
                 metadata=entry_metadata,
             )
-            state.accounts[account_index] = updated
-            state.entries.append(entry)
-            return updated, entry
+            return self._save_account(connection, updated), self._save_entry(connection, entry)
 
-        return self._mutate(mutate)
+        return self._write(write)
 
     def withdrawal_submitted(
         self,
@@ -658,32 +1158,35 @@ class OffchainLedgerStore:
         amount = parse_positive_atomic(amount_atomic)
         destination = normalize_evm_address(destination_address)
 
-        def mutate(state: LedgerState) -> LedgerEntry:
-            for index, entry in enumerate(state.entries):
-                if entry.entryId != entry_id:
-                    continue
-                if entry.agentId != agent_id:
-                    raise ValueError("withdrawal entry does not match agent")
-                updated = entry.model_copy(
-                    update={
-                        "reason": reason or "withdrawal failed",
-                        "metadata": {
-                            **metadata,
-                            "dashboardStatus": "failed",
-                            "amountAtomic": str(amount),
-                            "withdrawalId": withdrawal_id,
-                            "failureReason": failure_reason,
-                            "destinationAddress": destination,
-                            "counterparty": f"External · {short_address(destination)}",
-                            "network": "Base",
-                        },
-                    }
-                )
-                state.entries[index] = updated
-                return updated
-            raise ValueError("withdrawal entry not found")
+        def write(connection: sqlite3.Connection) -> LedgerEntry:
+            entry = self._get_record_by_id(
+                connection,
+                "ledger_entries",
+                LedgerEntry,
+                entry_id,
+            )
+            if not isinstance(entry, LedgerEntry):
+                raise ValueError("withdrawal entry not found")
+            if entry.agentId != agent_id:
+                raise ValueError("withdrawal entry does not match agent")
+            updated = entry.model_copy(
+                update={
+                    "reason": reason or "withdrawal failed",
+                    "metadata": {
+                        **metadata,
+                        "dashboardStatus": "failed",
+                        "amountAtomic": str(amount),
+                        "withdrawalId": withdrawal_id,
+                        "failureReason": failure_reason,
+                        "destinationAddress": destination,
+                        "counterparty": f"External · {short_address(destination)}",
+                        "network": "Base",
+                    },
+                }
+            )
+            return self._save_entry(connection, updated)
 
-        return self._mutate(mutate)
+        return self._write(write)
 
     def withdrawal_completed(
         self,
@@ -702,10 +1205,8 @@ class OffchainLedgerStore:
         amount = parse_positive_atomic(amount_atomic)
         destination = normalize_evm_address(destination_address)
 
-        def mutate(state: LedgerState) -> tuple[LedgerAccount, LedgerEntry]:
-            account, account_index = self._account_for_update(
-                state, agent_id, create=False
-            )
+        def write(connection: sqlite3.Connection) -> tuple[LedgerAccount, LedgerEntry]:
+            account = self._get_account(connection, agent_id, create=False)
             self._require_circle_wallet(account, "source")
             balance_basis = (
                 parse_nonnegative_atomic(available_atomic)
@@ -735,26 +1236,31 @@ class OffchainLedgerStore:
             }
             if settlement_record_id is not None:
                 entry_metadata["settlementRecordId"] = settlement_record_id
-            for index, entry in enumerate(state.entries):
-                if entry.entryId != entry_id:
-                    continue
-                if entry.agentId != agent_id:
-                    raise ValueError("withdrawal entry does not match agent")
-                updated_entry = entry.model_copy(
-                    update={
-                        "entryType": "withdrawal",
-                        "availableDeltaAtomic": str(-amount),
-                        "lockedDeltaAtomic": "0",
-                        "reason": reason or "withdrawal",
-                        "metadata": entry_metadata,
-                    }
-                )
-                state.accounts[account_index] = updated_account
-                state.entries[index] = updated_entry
-                return updated_account, updated_entry
-            raise ValueError("withdrawal entry not found")
+            entry = self._get_record_by_id(
+                connection,
+                "ledger_entries",
+                LedgerEntry,
+                entry_id,
+            )
+            if not isinstance(entry, LedgerEntry):
+                raise ValueError("withdrawal entry not found")
+            if entry.agentId != agent_id:
+                raise ValueError("withdrawal entry does not match agent")
+            updated_entry = entry.model_copy(
+                update={
+                    "entryType": "withdrawal",
+                    "availableDeltaAtomic": str(-amount),
+                    "lockedDeltaAtomic": "0",
+                    "reason": reason or "withdrawal",
+                    "metadata": entry_metadata,
+                }
+            )
+            return (
+                self._save_account(connection, updated_account),
+                self._save_entry(connection, updated_entry),
+            )
 
-        return self._mutate(mutate)
+        return self._write(write)
 
     def create_escrow(
         self,
@@ -768,10 +1274,8 @@ class OffchainLedgerStore:
     ) -> tuple[EscrowRecord, LedgerEntry]:
         amount = parse_positive_atomic(amount_atomic)
 
-        def mutate(state: LedgerState) -> tuple[EscrowRecord, LedgerEntry]:
-            buyer, buyer_index = self._account_for_update(
-                state, buyer_agent_id, create=False
-            )
+        def write(connection: sqlite3.Connection) -> tuple[EscrowRecord, LedgerEntry]:
+            buyer = self._get_account(connection, buyer_agent_id, create=False)
             if int(buyer.availableAtomic) < amount:
                 raise ValueError("insufficient available balance")
 
@@ -803,36 +1307,38 @@ class OffchainLedgerStore:
                 reason="escrow created",
                 metadata=metadata,
             )
-            state.accounts[buyer_index] = updated_buyer
-            state.escrows.append(escrow)
-            state.entries.append(entry)
+            self._save_account(connection, updated_buyer)
+            self._save_escrow(connection, escrow)
+            self._save_entry(connection, entry)
             return escrow, entry
 
-        return self._mutate(mutate)
+        return self._write(write)
 
     def release_escrow(self, escrow_id: str) -> EscrowRecord:
-        def mutate(state: LedgerState) -> EscrowRecord:
-            escrow, escrow_index = self._escrow_for_update(state, escrow_id)
+        def write(connection: sqlite3.Connection) -> EscrowRecord:
+            escrow = self.get_escrow_from_connection(connection, escrow_id)
             self._require_locked(escrow)
             amount = int(escrow.amountAtomic)
-            buyer, buyer_index = self._account_for_update(
-                state, escrow.buyerAgentId, create=False
-            )
-            seller, seller_index = self._account_for_update(
-                state, escrow.sellerAgentId, create=True
-            )
+            buyer = self._get_account(connection, escrow.buyerAgentId, create=False)
+            seller = self._get_account(connection, escrow.sellerAgentId, create=True)
             current = now_iso()
-            state.accounts[buyer_index] = buyer.model_copy(
-                update={
-                    "lockedAtomic": add_atomic(buyer.lockedAtomic, -amount),
-                    "updatedAt": current,
-                }
+            self._save_account(
+                connection,
+                buyer.model_copy(
+                    update={
+                        "lockedAtomic": add_atomic(buyer.lockedAtomic, -amount),
+                        "updatedAt": current,
+                    }
+                ),
             )
-            state.accounts[seller_index] = seller.model_copy(
-                update={
-                    "availableAtomic": add_atomic(seller.availableAtomic, amount),
-                    "updatedAt": current,
-                }
+            self._save_account(
+                connection,
+                seller.model_copy(
+                    update={
+                        "availableAtomic": add_atomic(seller.availableAtomic, amount),
+                        "updatedAt": current,
+                    }
+                ),
             )
             updated_escrow = escrow.model_copy(
                 update={
@@ -841,44 +1347,47 @@ class OffchainLedgerStore:
                     "updatedAt": current,
                 }
             )
-            state.escrows[escrow_index] = updated_escrow
-            state.entries.append(
+            self._save_escrow(connection, updated_escrow)
+            self._save_entry(
+                connection,
                 self._entry(
                     entry_type="escrow_release",
                     agent_id=escrow.buyerAgentId,
                     locked_delta=-amount,
                     escrow_id=escrow.escrowId,
                     reason="escrow released",
-                )
+                ),
             )
-            state.entries.append(
+            self._save_entry(
+                connection,
                 self._entry(
                     entry_type="escrow_release",
                     agent_id=escrow.sellerAgentId,
                     available_delta=amount,
                     escrow_id=escrow.escrowId,
                     reason="escrow released",
-                )
+                ),
             )
             return updated_escrow
 
-        return self._mutate(mutate)
+        return self._write(write)
 
     def refund_escrow(self, escrow_id: str) -> EscrowRecord:
-        def mutate(state: LedgerState) -> EscrowRecord:
-            escrow, escrow_index = self._escrow_for_update(state, escrow_id)
+        def write(connection: sqlite3.Connection) -> EscrowRecord:
+            escrow = self.get_escrow_from_connection(connection, escrow_id)
             self._require_locked(escrow)
             amount = int(escrow.amountAtomic)
-            buyer, buyer_index = self._account_for_update(
-                state, escrow.buyerAgentId, create=False
-            )
+            buyer = self._get_account(connection, escrow.buyerAgentId, create=False)
             current = now_iso()
-            state.accounts[buyer_index] = buyer.model_copy(
-                update={
-                    "availableAtomic": add_atomic(buyer.availableAtomic, amount),
-                    "lockedAtomic": add_atomic(buyer.lockedAtomic, -amount),
-                    "updatedAt": current,
-                }
+            self._save_account(
+                connection,
+                buyer.model_copy(
+                    update={
+                        "availableAtomic": add_atomic(buyer.availableAtomic, amount),
+                        "lockedAtomic": add_atomic(buyer.lockedAtomic, -amount),
+                        "updatedAt": current,
+                    }
+                ),
             )
             updated_escrow = escrow.model_copy(
                 update={
@@ -887,8 +1396,9 @@ class OffchainLedgerStore:
                     "updatedAt": current,
                 }
             )
-            state.escrows[escrow_index] = updated_escrow
-            state.entries.append(
+            self._save_escrow(connection, updated_escrow)
+            self._save_entry(
+                connection,
                 self._entry(
                     entry_type="escrow_refund",
                     agent_id=escrow.buyerAgentId,
@@ -896,11 +1406,11 @@ class OffchainLedgerStore:
                     locked_delta=-amount,
                     escrow_id=escrow.escrowId,
                     reason="escrow refunded",
-                )
+                ),
             )
             return updated_escrow
 
-        return self._mutate(mutate)
+        return self._write(write)
 
     def entries_for_escrow_event(
         self,
@@ -908,69 +1418,126 @@ class OffchainLedgerStore:
         escrow_id: str,
         entry_type: Literal["escrow_lock", "escrow_release", "escrow_refund"],
     ) -> list[LedgerEntry]:
-        state = self.load()
-        return [
-            entry
-            for entry in state.entries
-            if entry.escrowId == escrow_id and entry.entryType == entry_type
-        ]
+        return self._read(
+            lambda connection: self._list_records(
+                connection,
+                "ledger_entries",
+                LedgerEntry,
+                '"escrowId" = ? AND "entryType" = ?',
+                (escrow_id, entry_type),
+            )
+        )
 
     def add_chain_record(self, record: LedgerChainRecord) -> LedgerChainRecord:
-        def mutate(state: LedgerState) -> LedgerChainRecord:
-            state.chainRecords.append(record)
-            return record
-
-        return self._mutate(mutate)
+        return self._write(
+            lambda connection: self._append_record(
+                connection,
+                "ledger_chain_records",
+                LedgerChainRecord,
+                record.recordId,
+                record,
+            )
+        )
 
     def add_settlement_record(self, record: LedgerSettlementRecord) -> LedgerSettlementRecord:
-        def mutate(state: LedgerState) -> LedgerSettlementRecord:
-            state.settlementRecords.append(record)
-            return record
-
-        return self._mutate(mutate)
+        return self._write(
+            lambda connection: self._append_record(
+                connection,
+                "ledger_settlement_records",
+                LedgerSettlementRecord,
+                record.recordId,
+                record,
+            )
+        )
 
     def get_escrow(self, escrow_id: str) -> EscrowRecord:
-        state = self.load()
-        for escrow in state.escrows:
-            if escrow.escrowId == escrow_id:
-                return escrow
+        return self._read(lambda connection: self.get_escrow_from_connection(connection, escrow_id))
+
+    def get_escrow_from_connection(
+        self,
+        connection: sqlite3.Connection,
+        escrow_id: str,
+    ) -> EscrowRecord:
+        escrow = self._get_record_by_id(
+            connection,
+            "ledger_escrows",
+            EscrowRecord,
+            escrow_id,
+        )
+        if isinstance(escrow, EscrowRecord):
+            return escrow
         raise LookupError("escrow not found")
 
     def find_onramp_session_by_idempotency_key(
         self,
         idempotency_key: str,
     ) -> Optional[OnrampSessionRecord]:
-        state = self.load()
-        for session in state.onrampSessions:
-            if session.idempotencyKey == idempotency_key:
-                return session
-        return None
+        def read(connection: sqlite3.Connection) -> Optional[OnrampSessionRecord]:
+            sessions = self._list_records(
+                connection,
+                "ledger_onramp_sessions",
+                OnrampSessionRecord,
+                '"idempotencyKey" = ?',
+                (idempotency_key,),
+            )
+            return sessions[0] if sessions else None
+
+        return self._read(read)
 
     def get_onramp_session(self, session_id: str) -> OnrampSessionRecord:
-        state = self.load()
-        for session in state.onrampSessions:
-            if session.sessionId == session_id:
-                return session
+        return self._read(lambda connection: self._get_onramp_session(connection, session_id))
+
+    def _get_onramp_session(
+        self,
+        connection: sqlite3.Connection,
+        session_id: str,
+    ) -> OnrampSessionRecord:
+        session = self._get_record_by_id(
+            connection,
+            "ledger_onramp_sessions",
+            OnrampSessionRecord,
+            session_id,
+        )
+        if isinstance(session, OnrampSessionRecord):
+            return session
         raise LookupError("onramp session not found")
 
     def add_onramp_session(self, session: OnrampSessionRecord) -> OnrampSessionRecord:
-        def mutate(state: LedgerState) -> OnrampSessionRecord:
-            for existing in state.onrampSessions:
-                if existing.idempotencyKey == session.idempotencyKey:
-                    return existing
-            state.onrampSessions.append(session)
-            state.onrampEvents.append(
+        def write(connection: sqlite3.Connection) -> OnrampSessionRecord:
+            existing = self.find_onramp_session_by_idempotency_key_in_connection(
+                connection,
+                session.idempotencyKey,
+            )
+            if existing is not None:
+                return existing
+            saved = self._save_onramp_session(connection, session)
+            self._save_onramp_event(
+                connection,
                 OnrampEventRecord(
                     eventId=f"evt_{uuid.uuid4().hex}",
                     sessionId=session.sessionId,
                     eventType="session_created",
                     rawPayload={"idempotencyKey": session.idempotencyKey},
                     createdAt=session.createdAt,
-                )
+                ),
             )
-            return session
+            return saved
 
-        return self._mutate(mutate)
+        return self._write(write)
+
+    def find_onramp_session_by_idempotency_key_in_connection(
+        self,
+        connection: sqlite3.Connection,
+        idempotency_key: str,
+    ) -> Optional[OnrampSessionRecord]:
+        sessions = self._list_records(
+            connection,
+            "ledger_onramp_sessions",
+            OnrampSessionRecord,
+            '"idempotencyKey" = ?',
+            (idempotency_key,),
+        )
+        return sessions[0] if sessions else None
 
     def confirm_onramp_session(
         self,
@@ -979,8 +1546,8 @@ class OffchainLedgerStore:
     ) -> OnrampSessionRecord:
         amount = parse_positive_atomic(request.amountAtomic)
 
-        def mutate(state: LedgerState) -> OnrampSessionRecord:
-            session, session_index = self._onramp_session_for_update(state, session_id)
+        def write(connection: sqlite3.Connection) -> OnrampSessionRecord:
+            session = self._get_onramp_session(connection, session_id)
             if session.status == "credited":
                 return session
 
@@ -995,9 +1562,7 @@ class OffchainLedgerStore:
             if request.txHash:
                 metadata["txHash"] = request.txHash
 
-            account, account_index = self._account_for_update(
-                state, session.agentId, create=True
-            )
+            account = self._get_account(connection, session.agentId, create=True)
             current = now_iso()
             updated_account = account.model_copy(
                 update={
@@ -1023,10 +1588,11 @@ class OffchainLedgerStore:
                     "updatedAt": current,
                 }
             )
-            state.accounts[account_index] = updated_account
-            state.entries.append(entry)
-            state.onrampSessions[session_index] = updated_session
-            state.onrampEvents.append(
+            self._save_account(connection, updated_account)
+            self._save_entry(connection, entry)
+            self._save_onramp_session(connection, updated_session)
+            self._save_onramp_event(
+                connection,
                 OnrampEventRecord(
                     eventId=f"evt_{uuid.uuid4().hex}",
                     sessionId=session.sessionId,
@@ -1034,56 +1600,11 @@ class OffchainLedgerStore:
                     providerEventId=request.providerEventId,
                     rawPayload=request.rawPayload,
                     createdAt=current,
-                )
+                ),
             )
             return updated_session
 
-        return self._mutate(mutate)
-
-    def _load_unlocked(self) -> LedgerState:
-        connection = self._connect()
-        try:
-            self._ensure_schema(connection)
-            self._maybe_import_legacy_json(connection)
-            return self._load_state_from_db(connection)
-        finally:
-            connection.close()
-
-    def _save_unlocked(self, state: LedgerState) -> None:
-        parent_dir = os.path.dirname(self.path)
-        if parent_dir:
-            os.makedirs(parent_dir, exist_ok=True)
-        connection = self._connect()
-        try:
-            self._ensure_schema(connection)
-            connection.execute("BEGIN IMMEDIATE")
-            try:
-                self._replace_state(connection, state)
-                connection.commit()
-            except Exception:
-                connection.rollback()
-                raise
-        finally:
-            connection.close()
-
-    def _mutate(self, mutator):
-        with self._lock:
-            connection = self._connect()
-            try:
-                self._ensure_schema(connection)
-                connection.execute("BEGIN IMMEDIATE")
-                try:
-                    self._maybe_import_legacy_json(connection)
-                    state = self._load_state_from_db(connection)
-                    result = mutator(state)
-                    self._replace_state(connection, state)
-                    connection.commit()
-                    return result
-                except Exception:
-                    connection.rollback()
-                    raise
-            finally:
-                connection.close()
+        return self._write(write)
 
     def _connect(self) -> sqlite3.Connection:
         parent_dir = os.path.dirname(self.path)
@@ -1106,36 +1627,116 @@ class OffchainLedgerStore:
         )
         connection.execute(
             """
-            CREATE TABLE IF NOT EXISTS ledger_records (
-                collection TEXT NOT NULL,
-                record_id TEXT NOT NULL,
-                position INTEGER NOT NULL,
-                payload TEXT NOT NULL,
-                PRIMARY KEY (collection, record_id)
-            )
-            """
-        )
-        connection.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_ledger_records_collection_position
-            ON ledger_records(collection, position)
+            INSERT OR REPLACE INTO ledger_meta(key, value)
+            VALUES ('schema_version', '2')
             """
         )
         for table_name, _state_field, model_type, _record_id in LEDGER_COLLECTIONS:
             self._ensure_record_table(connection, table_name, model_type)
+        self._ensure_query_indexes(connection)
+
+    def _table_exists(self, connection: sqlite3.Connection, table_name: str) -> bool:
+        return (
+            connection.execute(
+                """
+                SELECT 1 FROM sqlite_master
+                WHERE type = 'table' AND name = ?
+                """,
+                (table_name,),
+            ).fetchone()
+            is not None
+        )
+
+    def _ensure_query_indexes(self, connection: sqlite3.Connection) -> None:
         connection.execute(
             """
-            INSERT OR REPLACE INTO ledger_meta(key, value)
-            VALUES ('schema_version', '2')
+            CREATE INDEX IF NOT EXISTS idx_ledger_accounts_agent_asset
+            ON ledger_accounts("agentId", "asset")
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_ledger_accounts_circle_wallet
+            ON ledger_accounts("circleWalletId")
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_ledger_accounts_wallet_address
+            ON ledger_accounts("walletAddress")
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_ledger_accounts_email
+            ON ledger_accounts("email")
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_ledger_entries_agent_type_created
+            ON ledger_entries("agentId", "entryType", "createdAt")
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_ledger_entries_escrow
+            ON ledger_entries("escrowId")
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_ledger_circle_webhook_events_transaction
+            ON ledger_circle_webhook_events("transactionId")
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_ledger_circle_webhook_events_agent
+            ON ledger_circle_webhook_events("agentId")
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_ledger_onramp_sessions_agent
+            ON ledger_onramp_sessions("agentId")
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_ledger_onramp_sessions_idempotency
+            ON ledger_onramp_sessions("idempotencyKey")
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_ledger_onramp_events_session
+            ON ledger_onramp_events("sessionId")
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_ledger_chain_records_escrow
+            ON ledger_chain_records("escrowId")
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_ledger_settlement_records_from_to
+            ON ledger_settlement_records("fromAgentId", "toAgentId")
             """
         )
 
     def _maybe_import_legacy_json(self, connection: sqlite3.Connection) -> None:
         if self._relation_record_count(connection) > 0:
+            self._drop_legacy_records_table(connection)
             return
-        record_count = connection.execute(
-            "SELECT COUNT(*) AS count FROM ledger_records"
-        ).fetchone()["count"]
+        if not self._table_exists(connection, "ledger_records"):
+            record_count = 0
+        else:
+            record_count = connection.execute(
+                "SELECT COUNT(*) AS count FROM ledger_records"
+            ).fetchone()["count"]
         if record_count:
             state = self._load_state_from_legacy_records(connection)
             started_transaction = not connection.in_transaction
@@ -1143,7 +1744,7 @@ class OffchainLedgerStore:
                 connection.execute("BEGIN IMMEDIATE")
             try:
                 self._replace_state(connection, state)
-                connection.execute("DELETE FROM ledger_records")
+                connection.execute("DROP TABLE IF EXISTS ledger_records")
                 connection.execute(
                     """
                     INSERT OR REPLACE INTO ledger_meta(key, value)
@@ -1158,6 +1759,7 @@ class OffchainLedgerStore:
                     connection.rollback()
                 raise
             return
+        self._drop_legacy_records_table(connection)
         if not self.legacy_json_path or not os.path.exists(self.legacy_json_path):
             return
         imported = connection.execute(
@@ -1180,6 +1782,28 @@ class OffchainLedgerStore:
                 VALUES ('legacy_json_imported', ?)
                 """,
                 (self.legacy_json_path,),
+            )
+            if started_transaction:
+                connection.commit()
+        except Exception:
+            if started_transaction:
+                connection.rollback()
+            raise
+
+    def _drop_legacy_records_table(self, connection: sqlite3.Connection) -> None:
+        if not self._table_exists(connection, "ledger_records"):
+            return
+        started_transaction = not connection.in_transaction
+        if started_transaction:
+            connection.execute("BEGIN IMMEDIATE")
+        try:
+            connection.execute("DROP TABLE ledger_records")
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO ledger_meta(key, value)
+                VALUES ('legacy_records_imported', ?)
+                """,
+                (now_iso(),),
             )
             if started_transaction:
                 connection.commit()
@@ -1220,7 +1844,8 @@ class OffchainLedgerStore:
                     record_id = f"{record_id}#duplicate"
                 used_record_ids.add(record_id)
                 insert_record(connection, table_name, model_type, record_id, position, record)
-        connection.execute("DELETE FROM ledger_records")
+        if self._table_exists(connection, "ledger_records"):
+            connection.execute("DROP TABLE ledger_records")
         connection.execute(
             """
             INSERT OR REPLACE INTO ledger_meta(key, value)
