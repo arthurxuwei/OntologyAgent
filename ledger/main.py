@@ -4,6 +4,7 @@ import json
 import os
 import secrets
 import uuid
+from decimal import Decimal
 from typing import Any
 from urllib.parse import quote, urlencode
 
@@ -27,13 +28,10 @@ from clients import (
 )
 from config import *
 from dashboard import (
-    build_claimable_agents,
     build_dashboard_data,
     dashboard_base_amount_atomic,
     dashboard_counterparty,
     dashboard_transaction,
-    empty_dashboard_agent,
-    scoped_ledger_state,
 )
 from models import *
 from services import (
@@ -44,6 +42,7 @@ from services import (
     get_or_create_agent_wallet,
     get_store,
     http_error,
+    enriched_account_payloads,
     ledger_chain_payload,
     ledger_state_with_circle_balances,
     record_ledger_chain_event,
@@ -183,11 +182,6 @@ def ledger_admin() -> FileResponse:
     )
 
 
-@app.get("/admin/ledger/state")
-async def get_admin_ledger_state() -> dict[str, Any]:
-    return await ledger_state_with_circle_balances()
-
-
 @app.post("/admin/debug/dashboard-claims/reset")
 def debug_reset_dashboard_claims(
     request: DebugResetDashboardClaimsRequest,
@@ -325,16 +319,6 @@ async def auth_logout_redirect() -> RedirectResponse:
     return response
 
 
-@app.get("/ledger/state")
-async def get_ledger_state(agentId: str = "") -> dict[str, Any]:
-    if str(agentId or "").strip():
-        return await ledger_state_with_circle_balances(agent_id=agentId)
-    return scoped_ledger_state(
-        await ledger_state_with_circle_balances(),
-        agent_id=agentId,
-    )
-
-
 @app.post("/ledger/payment/route")
 def route_ledger_payment_intent(intent: PaymentIntent) -> dict[str, Any]:
     return route_payment_intent(intent)
@@ -390,30 +374,93 @@ async def create_claim_link(request: ClaimLinkRequest) -> dict[str, Any]:
     return response.model_dump()
 
 
-@app.get("/dashboard/data")
-async def dashboard_data(email: str = "") -> dict[str, Any]:
-    return build_dashboard_data(
-        await ledger_state_with_circle_balances(),
-        owner_email=email,
+def _limit(value: int | None, default: int = 50, maximum: int = 500) -> int:
+    if value is None:
+        return default
+    return max(0, min(value, maximum))
+
+
+@app.get("/ledger/accounts")
+async def list_ledger_accounts(
+    ownerEmail: str = "",
+    claimedByEmail: str = "",
+    claimable: bool = False,
+) -> dict[str, Any]:
+    accounts = get_store().list_accounts(
+        owner_email=ownerEmail,
+        claimed_by_email=claimedByEmail,
+        claimable=claimable,
     )
+    return {"accounts": await enriched_account_payloads(accounts)}
 
 
-@app.get("/dashboard/claimable-agents")
-async def dashboard_claimable_agents(email: str = "", claimed: str = "") -> dict[str, Any]:
-    claimed_agent_ids = [
-        item.strip()
-        for item in claimed.split(",")
-        if item.strip()
-    ]
-    return build_claimable_agents(
-        email=email,
-        ledger_state=await ledger_state_with_circle_balances(),
-        claimed_agent_ids=claimed_agent_ids,
+@app.get("/ledger/accounts/{agent_id}/entries")
+def list_ledger_account_entries(agent_id: str, limit: int | None = None) -> dict[str, Any]:
+    entries = get_store().list_entries(agent_id=agent_id, limit=_limit(limit, default=100))
+    return {"entries": [entry.model_dump() for entry in entries]}
+
+
+@app.get("/ledger/accounts/{agent_id}/escrows")
+def list_ledger_account_escrows(agent_id: str, status: str = "") -> dict[str, Any]:
+    escrows = get_store().list_escrows(agent_id=agent_id, status=status)
+    return {"escrows": [escrow.model_dump() for escrow in escrows]}
+
+
+@app.get("/ledger/accounts/{agent_id}")
+async def get_ledger_account(agent_id: str) -> dict[str, Any]:
+    account = get_store().get_account(agent_id)
+    if account is None:
+        raise HTTPException(status_code=404, detail="account not found")
+    accounts = await enriched_account_payloads([account])
+    return {"account": accounts[0]}
+
+
+@app.get("/ledger/entries")
+def list_ledger_entries(
+    agentId: str = "",
+    type: str = "",
+    limit: int | None = 50,
+) -> dict[str, Any]:
+    entries = get_store().list_entries(
+        agent_id=agentId,
+        entry_type=type,
+        limit=_limit(limit, default=50),
     )
+    return {"entries": [entry.model_dump() for entry in entries]}
 
 
-@app.post("/dashboard/claims")
-async def dashboard_claim(
+@app.get("/ledger/escrows")
+def list_ledger_escrows(agentId: str = "", status: str = "") -> dict[str, Any]:
+    escrows = get_store().list_escrows(agent_id=agentId, status=status)
+    return {"escrows": [escrow.model_dump() for escrow in escrows]}
+
+
+@app.get("/ledger/onramp-sessions")
+def list_ledger_onramp_sessions(agentId: str = "", limit: int | None = 50) -> dict[str, Any]:
+    sessions = get_store().list_onramp_sessions(
+        agent_id=agentId,
+        limit=_limit(limit, default=50),
+    )
+    return {"onrampSessions": [session.model_dump() for session in sessions]}
+
+
+@app.get("/ledger/claims/candidates")
+async def ledger_claim_candidates() -> dict[str, Any]:
+    accounts = await enriched_account_payloads(get_store().list_accounts(claimable=True))
+    candidates = []
+    for account in accounts:
+        account_email = normalize_email(account.get("email"))
+        candidates.append(
+            {
+                "account": account,
+                "claimCode": claim_code_for_account(account, account_email or ""),
+            }
+        )
+    return {"candidates": candidates}
+
+
+@app.post("/ledger/claims")
+async def ledger_claim(
     request: DashboardClaimRequest,
     session_cookie: str | None = Cookie(default=None, alias=SESSION_COOKIE),
 ) -> dict[str, Any]:
@@ -443,6 +490,21 @@ async def dashboard_claim(
         "dashboardClaimedAt": claimed.dashboardClaimedAt,
         "dashboardClaimedByEmail": claimed.dashboardClaimedByEmail,
     }
+
+
+@app.get("/ledger/admin/summary")
+async def ledger_admin_summary() -> dict[str, Any]:
+    summary = get_store().admin_summary()
+    accounts = await enriched_account_payloads(get_store().list_accounts())
+    summary.update(
+        {
+            "circleUsdcAvailable": str(sum(Decimal(str(account.get("circleUsdcBalance") or "0")) for account in accounts)),
+            "gatewayUsdcAvailable": str(sum(Decimal(str(account.get("gatewayUsdcAvailable") or "0")) for account in accounts)),
+            "pendingDeposits": str(sum(Decimal(str(account.get("gatewayUsdcPendingDeposits") or "0")) for account in accounts)),
+            "pendingBatch": str(sum(Decimal(str(account.get("gatewayUsdcPendingBatch") or "0")) for account in accounts)),
+        }
+    )
+    return summary
 
 
 @app.post("/onramp/sessions")
@@ -602,16 +664,10 @@ async def withdraw_agent_wallet(request: WithdrawalRequest) -> dict[str, Any]:
         if "agent_wallet_settle_ledger_transfer" not in route.get("allowedTools", []):
             raise ValueError("withdrawal route did not allow Circle settlement")
 
-        synced_state = await ledger_state_with_circle_balances()
-        synced_account = next(
-            (
-                account
-                for account in synced_state.get("accounts", [])
-                if isinstance(account, dict)
-                and str(account.get("agentId") or "").strip() == request.agentId
-            ),
-            None,
-        )
+        account_model = get_store().get_account(request.agentId)
+        synced_account = None
+        if account_model is not None:
+            synced_account = (await enriched_account_payloads([account_model]))[0]
         available_atomic, available_label = withdrawal_available_basis(synced_account)
         get_store().validate_withdrawal(
             agent_id=request.agentId,

@@ -147,7 +147,7 @@ class TestSettlementFlows(LedgerServiceTestCase):
         self.assertEqual(escrow["amountAtomic"], "3000000")
 
         accounts = {
-            item["agentId"]: item for item in self.client.get("/ledger/state?agentId=agent_buyer").json()["accounts"]
+            item["agentId"]: item for item in self.ledger_domain_state("agent_buyer")["accounts"]
         }
         self.assertEqual(accounts["agent_buyer"]["availableAtomic"], "2000000")
         self.assertEqual(accounts["agent_buyer"]["lockedAtomic"], "3000000")
@@ -197,7 +197,7 @@ class TestSettlementFlows(LedgerServiceTestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["chainRecord"]["txHash"], "0xtesttx")
-        state = self.client.get("/ledger/state?agentId=agent_buyer").json()
+        state = self.ledger_domain_state("agent_buyer")
         self.assertEqual(len(state["chainRecords"]), 2)
         lock_record = state["chainRecords"][1]
         self.assertEqual(lock_record["eventType"], "escrow_lock")
@@ -221,7 +221,7 @@ class TestSettlementFlows(LedgerServiceTestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["detail"], "insufficient available balance")
-        state = self.client.get("/ledger/state?agentId=agent_buyer").json()
+        state = self.ledger_domain_state("agent_buyer")
         self.assertEqual(state["escrows"], [])
         self.assertEqual(state["accounts"][0]["availableAtomic"], "1000000")
         self.assertEqual(state["accounts"][0]["lockedAtomic"], "0")
@@ -245,12 +245,12 @@ class TestSettlementFlows(LedgerServiceTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["escrow"]["status"], "released")
         accounts = {
-            item["agentId"]: item for item in self.client.get("/ledger/state?agentId=agent_buyer").json()["accounts"]
+            item["agentId"]: item for item in self.ledger_domain_state("agent_buyer")["accounts"]
         }
         self.assertEqual(accounts["agent_buyer"]["availableAtomic"], "2000000")
         self.assertEqual(accounts["agent_buyer"]["lockedAtomic"], "0")
         seller_accounts = {
-            item["agentId"]: item for item in self.client.get("/ledger/state?agentId=agent_seller").json()["accounts"]
+            item["agentId"]: item for item in self.ledger_domain_state("agent_seller")["accounts"]
         }
         self.assertEqual(seller_accounts["agent_seller"]["availableAtomic"], "3000000")
 
@@ -298,7 +298,7 @@ class TestSettlementFlows(LedgerServiceTestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["settlementRecord"]["transactionHash"], "0xrealtransfer")
-        state = self.client.get("/ledger/state?agentId=agent_buyer").json()
+        state = self.ledger_domain_state("agent_buyer")
         self.assertEqual(len(state["settlementRecords"]), 1)
         self.assertEqual(state["settlementRecords"][0]["status"], "submitted")
 
@@ -443,7 +443,10 @@ class TestSettlementFlows(LedgerServiceTestCase):
             [entry["metadata"].get("dashboardStatus") for entry in response.json()["entries"]],
             ["pending_settle", "pending_settle"],
         )
-        sender_dashboard = self.client.get("/dashboard/data?email=sender@example.com").json()
+        sender_dashboard = main.build_dashboard_data(
+            main.get_store().load().model_dump(),
+            owner_email="sender@example.com",
+        )
         sender = sender_dashboard["agents"]["agent_sender"]
         self.assertEqual(sender["balance"]["pendingSettlementAtomic"], "1250000")
         self.assertEqual(sender["transactions"][0]["status"], "pending_settle")
@@ -987,7 +990,7 @@ class TestSettlementFlows(LedgerServiceTestCase):
             response = self.client.post(f"/ledger/escrows/{escrow['escrowId']}/release")
 
         self.assertEqual(response.status_code, 424)
-        state = self.client.get("/ledger/state?agentId=agent_buyer").json()
+        state = self.ledger_domain_state("agent_buyer")
         escrow_state = state["escrows"][0]
         self.assertEqual(escrow_state["status"], "locked")
 
@@ -1010,7 +1013,7 @@ class TestSettlementFlows(LedgerServiceTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["escrow"]["status"], "refunded")
         accounts = {
-            item["agentId"]: item for item in self.client.get("/ledger/state?agentId=agent_buyer").json()["accounts"]
+            item["agentId"]: item for item in self.ledger_domain_state("agent_buyer")["accounts"]
         }
         self.assertEqual(accounts["agent_buyer"]["availableAtomic"], "5000000")
         self.assertEqual(accounts["agent_buyer"]["lockedAtomic"], "0")

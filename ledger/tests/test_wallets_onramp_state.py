@@ -82,7 +82,7 @@ class TestWalletsOnrampState(LedgerServiceTestCase):
         self.assertEqual(payload["account"]["availableAtomic"], "0")
         self.assertEqual(payload["account"]["lockedAtomic"], "0")
 
-        state = self.client.get("/ledger/state?agentId=agent_research").json()
+        state = self.ledger_domain_state("agent_research")
         self.assertEqual(len(state["accounts"]), 1)
         self.assertEqual(state["accounts"][0]["agentId"], "agent_research")
         self.assertEqual(state["accounts"][0]["agentName"], "Research Agent")
@@ -122,7 +122,7 @@ class TestWalletsOnrampState(LedgerServiceTestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["detail"], "email is required")
         self.assertFalse(fake_client.called)
-        state = self.client.get("/admin/ledger/state").json()
+        state = self.ledger_domain_state()
         self.assertEqual(state["accounts"], [])
 
     def test_gateway_deposit_proxies_to_wallet_rest_client(self) -> None:
@@ -215,7 +215,7 @@ class TestWalletsOnrampState(LedgerServiceTestCase):
         )
 
         with patch.object(services, "get_ledger_wallet_client", return_value=FakeWalletClient()):
-            state = self.client.get("/ledger/state?agentId=agent_research").json()
+            state = self.ledger_domain_state("agent_research")
 
         self.assertEqual(state["accounts"][0]["circleUsdcBalance"], "1.98")
         self.assertEqual(state["accounts"][0]["gatewayUsdcAvailable"], "0.75")
@@ -227,7 +227,7 @@ class TestWalletsOnrampState(LedgerServiceTestCase):
         self.assertEqual(state["accounts"][0]["gatewayUsdcPendingBatch"], "0.1")
         self.assertEqual(state["accounts"][0]["gatewayPendingBatchAtomic"], "100000")
 
-    def test_ledger_state_returns_no_data_without_agent_id(self) -> None:
+    def test_domain_account_list_returns_accounts_without_agent_scope(self) -> None:
         store = main.get_store()
         store.bind_account_wallet(
             agent_id="agent_owner",
@@ -243,10 +243,10 @@ class TestWalletsOnrampState(LedgerServiceTestCase):
             metadata={},
         )
 
-        state = self.client.get("/ledger/state").json()
+        state = self.ledger_domain_state()
 
-        self.assertEqual(state["accounts"], [])
-        self.assertEqual(state["entries"], [])
+        self.assertEqual([account["agentId"] for account in state["accounts"]], ["agent_owner"])
+        self.assertEqual([entry["agentId"] for entry in state["entries"]], ["agent_owner"])
         self.assertEqual(state["escrows"], [])
         self.assertEqual(state["onrampSessions"], [])
         self.assertEqual(state["onrampEvents"], [])
@@ -269,7 +269,7 @@ class TestWalletsOnrampState(LedgerServiceTestCase):
             metadata={},
         )
 
-        state = self.client.get("/admin/ledger/state").json()
+        state = self.ledger_domain_state()
 
         self.assertEqual([account["agentId"] for account in state["accounts"]], ["agent_owner"])
         self.assertEqual([entry["agentId"] for entry in state["entries"]], ["agent_owner"])
@@ -326,7 +326,7 @@ class TestWalletsOnrampState(LedgerServiceTestCase):
             metadata={},
         )
 
-        state = self.client.get("/ledger/state?agentId=agent_owner").json()
+        state = self.ledger_domain_state("agent_owner")
 
         self.assertEqual(
             [account["agentId"] for account in state["accounts"]],
@@ -369,8 +369,8 @@ class TestWalletsOnrampState(LedgerServiceTestCase):
         )
 
         with patch.object(services, "get_ledger_wallet_client", return_value=FakeWalletClient()):
-            state = self.client.get("/ledger/state?agentId=agent_research").json()
-            state_after_second_read = self.client.get("/ledger/state?agentId=agent_research").json()
+            state = self.ledger_domain_state("agent_research")
+            state_after_second_read = self.ledger_domain_state("agent_research")
 
         account = state["accounts"][0]
         self.assertEqual(account["circleUsdcBalance"], "1.98")
@@ -413,7 +413,7 @@ class TestWalletsOnrampState(LedgerServiceTestCase):
         )
 
         with patch.object(services, "get_ledger_wallet_client", return_value=FakeWalletClient()):
-            state = self.client.get("/ledger/state?agentId=agent_research").json()
+            state = self.ledger_domain_state("agent_research")
 
         account = state["accounts"][0]
         self.assertEqual(account["circleUsdcBalance"], "0")
@@ -485,7 +485,7 @@ class TestWalletsOnrampState(LedgerServiceTestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["detail"], "circle wallet binding agentId mismatch")
-        self.assertEqual(self.client.get("/ledger/state").json()["accounts"], [])
+        self.assertEqual(self.ledger_domain_state()["accounts"], [])
 
     def test_wallet_get_or_create_rejects_non_eoa_circle_wallets(self) -> None:
         class FakeWalletClient:
@@ -520,7 +520,7 @@ class TestWalletsOnrampState(LedgerServiceTestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["detail"], "claim wallet must be an EOA Circle wallet")
-        self.assertEqual(self.client.get("/ledger/state").json()["accounts"], [])
+        self.assertEqual(self.ledger_domain_state()["accounts"], [])
 
     def test_wallet_get_or_create_rest_route_creates_ledger_account(self) -> None:
         class FakeWalletClient:
@@ -558,7 +558,7 @@ class TestWalletsOnrampState(LedgerServiceTestCase):
         result = response.json()
         self.assertEqual(result["account"]["agentId"], "agent_research")
         self.assertEqual(
-            self.client.get("/ledger/state?agentId=agent_research").json()["accounts"][0]["agentId"],
+            self.ledger_domain_state("agent_research")["accounts"][0]["agentId"],
             "agent_research",
         )
 
@@ -585,7 +585,7 @@ class TestWalletsOnrampState(LedgerServiceTestCase):
         self.assertEqual(payload["purchaseCurrency"], "USDC")
         self.assertTrue(payload["onrampUrl"].startswith("https://pay.coinbase.com/buy/select-asset"))
 
-        state = self.client.get("/ledger/state?agentId=agentA").json()
+        state = self.ledger_domain_state("agentA")
         self.assertEqual(len(state["onrampSessions"]), 1)
         self.assertEqual(state["onrampSessions"][0]["idempotencyKey"], "fund-agentA-10")
 
@@ -604,7 +604,7 @@ class TestWalletsOnrampState(LedgerServiceTestCase):
 
         self.assertEqual(first["sessionId"], second["sessionId"])
         self.assertEqual(
-            len(self.client.get("/ledger/state?agentId=agentA").json()["onrampSessions"]),
+            len(self.ledger_domain_state("agentA")["onrampSessions"]),
             1,
         )
 
@@ -639,7 +639,7 @@ class TestWalletsOnrampState(LedgerServiceTestCase):
         self.assertEqual(second.status_code, 200)
         self.assertEqual(first.json()["status"], "credited")
         self.assertEqual(second.json()["status"], "credited")
-        state = self.client.get("/ledger/state?agentId=agentA").json()
+        state = self.ledger_domain_state("agentA")
         credit_entries = [
             entry for entry in state["entries"]
             if entry["reason"] == "coinbase_onramp_confirmed"
@@ -672,7 +672,7 @@ class TestWalletsOnrampState(LedgerServiceTestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["detail"], "amountAtomic must be a positive integer string")
-        state = self.client.get("/ledger/state?agentId=agentA").json()
+        state = self.ledger_domain_state("agentA")
         self.assertEqual(state["accounts"], [])
 
     def test_onramp_rest_route_creates_session(self) -> None:

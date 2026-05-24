@@ -86,7 +86,7 @@ class TestWebhooks(LedgerServiceTestCase):
         self.assertEqual(fake_client.requests[0].amountAtomic, "2230000")
         self.assertEqual(fake_client.requests[0].refId, "circle-webhook:notification-1")
 
-        state = self.client.get("/ledger/state?agentId=agent_research").json()
+        state = self.ledger_domain_state("agent_research")
         self.assertEqual(len(state["circleWebhookEvents"]), 1)
         self.assertEqual(state["circleWebhookEvents"][0]["status"], "processed")
         self.assertEqual(state["circleWebhookEvents"][0]["transactionId"], "tx-inbound-1")
@@ -143,7 +143,7 @@ class TestWebhooks(LedgerServiceTestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "pending")
-        state = self.client.get("/ledger/state?agentId=agent_research").json()
+        state = self.ledger_domain_state("agent_research")
         self.assertEqual(len(state["entries"]), 1)
         self.assertEqual(state["entries"][0]["entryType"], "pending_inbound")
         self.assertEqual(state["entries"][0]["metadata"]["dashboardStatus"], "pending_inbound_chain")
@@ -247,7 +247,7 @@ class TestWebhooks(LedgerServiceTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "skipped")
         self.assertEqual(response.json()["reason"], "not_positive_usdc")
-        state = self.client.get("/ledger/state?agentId=agent_research").json()
+        state = self.ledger_domain_state("agent_research")
         self.assertEqual(state["entries"], [])
         self.assertEqual(state["accounts"][0]["availableAtomic"], "0")
 
@@ -704,7 +704,7 @@ class TestWebhooks(LedgerServiceTestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "skipped")
-        state = self.client.get("/ledger/state?agentId=agent_research").json()
+        state = self.ledger_domain_state("agent_research")
         self.assertEqual(state["circleWebhookEvents"][0]["status"], "skipped")
 
     def test_circle_wallet_webhook_accepts_valid_circle_signature(self) -> None:

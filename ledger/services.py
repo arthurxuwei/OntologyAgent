@@ -370,6 +370,13 @@ async def ledger_state_with_circle_balances(agent_id: Optional[str] = None) -> d
     accounts = state.get("accounts")
     if not isinstance(accounts, list):
         return state
+    await enrich_accounts_with_circle_balances(accounts)
+    return state
+
+
+async def enrich_accounts_with_circle_balances(accounts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not isinstance(accounts, list):
+        return accounts
 
     wallet_client = get_ledger_wallet_client()
     for account in accounts:
@@ -434,4 +441,12 @@ async def ledger_state_with_circle_balances(agent_id: Optional[str] = None) -> d
         gateway_balance_error = status.get("gatewayBalanceError")
         if isinstance(gateway_balance_error, str):
             account["gatewayBalanceError"] = gateway_balance_error
-    return state
+    return accounts
+
+
+async def enriched_account_payloads(accounts: list[Any]) -> list[dict[str, Any]]:
+    payloads = [
+        account.model_dump() if hasattr(account, "model_dump") else dict(account)
+        for account in accounts
+    ]
+    return await enrich_accounts_with_circle_balances(payloads)

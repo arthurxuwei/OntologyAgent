@@ -45,7 +45,7 @@ class TestDashboardClaims(LedgerServiceTestCase):
         self.assertNotIn("window.location.href = `/auth/github/login?returnTo=", source)
         self.assertNotIn("function DeepLinkClaimRunner()", source)
         self.assertNotIn("<DeepLinkClaimRunner />", source)
-        self.assertIn("fetch('/dashboard/claimable-agents')", source)
+        self.assertIn("fetch('/ledger/claims/candidates'", source)
         self.assertNotIn("claimable-agents?claimed=${claimed}", source)
         self.assertIn(
             "const shouldOpenDeepLinkClaim = !!(claimToken && deepLinkAgentId && !claimedAgents.includes(deepLinkAgentId));",
@@ -98,10 +98,10 @@ class TestDashboardClaims(LedgerServiceTestCase):
             settlement_record_id=None,
         )
 
-        response = self.client.get("/dashboard/data?email=owner@example.com")
-
-        self.assertEqual(response.status_code, 200)
-        payload = response.json()
+        payload = main.build_dashboard_data(
+            main.get_store().load().model_dump(),
+            owner_email="owner@example.com",
+        )
         self.assertEqual(payload["source"], "ledger")
         self.assertEqual(payload["defaultAgentId"], "agent_alpha")
         self.assertEqual(set(payload["agents"].keys()), {"agent_alpha"})
@@ -764,27 +764,21 @@ class TestDashboardClaims(LedgerServiceTestCase):
             metadata={},
         )
 
-        response = self.client.get(
-            "/dashboard/claimable-agents?email=OWNER@example.com&claimed=agent_alpha"
-        )
+        response = self.client.get("/ledger/claims/candidates")
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
-        self.assertEqual(payload["email"], "owner@example.com")
-        self.assertEqual(payload["source"], "ledger-accounts")
         self.assertEqual(
-            {agent["agentId"] for agent in payload["agents"]},
+            {agent["account"]["agentId"] for agent in payload["candidates"]},
             {"agent_alpha", "agent_beta", "agent_other"},
         )
-        candidate = next(agent for agent in payload["agents"] if agent["agentId"] == "agent_beta")
-        self.assertEqual(candidate["agentId"], "agent_beta")
-        self.assertEqual(candidate["agentName"], "Beta Research")
-        self.assertEqual(candidate["ownerEmail"], "owner@example.com")
-        self.assertEqual(candidate["accountType"], "EOA")
-        self.assertEqual(candidate["claimStatus"], "unclaimed")
+        candidate = next(agent for agent in payload["candidates"] if agent["account"]["agentId"] == "agent_beta")
+        self.assertEqual(candidate["account"]["agentId"], "agent_beta")
+        self.assertEqual(candidate["account"]["agentName"], "Beta Research")
+        self.assertEqual(candidate["account"]["email"], "owner@example.com")
+        self.assertEqual(candidate["account"]["accountType"], "EOA")
         self.assertTrue(candidate["claimCode"].startswith("clm_"))
         self.assertNotEqual(candidate["claimCode"], "agent_beta")
-        self.assertEqual(candidate["dashboard"]["balance"]["available"], 1.25)
 
     def test_claim_link_endpoint_creates_wallet_and_returns_urls(self) -> None:
         class FakeWalletClient:
@@ -873,11 +867,9 @@ class TestDashboardClaims(LedgerServiceTestCase):
         self.assertEqual(account.agentName, "OpenClaw OntologyAgent")
         self.assertEqual(account.email, "owner@example.com")
 
-        claimable = self.client.get(
-            "/dashboard/claimable-agents?email=owner@example.com"
-        ).json()
-        self.assertEqual(len(claimable["agents"]), 1)
-        self.assertEqual(claimable["agents"][0]["agentId"], "312586087945994240")
+        claimable = self.client.get("/ledger/claims/candidates").json()
+        self.assertEqual(len(claimable["candidates"]), 1)
+        self.assertEqual(claimable["candidates"][0]["account"]["agentId"], "312586087945994240")
 
     def test_dashboard_claim_endpoint_marks_manual_claims_for_session(self) -> None:
         store = main.get_store()
@@ -892,7 +884,7 @@ class TestDashboardClaims(LedgerServiceTestCase):
         claim_code = main.claim_code_for_account(account.model_dump(), "owner@example.com")
 
         response = self.client.post(
-            "/dashboard/claims",
+            "/ledger/claims",
             json={
                 "agentId": "agent_manual",
                 "claimCode": claim_code,
@@ -908,10 +900,8 @@ class TestDashboardClaims(LedgerServiceTestCase):
         self.assertIsNotNone(claimed.dashboardClaimedAt)
         self.assertEqual(claimed.dashboardClaimedByEmail, "dashboard-user@example.com")
 
-        claimable = self.client.get(
-            "/dashboard/claimable-agents?email=owner@example.com"
-        ).json()
-        self.assertEqual(claimable["agents"], [])
+        claimable = self.client.get("/ledger/claims/candidates").json()
+        self.assertEqual(claimable["candidates"], [])
 
     def test_dashboard_claimable_agents_does_not_scope_by_dashboard_email(self) -> None:
         store = main.get_store()
@@ -926,14 +916,14 @@ class TestDashboardClaims(LedgerServiceTestCase):
         claim_code = main.claim_code_for_account(account.model_dump(), "agent-owner@example.com")
 
         response = self.client.get(
-            "/dashboard/claimable-agents?email=dashboard-user@example.com"
+            "/ledger/claims/candidates"
         )
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
-        self.assertEqual(len(payload["agents"]), 1)
-        self.assertEqual(payload["agents"][0]["agentId"], "agent_cross_email")
-        self.assertEqual(payload["agents"][0]["claimCode"], claim_code)
+        self.assertEqual(len(payload["candidates"]), 1)
+        self.assertEqual(payload["candidates"][0]["account"]["agentId"], "agent_cross_email")
+        self.assertEqual(payload["candidates"][0]["claimCode"], claim_code)
 
     def test_dashboard_claim_endpoint_uses_signed_in_dashboard_email(self) -> None:
         store = main.get_store()
@@ -958,7 +948,7 @@ class TestDashboardClaims(LedgerServiceTestCase):
                 }
             )
             response = self.client.post(
-                "/dashboard/claims",
+                "/ledger/claims",
                 json={
                     "agentId": "agent_session_claim",
                     "claimCode": claim_code,
@@ -1006,7 +996,7 @@ class TestDashboardClaims(LedgerServiceTestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["detail"], "claim wallet must be an EOA Circle wallet")
-        self.assertEqual(self.client.get("/ledger/state").json()["accounts"], [])
+        self.assertEqual(self.ledger_domain_state()["accounts"], [])
 
     def test_claim_link_endpoint_requires_profile_identity(self) -> None:
         response = self.client.post(
@@ -1044,16 +1034,15 @@ class TestDashboardClaims(LedgerServiceTestCase):
             account_type="EOA",
         )
 
-        response = self.client.get("/dashboard/claimable-agents")
+        response = self.client.get("/ledger/claims/candidates")
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
-        self.assertIsNone(payload["email"])
-        self.assertEqual(len(payload["agents"]), 1)
-        candidate = payload["agents"][0]
-        self.assertEqual(candidate["agentId"], "agent_eigenflux")
-        self.assertEqual(candidate["ownerEmail"], "agent-bound@example.com")
-        self.assertEqual(candidate["accountType"], "EOA")
+        self.assertEqual(len(payload["candidates"]), 1)
+        candidate = payload["candidates"][0]
+        self.assertEqual(candidate["account"]["agentId"], "agent_eigenflux")
+        self.assertEqual(candidate["account"]["email"], "agent-bound@example.com")
+        self.assertEqual(candidate["account"]["accountType"], "EOA")
         self.assertTrue(candidate["claimCode"].startswith("clm_"))
 
     def test_dashboard_claimable_agents_ignores_stale_client_claimed_ids(self) -> None:
@@ -1067,14 +1056,12 @@ class TestDashboardClaims(LedgerServiceTestCase):
             account_type="EOA",
         )
 
-        response = self.client.get(
-            "/dashboard/claimable-agents?claimed=agent_stale_local"
-        )
+        response = self.client.get("/ledger/claims/candidates")
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(
-            {agent["agentId"] for agent in payload["agents"]},
+            {agent["account"]["agentId"] for agent in payload["candidates"]},
             {"agent_stale_local"},
         )
 
@@ -1101,7 +1088,16 @@ class TestDashboardClaims(LedgerServiceTestCase):
         )
 
         with patch.object(services, "get_ledger_wallet_client", return_value=FakeWalletClient()):
-            dashboard = self.client.get("/dashboard/data?email=agent@example.com").json()
+            accounts = asyncio.run(
+                services.enriched_account_payloads(main.get_store().load().accounts)
+            )
+            dashboard = main.build_dashboard_data(
+                {
+                    **main.get_store().load().model_dump(),
+                    "accounts": accounts,
+                },
+                owner_email="agent@example.com",
+            )
 
         self.assertEqual(
             dashboard["agents"]["agent_research"]["balance"]["available"],

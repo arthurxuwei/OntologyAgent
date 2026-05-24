@@ -452,6 +452,45 @@ class OffchainLedgerStore:
     def load(self) -> LedgerState:
         return self._read(self._load_state_from_db)
 
+    def list_accounts(
+        self,
+        *,
+        owner_email: Optional[str] = None,
+        claimed_by_email: Optional[str] = None,
+        claimable: bool = False,
+    ) -> list[LedgerAccount]:
+        normalized_owner = normalize_email(owner_email)
+        normalized_claimed_by = normalize_email(claimed_by_email)
+
+        def read(connection: sqlite3.Connection) -> list[LedgerAccount]:
+            clauses: list[str] = []
+            params: list[Any] = []
+            if normalized_owner is not None:
+                clauses.append('LOWER("email") = ?')
+                params.append(normalized_owner)
+            if normalized_claimed_by is not None:
+                clauses.append('LOWER(COALESCE("dashboardClaimedByEmail", "email", "")) = ?')
+                params.append(normalized_claimed_by)
+                clauses.append('"dashboardClaimedAt" IS NOT NULL')
+            if claimable:
+                clauses.append('"dashboardClaimedAt" IS NULL')
+                clauses.append(
+                    '('
+                    'COALESCE("walletAddress", "circleWalletId", "") = "" '
+                    'OR UPPER(COALESCE("accountType", "")) IN ("", "EOA")'
+                    ')'
+                )
+            return self._list_records(
+                connection,
+                "ledger_accounts",
+                LedgerAccount,
+                " AND ".join(clauses),
+                tuple(params),
+                order_by='"updatedAt" DESC, position DESC, record_id DESC',
+            )
+
+        return self._read(read)
+
     def load_for_agent(self, agent_id: str) -> LedgerState:
         scoped_agent_id = str(agent_id or "").strip()
         if not scoped_agent_id:
@@ -544,6 +583,116 @@ class OffchainLedgerStore:
                 chainRecords=chain_records,
                 settlementRecords=settlement_records,
             )
+
+        return self._read(read)
+
+    def list_entries(
+        self,
+        *,
+        agent_id: Optional[str] = None,
+        entry_type: Optional[str] = None,
+        limit: Optional[int] = None,
+    ) -> list[LedgerEntry]:
+        scoped_agent_id = str(agent_id or "").strip()
+        scoped_entry_type = str(entry_type or "").strip()
+        safe_limit = max(0, min(int(limit or 0), 500)) if limit is not None else None
+
+        def read(connection: sqlite3.Connection) -> list[LedgerEntry]:
+            clauses: list[str] = []
+            params: list[Any] = []
+            if scoped_agent_id:
+                clauses.append('"agentId" = ?')
+                params.append(scoped_agent_id)
+            if scoped_entry_type:
+                clauses.append('"entryType" = ?')
+                params.append(scoped_entry_type)
+            sql = "SELECT * FROM ledger_entries"
+            if clauses:
+                sql += " WHERE " + " AND ".join(clauses)
+            sql += ' ORDER BY "createdAt" DESC, position DESC, record_id DESC'
+            if safe_limit is not None:
+                sql += " LIMIT ?"
+                params.append(safe_limit)
+            return [
+                record_to_model(record_from_row(row, LedgerEntry), LedgerEntry)
+                for row in connection.execute(sql, tuple(params)).fetchall()
+            ]
+
+        return self._read(read)
+
+    def list_escrows(
+        self,
+        *,
+        agent_id: Optional[str] = None,
+        status: Optional[str] = None,
+    ) -> list[EscrowRecord]:
+        scoped_agent_id = str(agent_id or "").strip()
+        scoped_status = str(status or "").strip()
+
+        def read(connection: sqlite3.Connection) -> list[EscrowRecord]:
+            clauses: list[str] = []
+            params: list[Any] = []
+            if scoped_agent_id:
+                clauses.append('("buyerAgentId" = ? OR "sellerAgentId" = ?)')
+                params.extend([scoped_agent_id, scoped_agent_id])
+            if scoped_status:
+                clauses.append('"status" = ?')
+                params.append(scoped_status)
+            return self._list_records(
+                connection,
+                "ledger_escrows",
+                EscrowRecord,
+                " AND ".join(clauses),
+                tuple(params),
+                order_by='"updatedAt" DESC, position DESC, record_id DESC',
+            )
+
+        return self._read(read)
+
+    def list_onramp_sessions(
+        self,
+        *,
+        agent_id: Optional[str] = None,
+        limit: Optional[int] = None,
+    ) -> list[OnrampSessionRecord]:
+        scoped_agent_id = str(agent_id or "").strip()
+        safe_limit = max(0, min(int(limit or 0), 500)) if limit is not None else None
+
+        def read(connection: sqlite3.Connection) -> list[OnrampSessionRecord]:
+            clauses: list[str] = []
+            params: list[Any] = []
+            if scoped_agent_id:
+                clauses.append('"agentId" = ?')
+                params.append(scoped_agent_id)
+            sql = "SELECT * FROM ledger_onramp_sessions"
+            if clauses:
+                sql += " WHERE " + " AND ".join(clauses)
+            sql += ' ORDER BY "updatedAt" DESC, position DESC, record_id DESC'
+            if safe_limit is not None:
+                sql += " LIMIT ?"
+                params.append(safe_limit)
+            return [
+                record_to_model(record_from_row(row, OnrampSessionRecord), OnrampSessionRecord)
+                for row in connection.execute(sql, tuple(params)).fetchall()
+            ]
+
+        return self._read(read)
+
+    def admin_summary(self) -> dict[str, Any]:
+        def read(connection: sqlite3.Connection) -> dict[str, Any]:
+            accounts = self._list_records(connection, "ledger_accounts", LedgerAccount)
+            escrows_count = connection.execute("SELECT COUNT(*) AS count FROM ledger_escrows").fetchone()["count"]
+            onramp_count = connection.execute("SELECT COUNT(*) AS count FROM ledger_onramp_sessions").fetchone()["count"]
+            return {
+                "accounts": len(accounts),
+                "circleUsdcAvailable": "0",
+                "gatewayUsdcAvailable": "0",
+                "pendingDeposits": "0",
+                "pendingBatch": "0",
+                "ledgerLockedAtomic": str(sum(int(account.lockedAtomic) for account in accounts)),
+                "escrows": int(escrows_count),
+                "onrampSessions": int(onramp_count),
+            }
 
         return self._read(read)
 
