@@ -439,18 +439,25 @@ class TestSettlementFlows(LedgerServiceTestCase):
             )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(
-            [entry["metadata"].get("dashboardStatus") for entry in response.json()["entries"]],
-            ["pending_settle", "pending_settle"],
+        for entry in response.json()["entries"]:
+            self.assertNotIn("dashboardStatus", entry["metadata"])
+            self.assertNotIn("gatewayStage", entry["metadata"])
+            self.assertNotIn("gatewayPendingBatchAtomic", entry["metadata"])
+
+        ledger_state = main.get_store().load().model_dump()
+        for account in ledger_state["accounts"]:
+            if account["agentId"] == "agent_receiver":
+                account["gatewayPendingBatchAtomic"] = "1250000"
+
+        receiver_dashboard = main.build_dashboard_data(
+            ledger_state,
+            owner_email="receiver@example.com",
         )
-        sender_dashboard = main.build_dashboard_data(
-            main.get_store().load().model_dump(),
-            owner_email="sender@example.com",
-        )
-        sender = sender_dashboard["agents"]["agent_sender"]
-        self.assertEqual(sender["balance"]["pendingSettlementAtomic"], "1250000")
-        self.assertEqual(sender["transactions"][0]["status"], "pending_settle")
-        self.assertEqual(sender["transactions"][0]["gatewayStage"], "pending_batch")
+        receiver = receiver_dashboard["agents"]["agent_receiver"]
+        self.assertEqual(receiver["balance"]["pendingSettlementAtomic"], "1250000")
+        self.assertEqual(receiver["transactions"][0]["status"], "pending_settle")
+        self.assertNotIn("gatewayStage", receiver["transactions"][0])
+        self.assertNotIn("gatewayPendingBatchAtomic", receiver["transactions"][0])
 
     def test_agent_transfer_settled_gateway_without_pending_batch_is_released(self) -> None:
         class FakeSettlementClient:

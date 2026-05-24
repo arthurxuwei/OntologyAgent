@@ -15,6 +15,9 @@ from utils import (
 )
 
 
+FINAL_GATEWAY_TRANSFER_STATES = {"SETTLED", "COMPLETE", "COMPLETED", "CONFIRMED"}
+
+
 def dashboard_counterparty(
     entry: dict[str, Any],
     escrow_by_id: dict[str, dict[str, Any]],
@@ -142,7 +145,23 @@ def dashboard_transaction(
         status = "refunded"
     elif "onramp" in entry_type or entry_type == "credit":
         status = "onramp"
-    if isinstance(dashboard_status, str) and dashboard_status.strip():
+    if (
+        entry_type == "agent_transfer"
+        and active_gateway_pending_entry_ids is not None
+        and str(entry.get("entryId") or "") in active_gateway_pending_entry_ids
+    ):
+        status = "pending_settle"
+    elif (
+        entry_type == "agent_transfer"
+        and str(metadata.get("settlementMode") or "").lower() == "gateway"
+        and str(metadata.get("transactionState") or "").upper() not in FINAL_GATEWAY_TRANSFER_STATES
+    ):
+        status = "pending_settle"
+    elif (
+        isinstance(dashboard_status, str)
+        and dashboard_status.strip()
+        and not (entry_type == "agent_transfer" and dashboard_status.strip() == "pending_settle")
+    ):
         status = dashboard_status.strip()
     elif entry_type == "pending_settlement":
         status = "pending_settle"
@@ -159,14 +178,6 @@ def dashboard_transaction(
         and str(entry.get("entryId") or "") in active_gateway_pending_deposit_entry_ids
     ):
         status = "pending_inbound_chain"
-    if (
-        status == "pending_settle"
-        and metadata.get("transactionState") == "SETTLED"
-        and metadata.get("gatewayStage") == "pending_batch"
-        and active_gateway_pending_entry_ids is not None
-        and str(entry.get("entryId") or "") not in active_gateway_pending_entry_ids
-    ):
-        status = "released"
     withdrawal_lifecycle = status in {"withdraw_submitted", "withdrawn"} or (
         entry_type == "withdrawal_submitted" and status == "failed"
     )
@@ -200,8 +211,6 @@ def dashboard_transaction(
         "netAmountAtomic",
         "netAmount",
         "failureReason",
-        "gatewayStage",
-        "gatewayPendingBatchAtomic",
         "linkedEntryId",
         "settlementMode",
         "settlementRecordId",
@@ -226,13 +235,13 @@ def active_gateway_pending_entry_ids(
         return active
     for entry in agent_entries:
         metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
+        if entry.get("entryType") != "agent_transfer":
+            continue
         if atomic_decimal(entry.get("availableDeltaAtomic")) <= 0:
             continue
-        if metadata.get("dashboardStatus") != "pending_settle":
+        if str(metadata.get("settlementMode") or "").lower() != "gateway":
             continue
-        if metadata.get("transactionState") != "SETTLED":
-            continue
-        if metadata.get("gatewayStage") != "pending_batch":
+        if str(metadata.get("transactionState") or "").upper() not in FINAL_GATEWAY_TRANSFER_STATES:
             continue
         amount = parse_dashboard_amount_atomic(
             entry,

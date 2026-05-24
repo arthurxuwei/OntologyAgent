@@ -132,13 +132,6 @@ def agent_transfer_dashboard_metadata(
         or action_result.get("transactionHash")
         or action_result.get("transactionId"),
     }
-    pending_batch_atomic = gateway_pending_batch_atomic(action_result)
-    if pending_batch_atomic > 0:
-        metadata["gatewayPendingBatchAtomic"] = str(pending_batch_atomic)
-    state = str(settlement_record.transactionState or "").upper()
-    if pending_batch_atomic > 0 or (state and state not in FINAL_TRANSFER_STATES):
-        metadata["dashboardStatus"] = "pending_settle"
-        metadata["gatewayStage"] = "pending_batch"
     return {key: value for key, value in metadata.items() if value is not None}
 
 
