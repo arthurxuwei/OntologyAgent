@@ -315,6 +315,7 @@
       en: 'Funds have left the exchange and are being confirmed on Base. Usually around 20 min, depending on network conditions.',
       zh: '资金已离开交易所,正在 Base 链确认。通常约 20 分钟,实际取决于链上情况。',
     },
+    'mvp.dash.status.released.label':           { en: 'RELEASED', zh: '已释放' },
     'mvp.dash.status.withdrawn.label':          { en: 'WITHDRAWN', zh: '已提现' },
     'mvp.dash.status.credited.label':           { en: 'CREDITED', zh: '已入账' },
 
