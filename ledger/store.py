@@ -1580,6 +1580,7 @@ class OffchainLedgerStore:
 
     def _maybe_import_legacy_json(self, connection: sqlite3.Connection) -> None:
         if self._relation_record_count(connection) > 0:
+            self._drop_legacy_records_table(connection)
             return
         if not self._table_exists(connection, "ledger_records"):
             record_count = 0
@@ -1609,6 +1610,7 @@ class OffchainLedgerStore:
                     connection.rollback()
                 raise
             return
+        self._drop_legacy_records_table(connection)
         if not self.legacy_json_path or not os.path.exists(self.legacy_json_path):
             return
         imported = connection.execute(
@@ -1631,6 +1633,28 @@ class OffchainLedgerStore:
                 VALUES ('legacy_json_imported', ?)
                 """,
                 (self.legacy_json_path,),
+            )
+            if started_transaction:
+                connection.commit()
+        except Exception:
+            if started_transaction:
+                connection.rollback()
+            raise
+
+    def _drop_legacy_records_table(self, connection: sqlite3.Connection) -> None:
+        if not self._table_exists(connection, "ledger_records"):
+            return
+        started_transaction = not connection.in_transaction
+        if started_transaction:
+            connection.execute("BEGIN IMMEDIATE")
+        try:
+            connection.execute("DROP TABLE ledger_records")
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO ledger_meta(key, value)
+                VALUES ('legacy_records_imported', ?)
+                """,
+                (now_iso(),),
             )
             if started_transaction:
                 connection.commit()

@@ -212,6 +212,46 @@ class TestStoreRouter(LedgerServiceTestCase):
         self.assertEqual(json.loads(entry[2]), {})
         self.assertIsNone(old_records_table)
 
+    def test_sqlite_store_drops_empty_legacy_records_table_after_relation_writes(self) -> None:
+        self.client.post(
+            "/ledger/accounts/agent_buyer/credit",
+            json={"amountAtomic": "5000000", "reason": "demo funding"},
+        )
+
+        import sqlite3
+
+        connection = sqlite3.connect(self.db_path)
+        try:
+            connection.execute(
+                """
+                CREATE TABLE ledger_records (
+                    collection TEXT NOT NULL,
+                    record_id TEXT NOT NULL,
+                    position INTEGER NOT NULL,
+                    payload TEXT NOT NULL,
+                    PRIMARY KEY (collection, record_id)
+                )
+                """
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        main.get_store().load()
+
+        connection = sqlite3.connect(self.db_path)
+        try:
+            old_records_table = connection.execute(
+                """
+                SELECT name FROM sqlite_master
+                WHERE type = 'table' AND name = 'ledger_records'
+                """
+            ).fetchone()
+        finally:
+            connection.close()
+
+        self.assertIsNone(old_records_table)
+
     def test_scoped_ledger_state_does_not_load_full_store(self) -> None:
         self.client.post(
             "/ledger/accounts/agent_buyer/credit",
