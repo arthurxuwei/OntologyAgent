@@ -37,6 +37,10 @@ const STATUS_CHIP_META = {
     labelKey: 'mvp.dash.status.pending_inbound_chain.label',
     tooltipKey: 'mvp.dash.status.pending_inbound_chain.tooltip',
   },
+  released: {
+    labelKey: 'mvp.dash.status.released.label',
+    chipColor: 'var(--status-positive)',
+  },
   withdrawn: {
     labelKey: 'mvp.dash.status.withdrawn.label',
     chipColor: 'var(--ink-secondary)',
