@@ -1122,7 +1122,7 @@ class TestDashboardClaims(LedgerServiceTestCase):
         self.assertIn("account.gatewayAvailableAtomic || account.gatewayTotalAtomic || account.availableAtomic", source)
         self.assertIn("status === 'pending_settle'", source)
         self.assertIn("entry?.metadata?.transactionState === 'SETTLED'", source)
-        self.assertIn("Number.parseInt(String(account.gatewayPendingBatchAtomic || '0'), 10)", source)
+        self.assertIn("parseAtomic(account.gatewayPendingBatchAtomic)", source)
 
     def test_dashboard_root_waits_for_babel_global_dependencies_before_render(self) -> None:
         response = self.client.get("/dashboard")
@@ -1150,3 +1150,15 @@ class TestDashboardClaims(LedgerServiceTestCase):
         self.assertIn("const visibleEntries = entries.filter", source)
         self.assertIn("!linkedPendingEntryIds.has(String(entry.entryId || ''))", source)
         self.assertIn("visibleEntries.map((entry)", source)
+
+    def test_domain_dashboard_source_assigns_current_pending_batch_to_latest_gateway_transfers(self) -> None:
+        response = self.client.get("/dashboard")
+
+        self.assertEqual(response.status_code, 200)
+        source = self.dashboard_source(response.text)
+        self.assertIn("function activeGatewayPendingEntryIds(account, entries)", source)
+        self.assertIn("let remaining = parseAtomic(account.gatewayPendingBatchAtomic)", source)
+        self.assertIn("entry?.metadata?.settlementMode !== 'gateway'", source)
+        self.assertIn("entry?.metadata?.transactionState !== 'SETTLED'", source)
+        self.assertIn("activePendingEntryIds.has(String(entry.entryId || ''))", source)
+        self.assertIn("return 'pending_settle';", source)

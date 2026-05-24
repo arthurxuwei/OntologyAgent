@@ -109,13 +109,38 @@
     return String(Math.abs(available || locked || 0));
   };
 
-  const entryStatus = (entry, account) => {
+  function activeGatewayPendingEntryIds(account, entries) {
+    let remaining = parseAtomic(account.gatewayPendingBatchAtomic);
+    const activeEntryIds = new Set();
+    if (remaining <= 0) return activeEntryIds;
+    const newestFirst = [...entries].sort((left, right) => (
+      String(right.createdAt || '').localeCompare(String(left.createdAt || ''))
+    ));
+    for (const entry of newestFirst) {
+      if (entry?.entryType !== 'agent_transfer') continue;
+      if (entry?.metadata?.settlementMode !== 'gateway') continue;
+      if (entry?.metadata?.transactionState !== 'SETTLED') continue;
+      const amountAtomic = parseAtomic(entryAmountAtomic(entry));
+      if (amountAtomic <= 0 || amountAtomic > remaining) continue;
+      const entryId = String(entry.entryId || '');
+      if (!entryId) continue;
+      activeEntryIds.add(entryId);
+      remaining -= amountAtomic;
+      if (remaining <= 0) break;
+    }
+    return activeEntryIds;
+  }
+
+  const entryStatus = (entry, account, activePendingEntryIds) => {
+    if (activePendingEntryIds.has(String(entry.entryId || ''))) {
+      return 'pending_settle';
+    }
     let status = entry?.metadata?.dashboardStatus;
     if (
       status === 'pending_settle'
       && entry?.metadata?.transactionState === 'SETTLED'
       && entry?.metadata?.gatewayStage === 'pending_batch'
-      && Number.parseInt(String(account.gatewayPendingBatchAtomic || '0'), 10) <= 0
+      && !activePendingEntryIds.has(String(entry.entryId || ''))
     ) {
       return 'released';
     }
@@ -149,10 +174,11 @@
     const visibleEntries = entries.filter(
       (entry) => !linkedPendingEntryIds.has(String(entry.entryId || '')),
     );
+    const activePendingEntryIds = activeGatewayPendingEntryIds(account, visibleEntries);
     const transactions = visibleEntries.map((entry) => {
       const amountAtomic = entryAmountAtomic(entry);
       const delta = Number.parseInt(String(entry.availableDeltaAtomic || '0'), 10);
-      const status = entryStatus(entry, account);
+      const status = entryStatus(entry, account, activePendingEntryIds);
       const escrow = escrows.find((item) => item.escrowId && item.escrowId === entry.escrowId);
       const counterparty = entry.metadata?.counterpartyEmail
         || entry.metadata?.counterparty
