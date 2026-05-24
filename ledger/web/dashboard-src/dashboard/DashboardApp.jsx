@@ -9,11 +9,90 @@
 // MVP dashboard state is fully isolated from the main project's dashboard).
 
 (function () {
+  const REQUIRED_DASHBOARD_GLOBALS = [
+    'formatAmount',
+    'LangProvider',
+    'LangSwitcher',
+    'AppStateProvider',
+    'useAppState',
+    'DASH_MOCK',
+    'DASH_CLAIMABLE',
+    'PendingBalanceLine',
+    'TransactionRow',
+    'ClaimForm',
+    'MvpGithubAuthScreen',
+    'MvpClaimScreen',
+    'MvpAddAgentModal',
+    'MvpDashboardChrome',
+    'MvpPortfolioView',
+    'MvpOverviewView',
+    'MvpTransactionsView',
+    'MvpCoinbaseOnrampModal',
+    'AddressPicker',
+    'QRScanner',
+    'AddAddressModal',
+    'MvpFundingView',
+    'MvpSettingsView',
+  ];
+
+  function missingDashboardGlobals() {
+    return REQUIRED_DASHBOARD_GLOBALS.filter((name) => window[name] === undefined || window[name] === null);
+  }
+
+  function waitForDashboardDependencies(maxAttempts = 120) {
+    return new Promise((resolve) => {
+      let attempts = 0;
+      const tick = () => {
+        const missing = missingDashboardGlobals();
+        if (missing.length === 0 || attempts >= maxAttempts) {
+          resolve(missing);
+          return;
+        }
+        attempts += 1;
+        setTimeout(tick, 50);
+      };
+      tick();
+    });
+  }
+
   const atomicToUsdc = (value) => {
     const parsed = Number.parseInt(String(value || '0'), 10);
     if (!Number.isFinite(parsed)) return 0;
     return parsed / 1_000_000;
   };
+
+  const parseAtomic = (value) => {
+    const parsed = Number.parseInt(String(value || '0'), 10);
+    return Number.isFinite(parsed) ? parsed : 0;
+  };
+
+  const decimalUsdcToAtomic = (value) => {
+    const text = String(value ?? '').trim();
+    if (!text) return null;
+    const match = text.match(/^(\d+)(?:\.(\d{0,6})\d*)?$/);
+    if (!match) return null;
+    const whole = Number.parseInt(match[1], 10);
+    const fractional = Number.parseInt((match[2] || '').padEnd(6, '0'), 10);
+    if (!Number.isFinite(whole) || !Number.isFinite(fractional)) return null;
+    return whole * 1_000_000 + fractional;
+  };
+
+  function dashboardAvailableAtomic(account) {
+    const gatewayFallback = account.gatewayAvailableAtomic || account.gatewayTotalAtomic || account.availableAtomic;
+    const hasWalletBalance = account.circleAvailableAtomic || account.circleUsdcBalance;
+    const hasGatewayBalance = account.gatewayTotalAtomic || account.gatewayUsdcTotal || account.gatewayAvailableAtomic || account.gatewayUsdcAvailable;
+    if (!hasWalletBalance && !hasGatewayBalance) return String(gatewayFallback || '0');
+    const circleAtomic = account.circleAvailableAtomic
+      ? parseAtomic(account.circleAvailableAtomic)
+      : (decimalUsdcToAtomic(account.circleUsdcBalance) || 0);
+    const gatewayTotalAtomic = account.gatewayTotalAtomic
+      ? parseAtomic(account.gatewayTotalAtomic)
+      : (decimalUsdcToAtomic(account.gatewayUsdcTotal) || parseAtomic(account.gatewayAvailableAtomic));
+    const pendingDepositsAtomic = account.gatewayPendingDepositsAtomic
+      ? parseAtomic(account.gatewayPendingDepositsAtomic)
+      : (decimalUsdcToAtomic(account.gatewayUsdcPendingDeposits) || 0);
+    return String(Math.max(circleAtomic + gatewayTotalAtomic - pendingDepositsAtomic, 0));
+  }
 
   const shortAddress = (value) => {
     const text = String(value || '').trim();
@@ -30,8 +109,17 @@
     return String(Math.abs(available || locked || 0));
   };
 
-  const entryStatus = (entry) => {
-    if (entry?.metadata?.dashboardStatus) return entry.metadata.dashboardStatus;
+  const entryStatus = (entry, account) => {
+    let status = entry?.metadata?.dashboardStatus;
+    if (
+      status === 'pending_settle'
+      && entry?.metadata?.transactionState === 'SETTLED'
+      && entry?.metadata?.gatewayStage === 'pending_batch'
+      && Number.parseInt(String(account.gatewayPendingBatchAtomic || '0'), 10) <= 0
+    ) {
+      return 'released';
+    }
+    if (status) return status;
     if (entry.entryType === 'credit') return 'onramp';
     if (entry.entryType === 'escrow_lock') return 'locked';
     if (entry.entryType === 'escrow_release' || entry.entryType === 'agent_transfer') return 'released';
@@ -50,10 +138,21 @@
       const delta = Number.parseInt(String(entry.availableDeltaAtomic || '0'), 10);
       return delta < 0 ? sum + Math.abs(delta) : sum;
     }, 0);
-    const transactions = entries.map((entry) => {
+    const linkedPendingEntryIds = new Set(
+      entries
+        .filter((entry) => (
+          entry.metadata?.dashboardStatus === 'credited'
+          && entry.metadata?.linkedEntryId
+        ))
+        .map((entry) => String(entry.metadata.linkedEntryId)),
+    );
+    const visibleEntries = entries.filter(
+      (entry) => !linkedPendingEntryIds.has(String(entry.entryId || '')),
+    );
+    const transactions = visibleEntries.map((entry) => {
       const amountAtomic = entryAmountAtomic(entry);
       const delta = Number.parseInt(String(entry.availableDeltaAtomic || '0'), 10);
-      const status = entryStatus(entry);
+      const status = entryStatus(entry, account);
       const escrow = escrows.find((item) => item.escrowId && item.escrowId === entry.escrowId);
       const counterparty = entry.metadata?.counterpartyEmail
         || entry.metadata?.counterparty
@@ -87,9 +186,9 @@
         ownerEmail: account.email || account.dashboardClaimedByEmail || '',
       },
       balance: {
-        available: atomicToUsdc(account.availableAtomic),
-        withdrawAvailable: atomicToUsdc(account.gatewayWithdrawableAtomic || account.availableAtomic),
-        withdrawAvailableAtomic: String(account.gatewayWithdrawableAtomic || account.availableAtomic || '0'),
+        available: atomicToUsdc(dashboardAvailableAtomic(account)),
+        withdrawAvailable: atomicToUsdc(account.gatewayAvailableAtomic || account.gatewayWithdrawableAtomic || account.availableAtomic),
+        withdrawAvailableAtomic: String(account.gatewayAvailableAtomic || account.gatewayWithdrawableAtomic || account.availableAtomic || '0'),
         locked: atomicToUsdc(account.lockedAtomic),
         lifetimeIn: atomicToUsdc(lifetimeInAtomic),
         lifetimeOut: atomicToUsdc(lifetimeOutAtomic),
@@ -321,6 +420,19 @@
     );
   }
 
-  const root = ReactDOM.createRoot(document.getElementById('root'));
-  root.render(<DashboardRoot />);
+  async function mountDashboardRoot() {
+    const missingDependencies = await waitForDashboardDependencies();
+    if (missingDependencies.length > 0) {
+      console.error('Dashboard dependencies failed to load', missingDependencies);
+      const rootElement = document.getElementById('root');
+      if (rootElement) {
+        rootElement.textContent = 'Dashboard failed to load. Refresh the page.';
+      }
+      return;
+    }
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<DashboardRoot />);
+  }
+
+  mountDashboardRoot();
 })();

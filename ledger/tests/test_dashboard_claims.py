@@ -1112,3 +1112,41 @@ class TestDashboardClaims(LedgerServiceTestCase):
             "1100000",
         )
         self.assertEqual(main.get_store().load().accounts[0].availableAtomic, "0")
+
+    def test_domain_dashboard_source_uses_gateway_balances_and_settled_transfer_status(self) -> None:
+        response = self.client.get("/dashboard")
+
+        self.assertEqual(response.status_code, 200)
+        source = self.dashboard_source(response.text)
+        self.assertIn("function dashboardAvailableAtomic(account)", source)
+        self.assertIn("account.gatewayAvailableAtomic || account.gatewayTotalAtomic || account.availableAtomic", source)
+        self.assertIn("status === 'pending_settle'", source)
+        self.assertIn("entry?.metadata?.transactionState === 'SETTLED'", source)
+        self.assertIn("Number.parseInt(String(account.gatewayPendingBatchAtomic || '0'), 10)", source)
+
+    def test_dashboard_root_waits_for_babel_global_dependencies_before_render(self) -> None:
+        response = self.client.get("/dashboard")
+
+        self.assertEqual(response.status_code, 200)
+        source = self.dashboard_source(response.text)
+        self.assertIn("const REQUIRED_DASHBOARD_GLOBALS = [", source)
+        self.assertIn("'LangProvider'", source)
+        self.assertIn("'AppStateProvider'", source)
+        self.assertIn("'LangSwitcher'", source)
+        self.assertIn("'MvpGithubAuthScreen'", source)
+        self.assertIn("'MvpDashboardChrome'", source)
+        self.assertIn("function waitForDashboardDependencies", source)
+        self.assertIn("await waitForDashboardDependencies();", source)
+        self.assertIn("root.render(<DashboardRoot />);", source)
+
+    def test_domain_dashboard_source_hides_linked_pending_inbound_rows(self) -> None:
+        response = self.client.get("/dashboard")
+
+        self.assertEqual(response.status_code, 200)
+        source = self.dashboard_source(response.text)
+        self.assertIn("const linkedPendingEntryIds = new Set(", source)
+        self.assertIn("entry.metadata?.dashboardStatus === 'credited'", source)
+        self.assertIn("entry.metadata?.linkedEntryId", source)
+        self.assertIn("const visibleEntries = entries.filter", source)
+        self.assertIn("!linkedPendingEntryIds.has(String(entry.entryId || ''))", source)
+        self.assertIn("visibleEntries.map((entry)", source)
