@@ -176,8 +176,8 @@
           if (!response.ok) throw new Error(`ledger accounts ${response.status}`);
           return response.json();
         })
-        .then(async (payload) => {
-          const accounts = Array.isArray(payload.accounts) ? payload.accounts : [];
+        .then(async (accountsPayload) => {
+          const accounts = Array.isArray(accountsPayload.accounts) ? accountsPayload.accounts : [];
           const agentPayloads = await Promise.all(accounts.map(async (account) => {
             const agentId = encodeURIComponent(account.agentId);
             const [entriesPayload, escrowsPayload] = await Promise.all([
@@ -195,15 +195,15 @@
           for (const item of agentPayloads) {
             agents[item.account.agentId] = buildDashboardAgent(item.account, item.entries, item.escrows);
           }
-          const payload = {
+          const dashboardPayload = {
             agents,
             defaultAgentId: Object.keys(agents)[0] || null,
             source: 'ledger-domain',
           };
-          if (!payload.defaultAgentId) return;
-          window.DASH_MOCK.day1 = payload;
+          if (!dashboardPayload.defaultAgentId) return;
+          window.DASH_MOCK.day1 = dashboardPayload;
           window.DASH_CLAIMABLE = {};
-          setLedgerDashboardState(payload);
+          setLedgerDashboardState(dashboardPayload);
         })
         .catch(() => {
           // Keep the standalone day1 fixture when the backend is unavailable.
