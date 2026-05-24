@@ -242,12 +242,7 @@ async def auth_session(
     owner_email = normalize_email(user.get("email"))
     claimed_agent_ids = []
     if owner_email:
-        claimed_agent_ids = [
-            account.agentId
-            for account in get_store().load().accounts
-            if account.dashboardClaimedAt
-            and normalize_email(account.dashboardClaimedByEmail or account.email) == owner_email
-        ]
+        claimed_agent_ids = get_store().claimed_agent_ids_for_dashboard_email(owner_email)
     return {
         "authenticated": True,
         "user": user,
@@ -332,6 +327,8 @@ async def auth_logout_redirect() -> RedirectResponse:
 
 @app.get("/ledger/state")
 async def get_ledger_state(agentId: str = "") -> dict[str, Any]:
+    if str(agentId or "").strip():
+        return await ledger_state_with_circle_balances(agent_id=agentId)
     return scoped_ledger_state(
         await ledger_state_with_circle_balances(),
         agent_id=agentId,
@@ -424,16 +421,8 @@ async def dashboard_claim(
     owner_email = normalize_email((session_user or {}).get("email")) or normalize_email(request.email)
     if owner_email is None:
         raise HTTPException(status_code=400, detail="dashboard email is required")
-    state = get_store().load().model_dump()
-    account = next(
-        (
-            item
-            for item in state.get("accounts", [])
-            if isinstance(item, dict)
-            and str(item.get("agentId") or "") == request.agentId
-        ),
-        None,
-    )
+    account_model = get_store().get_account(request.agentId)
+    account = account_model.model_dump() if account_model is not None else None
     if account is None:
         raise HTTPException(status_code=404, detail="agent account not found")
     account_email = normalize_email(account.get("email"))

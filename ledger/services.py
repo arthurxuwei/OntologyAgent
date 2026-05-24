@@ -362,8 +362,11 @@ def http_error(error: Exception) -> HTTPException:
     return HTTPException(status_code=400, detail=str(error))
 
 
-async def ledger_state_with_circle_balances() -> dict[str, Any]:
-    state = get_store().load().model_dump()
+async def ledger_state_with_circle_balances(agent_id: Optional[str] = None) -> dict[str, Any]:
+    if agent_id:
+        state = get_store().load_for_agent(agent_id).model_dump()
+    else:
+        state = get_store().load().model_dump()
     accounts = state.get("accounts")
     if not isinstance(accounts, list):
         return state

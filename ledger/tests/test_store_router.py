@@ -197,9 +197,12 @@ class TestStoreRouter(LedgerServiceTestCase):
             entry = connection.execute(
                 "SELECT agentId, entryType, metadata FROM ledger_entries"
             ).fetchone()
-            old_records = connection.execute(
-                "SELECT COUNT(*) FROM ledger_records"
-            ).fetchone()[0]
+            old_records_table = connection.execute(
+                """
+                SELECT name FROM sqlite_master
+                WHERE type = 'table' AND name = 'ledger_records'
+                """
+            ).fetchone()
         finally:
             connection.close()
 
@@ -207,7 +210,55 @@ class TestStoreRouter(LedgerServiceTestCase):
         self.assertEqual(entry[0], "agent_buyer")
         self.assertEqual(entry[1], "credit")
         self.assertEqual(json.loads(entry[2]), {})
-        self.assertEqual(old_records, 0)
+        self.assertIsNone(old_records_table)
+
+    def test_scoped_ledger_state_does_not_load_full_store(self) -> None:
+        self.client.post(
+            "/ledger/accounts/agent_buyer/credit",
+            json={"amountAtomic": "5000000", "reason": "demo funding"},
+        )
+
+        store = main.get_store()
+        with patch.object(store, "load", side_effect=AssertionError("full load is not allowed")):
+            response = self.client.get("/ledger/state?agentId=agent_buyer")
+
+        self.assertEqual(response.status_code, 200)
+        state = response.json()
+        self.assertEqual(state["accounts"][0]["agentId"], "agent_buyer")
+        self.assertEqual(state["entries"][0]["agentId"], "agent_buyer")
+
+    def test_wallet_and_webhook_lookup_do_not_load_full_store(self) -> None:
+        store = main.get_store()
+        account = store.bind_account_wallet(
+            agent_id="agent_lookup",
+            agent_name="Lookup Agent",
+            email="lookup@example.com",
+            wallet_address="0x1111111111111111111111111111111111111111",
+            circle_wallet_id="circle-wallet-lookup",
+            account_type="EOA",
+        )
+        event = main.circle_webhook_event_record(
+            notification_id="notification-lookup",
+            notification_type="transactions.inbound",
+            status="processed",
+            payload={"notification": {"id": "tx-lookup"}},
+            transaction_id="tx-lookup",
+            agent_id=account.agentId,
+            wallet_address=account.walletAddress,
+            circle_wallet_id=account.circleWalletId,
+            reason="test",
+        )
+        store.save_circle_webhook_event(event)
+
+        with patch.object(store, "load", side_effect=AssertionError("full load is not allowed")):
+            found_account = store.find_account_by_wallet(
+                wallet_address=account.walletAddress,
+                circle_wallet_id=None,
+            )
+            found_event = store.get_circle_webhook_event("notification-lookup")
+
+        self.assertEqual(found_account.agentId, "agent_lookup")
+        self.assertEqual(found_event.transactionId, "tx-lookup")
 
     def test_sqlite_store_imports_existing_json_once(self) -> None:
         now = main.now_iso()
@@ -394,16 +445,19 @@ class TestStoreRouter(LedgerServiceTestCase):
                 WHERE notificationId = 'notification_payload'
                 """
             ).fetchone()
-            old_records = connection.execute(
-                "SELECT COUNT(*) FROM ledger_records"
-            ).fetchone()[0]
+            old_records_table = connection.execute(
+                """
+                SELECT name FROM sqlite_master
+                WHERE type = 'table' AND name = 'ledger_records'
+                """
+            ).fetchone()
         finally:
             connection.close()
         self.assertEqual(account, ("agent_payload", "9000000"))
         self.assertEqual(json.loads(entry[0]), {"source": "legacy-records"})
         self.assertEqual(json.loads(circle_event[0]), {"mode": "gateway_deposit"})
         self.assertEqual(json.loads(circle_event[1]), {"legacy": True})
-        self.assertEqual(old_records, 0)
+        self.assertIsNone(old_records_table)
 
     def test_health_migrates_legacy_payload_records_to_relation_tables(self) -> None:
         now = main.now_iso()
@@ -460,13 +514,16 @@ class TestStoreRouter(LedgerServiceTestCase):
                 WHERE agentId = 'agent_health_migrate'
                 """
             ).fetchone()
-            old_records = connection.execute(
-                "SELECT COUNT(*) FROM ledger_records"
-            ).fetchone()[0]
+            old_records_table = connection.execute(
+                """
+                SELECT name FROM sqlite_master
+                WHERE type = 'table' AND name = 'ledger_records'
+                """
+            ).fetchone()
         finally:
             connection.close()
         self.assertEqual(migrated, ("agent_health_migrate", "4000000"))
-        self.assertEqual(old_records, 0)
+        self.assertIsNone(old_records_table)
 
     def test_route_payment_intent_is_served_by_ledger_rest(self) -> None:
         response = self.client.post(
