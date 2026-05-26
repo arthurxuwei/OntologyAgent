@@ -208,15 +208,18 @@ jobs:
             printf '%s' "${GHCR_PAT}" | ssh -i ~/.ssh/lighthouse_key "${remote}" 'sudo docker login ghcr.io -u github-actions --password-stdin'
           fi
           ssh -i ~/.ssh/lighthouse_key "${remote}" '
+            set -euo pipefail
             cd /opt/chief
             compose_files="-f docker-compose.core.yml"
             if grep -q "^CLOUDFLARE_TUNNEL_TOKEN=." .env.deploy; then
               compose_files="${compose_files} -f docker-compose.cloudflare.yml"
             fi
+            sudo docker compose --env-file .env --env-file .env.deploy ${compose_files} down --remove-orphans
+            sudo docker container prune -f
+            sudo docker image prune -af
+            sudo docker builder prune -af
+            sudo docker system df
             sudo docker compose --env-file .env --env-file .env.deploy ${compose_files} pull
-            sudo docker ps -q --filter publish=8092 | xargs -r sudo docker rm -f
-            sudo docker ps -q --filter publish=8093 | xargs -r sudo docker rm -f
-            sudo docker ps -aq --filter ancestor=cloudflare/cloudflared:latest | xargs -r sudo docker rm -f
             sudo docker compose --env-file .env --env-file .env.deploy ${compose_files} up -d --remove-orphans
             sudo docker compose --env-file .env --env-file .env.deploy ${compose_files} ps
           '
