@@ -204,22 +204,29 @@ jobs:
           GHCR_PAT: ${{ secrets.GHCR_PAT }}
         run: |
           remote="${LIGHTHOUSE_USER}@${LIGHTHOUSE_HOST}"
+          ssh_opts=(-o ServerAliveInterval=30 -o ServerAliveCountMax=20 -i ~/.ssh/lighthouse_key)
           if [ -n "${GHCR_PAT:-}" ]; then
-            printf '%s' "${GHCR_PAT}" | ssh -i ~/.ssh/lighthouse_key "${remote}" 'sudo docker login ghcr.io -u github-actions --password-stdin'
+            printf '%s' "${GHCR_PAT}" | ssh "${ssh_opts[@]}" "${remote}" 'sudo docker login ghcr.io -u github-actions --password-stdin'
           fi
-          ssh -i ~/.ssh/lighthouse_key "${remote}" '
+          ssh "${ssh_opts[@]}" "${remote}" '
             set -euo pipefail
             cd /opt/chief
             compose_files="-f docker-compose.core.yml"
             if grep -q "^CLOUDFLARE_TUNNEL_TOKEN=." .env.deploy; then
               compose_files="${compose_files} -f docker-compose.cloudflare.yml"
             fi
+            echo "Stopping existing services"
             sudo docker compose --env-file .env --env-file .env.deploy ${compose_files} down --remove-orphans
+            echo "Pruning stopped containers"
             sudo docker container prune -f
+            echo "Pruning old images"
             sudo docker image prune -af
+            echo "Pruning build cache"
             sudo docker builder prune -af
             sudo docker system df
+            echo "Pulling images"
             sudo docker compose --env-file .env --env-file .env.deploy ${compose_files} pull
+            echo "Starting services"
             sudo docker compose --env-file .env --env-file .env.deploy ${compose_files} up -d --remove-orphans
             sudo docker compose --env-file .env --env-file .env.deploy ${compose_files} ps
           '
