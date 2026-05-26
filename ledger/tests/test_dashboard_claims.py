@@ -973,7 +973,7 @@ class TestDashboardClaims(LedgerServiceTestCase):
         self.assertIn("claimCode=" + payload["claimCode"], payload["claimUrl"])
         self.assertEqual(
             payload["agentUrl"],
-            "https://ledger.curawealth.ai/dashboard?agentId=312586087945994240",
+            "https://ledger.kovaloop.ai/dashboard?agentId=312586087945994240",
         )
 
         account = main.get_store().load().accounts[0]
