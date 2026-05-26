@@ -334,7 +334,9 @@ class TestAuthRoutes(LedgerServiceTestCase):
         self.assertIn('class="brand-mark"', html)
         self.assertIn("Chief Ledger logo", html)
         self.assertIn('id="ledger-state"', html)
-        self.assertIn('id="wallet-form"', html)
+        self.assertNotIn('id="wallet-form"', html)
+        self.assertNotIn("Agent Wallet</h2>", html)
+        self.assertNotIn("Get Or Create Wallet", html)
         self.assertNotIn('id="credit-form"', html)
         self.assertNotIn("Credit Account", html)
         self.assertNotIn('id="onramp-form"', html)
@@ -343,7 +345,10 @@ class TestAuthRoutes(LedgerServiceTestCase):
         self.assertNotIn("Confirm Onramp", html)
         self.assertNotIn('id="escrow-form"', html)
         self.assertNotIn("Create Escrow", html)
-        self.assertIn('id="settlement-form"', html)
+        self.assertNotIn('id="settlement-form"', html)
+        self.assertNotIn("Settle Escrow", html)
+        self.assertNotIn('id="release-button"', html)
+        self.assertNotIn('id="refund-button"', html)
         self.assertIn("/ledger/admin/summary", html)
         self.assertNotIn("/onramp/sessions", html)
         self.assertIn("/ledger/escrows", html)
@@ -359,11 +364,13 @@ class TestAuthRoutes(LedgerServiceTestCase):
         self.assertIn('{ label: "Gateway Withdrawable"', html)
         self.assertIn('{ label: "Pending Deposits Atomic"', html)
         self.assertIn('{ label: "Pending Batch Atomic"', html)
-        self.assertIn('id="debug-claims-form"', html)
-        self.assertIn('id="debug-token"', html)
-        self.assertIn('id="debug-claim-agent-ids"', html)
-        self.assertIn("/admin/debug/dashboard-claims/reset", html)
-        self.assertIn('"X-Debug-Token"', html)
+        self.assertNotIn('id="debug-claims-form"', html)
+        self.assertNotIn('id="debug-token"', html)
+        self.assertNotIn('id="debug-claim-agent-ids"', html)
+        self.assertNotIn("Dashboard Claims", html)
+        self.assertNotIn("Reset Claim Bindings", html)
+        self.assertNotIn("/admin/debug/dashboard-claims/reset", html)
+        self.assertNotIn('"X-Debug-Token"', html)
 
     def test_debug_reset_dashboard_claims_requires_token(self) -> None:
         with patch.dict(os.environ, {"LEDGER_DEBUG_ADMIN_TOKEN": "debug-token"}):
@@ -631,31 +638,18 @@ class TestAuthRoutes(LedgerServiceTestCase):
                 "if (url === '/ledger/entries?limit=50') return { ok: true, json: async () => ({ entries: [{ entryId: 'entry_1', entryType: 'credit', agentId: 'agent_buyer' }] }) };"
                 "if (url === '/ledger/escrows') return { ok: true, json: async () => ({ escrows: [{ escrowId: 'escrow_1', buyerAgentId: 'agent_buyer', sellerAgentId: 'agent_seller', amountAtomic: '3000000', status: 'locked' }] }) };"
                 "if (url === '/ledger/onramp-sessions?limit=50') return { ok: true, json: async () => ({ onrampSessions: [{ sessionId: 'onramp_1', agentId: 'agentA', paymentAmount: '10.00', status: 'created', onrampUrl: 'https://pay.coinbase.com/buy/select-asset?sessionToken=abc' }] }) };"
-                "if (url === '/ledger/wallets/get-or-create') return { ok: true, json: async () => ({"
-                "wallet: { walletAddress: '0x1111111111111111111111111111111111111111', circleWalletId: 'circle-wallet-1' },"
-                "account: { agentId: 'agent_research', availableAtomic: '0', lockedAtomic: '0' }"
-                "}) };"
                 "return { ok: true, json: async () => ({ ok: true }) };"
                 "};"
                 "(async () => {"
                 "eval(scriptText);"
                 "await refreshLedgerState();"
-                "elements.get('wallet-agent-name').value = 'Research Agent';"
-                "elements.get('wallet-agent-id').value = 'agent_research';"
-                "elements.get('wallet-email').value = 'agent@example.com';"
-                "elements.get('wallet-circle-wallet-id').value = 'circle-wallet-1';"
-                "elements.get('wallet-address').value = '0x1111111111111111111111111111111111111111';"
-                "await getOrCreateWallet({ preventDefault() {} });"
                 "process.stdout.write(JSON.stringify({"
                 "stateHtml: elements.get('ledger-state').innerHTML,"
                 "stateText: elements.get('ledger-state').textContent,"
-                "escrowSelection: selectedEscrowId(),"
-                "walletListener: listeners.get('wallet-form:submit'),"
-                "settlementListener: listeners.get('settlement-form:submit'),"
                 "stateCall: fetchCalls.find((call) => call.url === '/ledger/admin/summary'),"
-                "walletCall: fetchCalls.find((call) => call.url === '/ledger/wallets/get-or-create'),"
+                "walletCall: fetchCalls.find((call) => call.url === '/ledger/wallets/get-or-create') || null,"
                 "openCall: window.openCalls[0] || null,"
-                "walletOutput: elements.get('wallet-output').textContent"
+                "listeners: Array.from(listeners.keys())"
                 "}));"
                 "})().catch((error) => { console.error(error); process.exit(1); });",
             ],
@@ -665,8 +659,6 @@ class TestAuthRoutes(LedgerServiceTestCase):
         )
 
         self.assertEqual(node_result.returncode, 0, node_result.stderr)
-        import json
-
         output = json.loads(node_result.stdout)
         self.assertIn("Accounts", output["stateHtml"])
         self.assertIn("1", output["stateHtml"])
@@ -699,19 +691,8 @@ class TestAuthRoutes(LedgerServiceTestCase):
         self.assertEqual(output["stateCall"]["method"], "GET")
         self.assertNotIn("{", output["stateHtml"])
         self.assertNotIn('"accounts"', output["stateHtml"])
-        self.assertEqual(output["escrowSelection"], "escrow_1")
-        self.assertEqual(output["walletListener"], "getOrCreateWallet")
-        self.assertEqual(output["settlementListener"], "preventSettlementSubmit")
-        self.assertEqual(output["walletCall"]["method"], "POST")
-        self.assertEqual(
-            json.loads(output["walletCall"]["body"]),
-            {
-                "agentName": "Research Agent",
-                "agentId": "agent_research",
-                "email": "agent@example.com",
-                "circleWalletId": "circle-wallet-1",
-                "walletAddress": "0x1111111111111111111111111111111111111111",
-            },
-        )
+        self.assertIsNone(output["walletCall"])
+        self.assertNotIn("wallet-form:submit", output["listeners"])
+        self.assertNotIn("settlement-form:submit", output["listeners"])
+        self.assertNotIn("debug-claims-form:submit", output["listeners"])
         self.assertIsNone(output["openCall"])
-        self.assertIn("agent_research", output["walletOutput"])

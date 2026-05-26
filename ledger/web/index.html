@@ -305,84 +305,11 @@
         <h2>Ledger State</h2>
         <div class="summary" id="ledger-state">Loading ledger state...</div>
       </section>
-
-      <section class="grid">
-        <form class="card" id="wallet-form">
-          <h2>Agent Wallet</h2>
-          <label>
-            Agent Name
-            <input id="wallet-agent-name" value="Research Agent" autocomplete="off" required />
-          </label>
-          <label>
-            Agent ID
-            <input id="wallet-agent-id" value="agent_research" autocomplete="off" required />
-          </label>
-          <label>
-            Email
-            <input id="wallet-email" value="" autocomplete="off" />
-          </label>
-          <label>
-            Circle Wallet ID
-            <input id="wallet-circle-wallet-id" value="" autocomplete="off" />
-          </label>
-          <label>
-            Wallet Address
-            <input id="wallet-address" value="" autocomplete="off" />
-          </label>
-          <button class="primary" type="submit">Get Or Create Wallet</button>
-          <div class="summary" id="wallet-output">No wallet binding yet.</div>
-        </form>
-
-        <form class="card" id="settlement-form">
-          <h2>Settle Escrow</h2>
-          <label>
-            Escrow
-            <select id="escrow-select"></select>
-          </label>
-          <div class="actions">
-            <button class="primary" type="button" id="release-button">Release</button>
-            <button class="danger" type="button" id="refund-button">Refund</button>
-          </div>
-        </form>
-
-        <form class="card" id="debug-claims-form">
-          <h2>Dashboard Claims</h2>
-          <label>
-            Debug Token
-            <input id="debug-token" type="password" autocomplete="off" />
-          </label>
-          <label>
-            Agent IDs
-            <textarea id="debug-claim-agent-ids" placeholder="Optional. Leave blank to reset all dashboard claims."></textarea>
-          </label>
-          <button class="danger" type="submit">Reset Claim Bindings</button>
-          <div class="summary" id="debug-claims-output">No claim reset submitted.</div>
-        </form>
-      </section>
     </main>
 
     <script>
       const ledgerStateEl = document.getElementById("ledger-state");
       const refreshButtonEl = document.getElementById("refresh-button");
-      const walletFormEl = document.getElementById("wallet-form");
-      const settlementFormEl = document.getElementById("settlement-form");
-      const debugClaimsFormEl = document.getElementById("debug-claims-form");
-      const walletAgentNameEl = document.getElementById("wallet-agent-name");
-      const walletAgentIdEl = document.getElementById("wallet-agent-id");
-      const walletEmailEl = document.getElementById("wallet-email");
-      const walletCircleWalletIdEl = document.getElementById("wallet-circle-wallet-id");
-      const walletAddressEl = document.getElementById("wallet-address");
-      const walletOutputEl = document.getElementById("wallet-output");
-      const escrowSelectEl = document.getElementById("escrow-select");
-      const releaseButtonEl = document.getElementById("release-button");
-      const refundButtonEl = document.getElementById("refund-button");
-      const debugTokenEl = document.getElementById("debug-token");
-      const debugClaimAgentIdsEl = document.getElementById("debug-claim-agent-ids");
-      const debugClaimsOutputEl = document.getElementById("debug-claims-output");
-
-      function selectedEscrowId() {
-        return escrowSelectEl.value || escrowSelectEl.children?.[0]?.value || "";
-      }
 
       function escapeHtml(value) {
         return String(value ?? "")
@@ -565,25 +492,6 @@
           `</div>`,
         ].join("");
 
-        const previousValue = escrowSelectEl.value;
-        escrowSelectEl.replaceChildren();
-        if (escrows.length === 0) {
-          const option = document.createElement("option");
-          option.value = "";
-          option.textContent = "No escrows";
-          escrowSelectEl.appendChild(option);
-        } else {
-          escrows.forEach((escrow) => {
-            const option = document.createElement("option");
-            option.value = escrow.escrowId;
-            option.textContent = `${escrow.status} | ${escrow.escrowId} | ${escrow.amountAtomic}`;
-            escrowSelectEl.appendChild(option);
-          });
-          escrowSelectEl.value = escrows.some((escrow) => escrow.escrowId === previousValue)
-            ? previousValue
-            : escrows[0].escrowId;
-        }
-
       }
 
       async function refreshLedgerState() {
@@ -603,80 +511,7 @@
         });
       }
 
-      async function getOrCreateWallet(event) {
-        event.preventDefault();
-        const email = walletEmailEl.value.trim();
-        const circleWalletId = walletCircleWalletIdEl.value.trim();
-        const walletAddress = walletAddressEl.value.trim();
-        const payload = await requestJson("/ledger/wallets/get-or-create", {
-          method: "POST",
-          body: JSON.stringify({
-            agentName: walletAgentNameEl.value.trim(),
-            agentId: walletAgentIdEl.value.trim(),
-            email: email || null,
-            circleWalletId: circleWalletId || null,
-            walletAddress: walletAddress || null,
-          }),
-        });
-        walletOutputEl.textContent = [
-          `Agent: ${payload.account.agentId}`,
-          `Available Atomic: ${payload.account.availableAtomic}`,
-          `Wallet: ${payload.wallet.walletAddress || payload.wallet.circleWalletId || "bound"}`,
-        ].join("\n");
-        await refreshLedgerState();
-      }
-
-      function preventSettlementSubmit(event) {
-        event.preventDefault();
-      }
-
-      async function settleEscrow(action) {
-        const escrowId = selectedEscrowId();
-        if (!escrowId) {
-          return;
-        }
-        await requestJson(`/ledger/escrows/${escrowId}/${action}`, { method: "POST" });
-        await refreshLedgerState();
-      }
-
-      function debugAgentIds() {
-        return debugClaimAgentIdsEl.value
-          .split(/[\s,]+/)
-          .map((value) => value.trim())
-          .filter(Boolean);
-      }
-
-      async function resetDashboardClaims(event) {
-        event.preventDefault();
-        const token = debugTokenEl.value.trim();
-        if (!token) {
-          debugClaimsOutputEl.textContent = "Debug token is required.";
-          return;
-        }
-        const agentIds = debugAgentIds();
-        const payload = await requestJson("/admin/debug/dashboard-claims/reset", {
-          method: "POST",
-          headers: {
-            "X-Debug-Token": token,
-          },
-          body: JSON.stringify({
-            confirm: "reset-dashboard-claims",
-            agentIds,
-          }),
-        });
-        debugClaimsOutputEl.textContent = [
-          `Cleared: ${payload.cleared}`,
-          `Agents: ${(payload.agentIds || []).join(", ") || "none"}`,
-        ].join("\n");
-        await refreshLedgerState();
-      }
-
       refreshButtonEl.addEventListener("click", refreshLedgerState);
-      walletFormEl.addEventListener("submit", getOrCreateWallet);
-      settlementFormEl.addEventListener("submit", preventSettlementSubmit);
-      debugClaimsFormEl.addEventListener("submit", resetDashboardClaims);
-      releaseButtonEl.addEventListener("click", () => settleEscrow("release"));
-      refundButtonEl.addEventListener("click", () => settleEscrow("refund"));
 
       refreshLedgerState().catch((error) => {
         ledgerStateEl.textContent = error.message;
