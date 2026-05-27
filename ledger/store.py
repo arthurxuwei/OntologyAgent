@@ -6,6 +6,7 @@ import sqlite3
 import threading
 import uuid
 from collections.abc import Callable
+from datetime import datetime, timedelta, timezone
 from typing import Any, Literal, Optional
 
 from pydantic import BaseModel
@@ -103,6 +104,12 @@ def migrate_ledger_state_payload(raw: Any) -> Any:
 
 LedgerRecordId = Callable[[dict[str, Any], int], str]
 
+AGENT_TRANSFER_SINGLE_LIMIT_ATOMIC = 1_000
+WITHDRAWAL_DAILY_LIMIT_ATOMIC = 5_000_000
+WITHDRAWAL_WEEKLY_LIMIT_ATOMIC = 10_000_000
+WITHDRAWAL_DAILY_WINDOW = timedelta(hours=24)
+WITHDRAWAL_WEEKLY_WINDOW = timedelta(days=7)
+
 
 def _account_record_id(record: dict[str, Any], _position: int) -> str:
     return f"{record.get('asset') or DEFAULT_ASSET}:{record.get('agentId')}"
@@ -186,6 +193,35 @@ def deserialize_record_field(value: Optional[str]) -> Any:
         except json.JSONDecodeError:
             return value
     return value
+
+
+def parse_ledger_datetime(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def withdrawal_limit_amount(entry: LedgerEntry) -> int:
+    metadata_amount = entry.metadata.get("amountAtomic") if isinstance(entry.metadata, dict) else None
+    if isinstance(metadata_amount, str):
+        try:
+            return parse_nonnegative_atomic(metadata_amount)
+        except ValueError:
+            pass
+    try:
+        return abs(int(entry.availableDeltaAtomic or "0"))
+    except ValueError:
+        return 0
+
+
+def is_failed_withdrawal(entry: LedgerEntry) -> bool:
+    return isinstance(entry.metadata, dict) and entry.metadata.get("dashboardStatus") == "failed"
 
 
 def record_from_row(row: sqlite3.Row, model_type: type[BaseModel]) -> dict[str, Any]:
@@ -860,7 +896,9 @@ class OffchainLedgerStore:
         to_agent_id: str,
         amount_atomic: str,
     ) -> None:
-        parse_positive_atomic(amount_atomic)
+        amount = parse_positive_atomic(amount_atomic)
+        if amount > AGENT_TRANSFER_SINGLE_LIMIT_ATOMIC:
+            raise ValueError("single transfer limit exceeded: max 0.001 USDC")
 
         def read(connection: sqlite3.Connection) -> None:
             sender = self._find_account_row(connection, from_agent_id)
@@ -896,9 +934,45 @@ class OffchainLedgerStore:
             )
             if balance_basis < amount:
                 raise ValueError(f"amount exceeds {available_label}")
+            self._validate_withdrawal_limits(connection, agent_id, amount)
             return account
 
         return self._read(read)
+
+    def _validate_withdrawal_limits(
+        self,
+        connection: sqlite3.Connection,
+        agent_id: str,
+        amount: int,
+    ) -> None:
+        current = parse_ledger_datetime(now_iso()) or datetime.now(timezone.utc)
+        daily_start = current - WITHDRAWAL_DAILY_WINDOW
+        weekly_start = current - WITHDRAWAL_WEEKLY_WINDOW
+        entries = self._list_records(
+            connection,
+            "ledger_entries",
+            LedgerEntry,
+            '"agentId" = ? AND "entryType" IN (?, ?)',
+            (agent_id, "withdrawal", "withdrawal_submitted"),
+            order_by='"createdAt" DESC, record_id DESC',
+        )
+        daily_total = 0
+        weekly_total = 0
+        for entry in entries:
+            if not isinstance(entry, LedgerEntry) or is_failed_withdrawal(entry):
+                continue
+            created_at = parse_ledger_datetime(entry.createdAt)
+            if created_at is None or created_at < weekly_start:
+                continue
+            entry_amount = withdrawal_limit_amount(entry)
+            weekly_total += entry_amount
+            if created_at >= daily_start:
+                daily_total += entry_amount
+
+        if daily_total + amount > WITHDRAWAL_DAILY_LIMIT_ATOMIC:
+            raise ValueError("withdrawal rejected by service risk policy")
+        if weekly_total + amount > WITHDRAWAL_WEEKLY_LIMIT_ATOMIC:
+            raise ValueError("withdrawal rejected by service risk policy")
 
     def account_by_email(self, email: str) -> LedgerAccount:
         normalized = normalize_email(email)
