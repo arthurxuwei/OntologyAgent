@@ -225,7 +225,7 @@ test("AgentWalletService allows multiple agent bindings to share one wallet addr
       wallets: [],
       agentWalletBindings: [
         {
-          agentName: "ZeroClaw Chief Agent",
+          agentName: "ZeroClaw Kovaloop Agent",
           agentId: "312586087945994240",
           email: "xw007110@163.com",
           walletAddress: "0x3333333333333333333333333333333333333333",
@@ -256,8 +256,8 @@ test("AgentWalletService allows multiple agent bindings to share one wallet addr
       };
       assert.equal(state.agentWalletBindings.length, 2);
       assert.deepEqual(
-        state.agentWalletBindings.map((binding) => binding.agentName).sort(),
-        ["ZeroClaw Chief Agent", "ZeroClaw EigenFlux Peer"],
+        new Set(state.agentWalletBindings.map((binding) => binding.agentName)),
+        new Set(["ZeroClaw Kovaloop Agent", "ZeroClaw EigenFlux Peer"]),
       );
       assert.ok(
         state.agentWalletBindings.every(
@@ -911,7 +911,7 @@ test("AgentWalletService creates Circle transfer between bound agents", async ()
       wallets: [],
       agentWalletBindings: [
         {
-          agentName: "ZeroClaw Chief Agent",
+          agentName: "ZeroClaw Kovaloop Agent",
           agentId: "main-agent",
           email: "main@example.com",
           walletAddress: "0x1111111111111111111111111111111111111111",
@@ -1010,7 +1010,7 @@ test("AgentWalletService settles USDC transfer through Circle Gateway", async ()
       wallets: [],
       agentWalletBindings: [
         {
-          agentName: "ZeroClaw Chief Agent",
+          agentName: "ZeroClaw Kovaloop Agent",
           agentId: "main-agent",
           email: "main@example.com",
           walletAddress: "0x1111111111111111111111111111111111111111",
@@ -1134,7 +1134,7 @@ test("AgentWalletService uses EOA Gateway batching for Agent Wallet transfers", 
       wallets: [],
       agentWalletBindings: [
         {
-          agentName: "ZeroClaw Chief Agent",
+          agentName: "ZeroClaw Kovaloop Agent",
           agentId: "main-agent",
           email: "main@example.com",
           walletAddress: "0x1111111111111111111111111111111111111111",
@@ -1262,7 +1262,7 @@ test("AgentWalletService rejects non-EOA Gateway batching transfers", async () =
       wallets: [],
       agentWalletBindings: [
         {
-          agentName: "ZeroClaw Chief Agent",
+          agentName: "ZeroClaw Kovaloop Agent",
           agentId: "main-agent",
           email: "main@example.com",
           walletAddress: "0x1111111111111111111111111111111111111111",
@@ -1433,7 +1433,7 @@ test("AgentWalletService rejects USDC transfer when Gateway balance is insuffici
       wallets: [],
       agentWalletBindings: [
         {
-          agentName: "ZeroClaw Chief Agent",
+          agentName: "ZeroClaw Kovaloop Agent",
           agentId: "main-agent",
           email: "main@example.com",
           walletAddress: "0x1111111111111111111111111111111111111111",
@@ -1643,7 +1643,7 @@ test("AgentWalletService submits gas top-up instead of Gateway deposit when ETH 
       wallets: [],
       agentWalletBindings: [
         {
-          agentName: "Chief Gas Treasury Seed Wallet",
+          agentName: "Kovaloop Gas Treasury Seed Wallet",
           agentId: "__gas_treasury_seed__",
           email: null,
           walletAddress: "0x82df36f77f84bffcbcdf6dc142c0289a692e4797",
@@ -1726,7 +1726,7 @@ test("AgentWalletService enforces gas top-up wallet daily limits", async () => {
       wallets: [],
       agentWalletBindings: [
         {
-          agentName: "Chief Gas Treasury Seed Wallet",
+          agentName: "Kovaloop Gas Treasury Seed Wallet",
           agentId: "__gas_treasury_seed__",
           email: null,
           walletAddress: "0x82df36f77f84bffcbcdf6dc142c0289a692e4797",
@@ -1820,7 +1820,7 @@ test("AgentWalletService resumes Gateway deposit after matching gas top-up webho
       wallets: [],
       agentWalletBindings: [
         {
-          agentName: "Chief Gas Treasury Seed Wallet",
+          agentName: "Kovaloop Gas Treasury Seed Wallet",
           agentId: "__gas_treasury_seed__",
           email: null,
           walletAddress: "0x82df36f77f84bffcbcdf6dc142c0289a692e4797",

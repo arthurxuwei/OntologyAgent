@@ -1,5 +1,5 @@
 // MVP AppStateProvider — same contract as src/dashboard/Shell/AppStateProvider
-// but with `chief_mvp_dash_*` localStorage keys so the MVP dashboard's state
+// but with `kovaloop_mvp_dash_*` localStorage keys so the MVP dashboard's state
 // is fully isolated from the main project's dashboard.
 //
 // Surfaces the same `useAppState()` hook (registers as window.useAppState).
@@ -11,15 +11,15 @@
   const AppStateContext = React.createContext(null);
 
   const STORAGE_KEYS = {
-    registered:     'chief_mvp_dash_registered',
-    mockState:      'chief_mvp_dash_mock_state',
-    email:          'chief_mvp_dash_email',           // legacy email-only login, migrated into `user`
-    user:           'chief_mvp_dash_user',             // {provider, login?, name?, email?, avatar_url?}
-    wallet:         'chief_mvp_dash_wallet',           // legacy single-wallet, migrated on first read
-    wallets:        'chief_mvp_dash_wallets',          // [{id, label, address, chain, createdAt}]
-    defaultWallet:  'chief_mvp_dash_default_wallet',   // id string pointing into wallets
-    agents:         'chief_mvp_dash_agents',
-    activeAgent:    'chief_mvp_dash_active_agent',
+    registered:     'kovaloop_mvp_dash_registered',
+    mockState:      'kovaloop_mvp_dash_mock_state',
+    email:          'kovaloop_mvp_dash_email',           // legacy email-only login, migrated into `user`
+    user:           'kovaloop_mvp_dash_user',             // {provider, login?, name?, email?, avatar_url?}
+    wallet:         'kovaloop_mvp_dash_wallet',           // legacy single-wallet, migrated on first read
+    wallets:        'kovaloop_mvp_dash_wallets',          // [{id, label, address, chain, createdAt}]
+    defaultWallet:  'kovaloop_mvp_dash_default_wallet',   // id string pointing into wallets
+    agents:         'kovaloop_mvp_dash_agents',
+    activeAgent:    'kovaloop_mvp_dash_active_agent',
   };
 
   const readBool = (key) => window.localStorage.getItem(key) === 'true';
@@ -77,8 +77,8 @@
     return { ...w, chain: w.chain || 'base' };
   }
 
-  // Migrates the legacy single-wallet `chief_mvp_dash_wallet` key into the
-  // new `chief_mvp_dash_wallets` array on first read, and seeds defaultWallet.
+  // Migrates the legacy single-wallet `kovaloop_mvp_dash_wallet` key into the
+  // new `kovaloop_mvp_dash_wallets` array on first read, and seeds defaultWallet.
   // Also forward-migrates any older array entries missing newly-added fields.
   function readInitialWallets() {
     const raw = window.localStorage.getItem(STORAGE_KEYS.wallets);

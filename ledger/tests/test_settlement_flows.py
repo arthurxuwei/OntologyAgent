@@ -798,7 +798,7 @@ class TestSettlementFlows(LedgerServiceTestCase):
         self.assertEqual(fake_settlement.calls[0]["amount_atomic"], "1000000")
         self.assertEqual(response.json()["account"]["availableAtomic"], "0")
 
-    def test_withdrawal_allows_chief_owner_email_to_differ_from_agent_email(self) -> None:
+    def test_withdrawal_allows_kovaloop_owner_email_to_differ_from_agent_email(self) -> None:
         class FakeWalletClient:
             async def status(self, *, wallet_address=None, circle_wallet_id=None):
                 return {
@@ -816,7 +816,7 @@ class TestSettlementFlows(LedgerServiceTestCase):
             async def submit_withdrawal(self, **kwargs):
                 self.calls.append(kwargs)
                 return main.LedgerSettlementRecord(
-                    recordId="settle_chief_owner_withdrawal",
+                    recordId="settle_kovaloop_owner_withdrawal",
                     eventType="withdrawal",
                     settlementHttpUrl="http://settlement.test",
                     transferId=kwargs["ref_id"],
@@ -847,7 +847,7 @@ class TestSettlementFlows(LedgerServiceTestCase):
                 "/ledger/withdrawals",
                 json={
                     "agentId": "agent_agent_bound_email",
-                    "ownerEmail": "chief-user@example.com",
+                    "ownerEmail": "kovaloop-user@example.com",
                     "destinationAddress": "0x2222222222222222222222222222222222222222",
                     "amountAtomic": "1000000",
                     "reason": "dashboard withdrawal",

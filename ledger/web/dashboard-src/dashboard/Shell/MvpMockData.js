@@ -7,7 +7,7 @@
 //   - No `counterparties` block (no credit lookup view).
 //   - `settings.limits.perTradeCap` seeded at 0.01 USDC. SettingsView lets
 //     the user edit it; the edited value is persisted per-agent in
-//     localStorage (chief_mvp_dash_caps) and overrides this seed at read
+//     localStorage (kovaloop_mvp_dash_caps) and overrides this seed at read
 //     time. Funding's withdraw min (5 USDC) is independent.
 //   - No `approvedCounterparties` / `pendingApprovals` (MVP has no
 //     approval flow — the agent operates within its per-trade cap).

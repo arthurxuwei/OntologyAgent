@@ -44,15 +44,15 @@
       zh: '装好了。点这个链接,把所有权认到你邮箱上:',
     },
     'mvp.s1.msg_3_meta': {
-      en: 'expires in 10:00 · re-issuable via `chief claim refresh`',
-      zh: '10 分钟内有效 · 过期了跑 `chief claim refresh` 重发',
+      en: 'expires in 10:00 · re-issuable via `kovaloop claim refresh`',
+      zh: '10 分钟内有效 · 过期了跑 `kovaloop claim refresh` 重发',
     },
     'mvp.s1.msg_3_followup': {
       en: 'Same code reaches the same dashboard if you prefer the CLI.',
       zh: '换成 CLI 也一样,同一串码,同一个 dashboard。',
     },
 
-    'mvp.s1.preview_label':         { en: 'CHIEF · DASHBOARD PREVIEW', zh: 'CHIEF · DASHBOARD 预览' },
+    'mvp.s1.preview_label':         { en: 'KOVALOOP · DASHBOARD PREVIEW', zh: 'KOVALOOP · DASHBOARD 预览' },
     'mvp.s1.preview_empty':         { en: 'agentA · wallet pending',   zh: 'agentA · 待装钱包' },
     'mvp.s1.preview_attached_cue':  { en: '✓ Wallet attached',         zh: '✓ 钱包已装上' },
     'mvp.s1.preview_top_note': {
@@ -61,7 +61,7 @@
     },
 
     // ── S2 · Claim ─────────────────────────────────────────────────────────
-    'mvp.s2.crumb_root':       { en: 'Chief',        zh: 'Chief' },
+    'mvp.s2.crumb_root':       { en: 'Kovaloop',        zh: 'Kovaloop' },
     'mvp.s2.crumb_agent':      { en: 'agentA',       zh: 'agentA' },
     'mvp.s2.crumb_current':    { en: 'Claim',        zh: '认领' },
     'mvp.s2.modal_eyebrow':    { en: 'EMAIL · william@example.com', zh: '邮箱 · william@example.com' },
@@ -119,12 +119,12 @@
 
     // ── S6 · Autonomous pay (merged: intent + broadcast) ──────────────────
     // agentA finishes a batch, DECIDES on its own to settle 0.001 USDC to
-    // agentB. The whole atomic flow (reasoning → fire → Chief broadcasts to
+    // agentB. The whole atomic flow (reasoning → fire → Kovaloop broadcasts to
     // both → both ledgers update) lives in this one stage.
     'mvp.s6.col_agentA':      { en: 'agentA',                              zh: 'agentA' },
     'mvp.s6.col_agentA_role': { en: 'Document Workflow Assistant',         zh: '文档处理助手' },
-    'mvp.s6.col_chief':       { en: 'Chief',                               zh: 'Chief' },
-    'mvp.s6.col_chief_role':  { en: 'Off-chain settlement layer',          zh: '链下结算层' },
+    'mvp.s6.col_kovaloop':       { en: 'Kovaloop',                               zh: 'Kovaloop' },
+    'mvp.s6.col_kovaloop_role':  { en: 'Off-chain settlement layer',          zh: '链下结算层' },
     'mvp.s6.col_agentB':      { en: 'agentB',                              zh: 'agentB' },
     'mvp.s6.col_agentB_role': { en: 'Data Provider · EigenFlux-verified',  zh: '数据提供方 · EigenFlux 认证' },
 
@@ -137,8 +137,8 @@
       zh: '87 次查询 × 既定单价 = 应付 agentB 0.001 USDC。活儿交了,账单到期,把账结了。',
     },
     'mvp.s6.agentA_sdk_call': {
-      en: 'chief.pay({ to: agentB, amount: 0.001 USDC, memo: "data_batch_2026_05" })',
-      zh: 'chief.pay({ to: agentB, amount: 0.001 USDC, memo: "data_batch_2026_05" })',
+      en: 'kovaloop.pay({ to: agentB, amount: 0.001 USDC, memo: "data_batch_2026_05" })',
+      zh: 'kovaloop.pay({ to: agentB, amount: 0.001 USDC, memo: "data_batch_2026_05" })',
     },
     'mvp.s6.agentA_sdk_return': {
       en: 'receipt: r_M9P4 · status: settled · gas: 0 (off-chain)',
@@ -149,8 +149,8 @@
       zh: '服务已交付,本轮 87 次查询。按既定单价等结算。',
     },
     'mvp.s6.agentB_received': {
-      en: 'Receipt pushed by chief — r_M9P4 · +0.001 USDC from agentA.',
-      zh: 'chief 推来凭证:r_M9P4 · 来自 agentA · +0.001 USDC。',
+      en: 'Receipt pushed by kovaloop — r_M9P4 · +0.001 USDC from agentA.',
+      zh: 'kovaloop 推来凭证:r_M9P4 · 来自 agentA · +0.001 USDC。',
     },
     'mvp.s6.agentB_thought_after': {
       en: 'Ledger updated. Amount matches the invoice. Back to work.',
@@ -159,13 +159,13 @@
 
     // Two co-existing banners under the broadcast moment:
     //   initiated_*  — sits in agentA's column, makes the "agent agency" point
-    //   broadcast_*  — sits in centre column, makes the "Chief → both" point
+    //   broadcast_*  — sits in centre column, makes the "Kovaloop → both" point
     'mvp.s6.initiated_label': { en: 'AGENT-INITIATED · NO HUMAN IN THE LOOP', zh: 'AGENT 自主发起 · 无人工介入' },
     'mvp.s6.initiated_body': {
       en: 'No prompt, no approval modal. The agent owns its budget and settles its own debts within the per-trade cap.',
       zh: '没 prompt,没审批弹窗。agent 在单笔限额内自己管预算、自己清账。',
     },
-    'mvp.s6.broadcast_label': { en: 'BROADCAST · CHIEF → BOTH', zh: '广播 · CHIEF → 双方' },
+    'mvp.s6.broadcast_label': { en: 'BROADCAST · KOVALOOP → BOTH', zh: '广播 · KOVALOOP → 双方' },
     'mvp.s6.broadcast_body': {
       en: 'One push, two receipts. EigenFlux delivers the same record to payer and payee simultaneously — no agent-to-agent forwarding, no verify round-trip.',
       zh: '一次推送,双方同时收到。EigenFlux 把同一份凭证下发给付款方和收款方,中间不用 agent 互相转发,也不用 verify 来回校验。',
@@ -204,11 +204,11 @@
     'mvp.s7.final_dashboard':{ en: 'Open dashboard →',        zh: '打开 dashboard →' },
 
     // ── Onboarding · GitHub OAuth and claim-code ownership ────────────────
-    'mvp.dash.auth.slug':                  { en: 'CHIEF · SIGN IN', zh: 'CHIEF · 登录' },
+    'mvp.dash.auth.slug':                  { en: 'KOVALOOP · SIGN IN', zh: 'KOVALOOP · 登录' },
     'mvp.dash.auth.headline':              { en: 'Sign in to your agent wallet.', zh: '登录你的 agent 钱包。' },
     'mvp.dash.auth.subhead': {
-      en: 'Continue with GitHub. Chief uses your account email to record claims after you enter a claim code.',
-      zh: '使用 GitHub 登录。输入 claim code 后,Chief 会用当前账号邮箱记录认领关系。',
+      en: 'Continue with GitHub. Kovaloop uses your account email to record claims after you enter a claim code.',
+      zh: '使用 GitHub 登录。输入 claim code 后,Kovaloop 会用当前账号邮箱记录认领关系。',
     },
     'mvp.dash.auth.github_button':         { en: 'Continue with GitHub',  zh: '用 GitHub 继续' },
     'mvp.dash.auth.error':                 { en: 'GitHub authorization was cancelled or failed. Please try again.', zh: 'GitHub 授权已取消或失败,请重试。' },
@@ -218,20 +218,20 @@
       zh: '这里不手动输入邮箱: 所有权来自 GitHub OAuth。',
     },
     'mvp.dash.auth.consent_subdomain':     { en: 'authorize',             zh: 'authorize' },
-    'mvp.dash.auth.consent_title':         { en: 'Authorize Chief',       zh: '授权 Chief' },
+    'mvp.dash.auth.consent_title':         { en: 'Authorize Kovaloop',       zh: '授权 Kovaloop' },
     'mvp.dash.auth.consent_app': {
-      en: 'Chief wants to bind this browser session to your ledger email.',
-      zh: 'Chief 请求把这个浏览器会话绑定到你的 ledger 邮箱。',
+      en: 'Kovaloop wants to bind this browser session to your ledger email.',
+      zh: 'Kovaloop 请求把这个浏览器会话绑定到你的 ledger 邮箱。',
     },
     'mvp.dash.auth.consent_scope_label':   { en: 'Personal user data',    zh: '个人账号信息' },
     'mvp.dash.auth.consent_scope_profile': { en: 'Read your public profile', zh: '读取公开 profile' },
     'mvp.dash.auth.consent_scope_email':   { en: 'Read your email address', zh: '读取你的邮箱地址' },
-    'mvp.dash.auth.consent_authorize':     { en: 'Authorize Chief',       zh: '授权 Chief' },
+    'mvp.dash.auth.consent_authorize':     { en: 'Authorize Kovaloop',       zh: '授权 Kovaloop' },
     'mvp.dash.auth.consent_cancel':        { en: 'Cancel',                zh: '取消' },
     'mvp.dash.auth.authorizing':           { en: 'Authorizing…',          zh: '正在授权…' },
 
     // ── Onboarding · Claim from real email-scoped agents ──────────────────
-    'mvp.dash.claim.slug':                  { en: 'CHIEF · CLAIM',                            zh: 'CHIEF · 认领' },
+    'mvp.dash.claim.slug':                  { en: 'KOVALOOP · CLAIM',                            zh: 'KOVALOOP · 认领' },
     'mvp.dash.claim.initial_headline':      { en: 'Claim your first agent.',                  zh: '认领你的第一个 agent。' },
     'mvp.dash.claim.initial_subhead': {
       en: 'Your agent printed a claim code when it attached its wallet. Paste it below to bind ownership to your account.',
@@ -382,7 +382,7 @@
     'mvp.dash.funding.term_net_destination':        { en: 'Net to destination',                           zh: '目标到账' },
     'mvp.dash.funding.term_eta':                    { en: 'ETA',                                          zh: '预计时间' },
     'mvp.dash.funding.eta_under_minute':            { en: 'Usually under a minute after submission',       zh: '提交后通常一分钟内完成' },
-    'mvp.dash.funding.fee_covered':                 { en: 'Covered by Chief',                             zh: '由 Chief 承担' },
+    'mvp.dash.funding.fee_covered':                 { en: 'Covered by Kovaloop',                             zh: '由 Kovaloop 承担' },
     'mvp.dash.funding.exceeds_balance':             { en: 'Amount exceeds available balance.',            zh: '金额超过可用余额。' },
     'mvp.dash.funding.confirm':                     { en: 'Confirm withdrawal',                           zh: '确认提款' },
     'mvp.dash.funding.pending':                     { en: 'Broadcasting…',                                zh: '广播中…' },

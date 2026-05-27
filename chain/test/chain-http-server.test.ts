@@ -50,7 +50,7 @@ test("chain REST health returns service metadata", async () => {
   const response = await request("/health");
   assert.equal(response.status, 200);
   const body = await response.json();
-  assert.equal(body.service, "chief-chain");
+  assert.equal(body.service, "kovaloop-chain");
   assert.equal(body.status, "ok");
   assert.equal(body.mockChain, true);
 });

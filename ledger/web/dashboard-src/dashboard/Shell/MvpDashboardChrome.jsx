@@ -43,7 +43,7 @@
           }}
         >
           <div className="font-display" style={{ fontSize: '24px', fontWeight: 400, letterSpacing: '-0.01em' }}>
-            Chief
+            Kovaloop
           </div>
           <span
             className="font-mono"

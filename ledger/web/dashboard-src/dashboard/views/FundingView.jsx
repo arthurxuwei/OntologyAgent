@@ -279,7 +279,7 @@
           </Card>
 
           <div className="font-body" style={{ marginTop: '14px', fontSize: '12px', color: 'var(--ink-secondary)', lineHeight: 1.55 }}>
-            Deposits may take a few minutes while Base confirms and Chief credits the Gateway Wallet.
+            Deposits may take a few minutes while Base confirms and Kovaloop credits the Gateway Wallet.
           </div>
 
           <div

@@ -83,7 +83,7 @@ export function createChainHttpApp(
       sendResult(res, async () => {
         const walletState = await runtime.walletStateService.execute();
         return {
-          service: "chief-chain",
+          service: "kovaloop-chain",
           status: "ok" as const,
           mockChain: config.network.mockChain,
           chain: walletState.chain,

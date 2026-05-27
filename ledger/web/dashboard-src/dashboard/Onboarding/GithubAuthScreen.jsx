@@ -168,7 +168,7 @@
                 marginBottom: '18px',
               }}
             >
-              <ChiefMark />
+              <KovaloopMark />
               <div style={{ color: '#7D8590', fontSize: '18px', lineHeight: 1 }}>→</div>
               <div
                 style={{
@@ -295,10 +295,10 @@
     );
   }
 
-  // Chief brand mark used inside the consent modal. Echoes the dashboard
+  // Kovaloop brand mark used inside the consent modal. Echoes the dashboard
   // chrome's wordmark style (Fraunces italic C) so users can verify which
   // app is asking for permission.
-  function ChiefMark() {
+  function KovaloopMark() {
     return (
       <div
         style={{

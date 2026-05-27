@@ -9,7 +9,7 @@
 // Cut from main's Settings: Approval section, reset controls, and demo links.
 
 (function () {
-  const CAPS_STORAGE_KEY = 'chief_mvp_dash_caps';
+  const CAPS_STORAGE_KEY = 'kovaloop_mvp_dash_caps';
 
   function readCaps() {
     try {

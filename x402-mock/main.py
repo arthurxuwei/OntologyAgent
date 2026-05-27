@@ -8,13 +8,13 @@ from fastapi import FastAPI, HTTPException, Request
 
 BASE_SEPOLIA_NETWORK = "eip155:84532"
 
-app = FastAPI(title="Chief x402-mock")
+app = FastAPI(title="Kovaloop x402-mock")
 
 
 @app.get("/health")
 def health() -> dict[str, Any]:
     return {
-        "service": "chief-x402-mock",
+        "service": "kovaloop-x402-mock",
         "status": "ok",
     }
 

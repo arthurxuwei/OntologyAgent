@@ -46,7 +46,7 @@ test("circle REST health returns service metadata", async () => {
   const response = await request("/health");
   assert.equal(response.status, 200);
   const body = await response.json();
-  assert.equal(body.service, "chief-circle");
+  assert.equal(body.service, "kovaloop-circle");
   assert.equal(body.status, "ok");
   assert.equal(body.mockChain, true);
 });

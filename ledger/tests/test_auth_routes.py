@@ -52,7 +52,7 @@ class TestAuthRoutes(LedgerServiceTestCase):
         self.assertIn("client_id=github-client", location)
         self.assertNotIn("redirect_uri=", location)
         self.assertIn("scope=read%3Auser+user%3Aemail", location)
-        self.assertIn("chief_ledger_oauth_state=", response.headers["set-cookie"])
+        self.assertIn("kovaloop_ledger_oauth_state=", response.headers["set-cookie"])
 
     def test_github_login_accepts_dashboard_return_path(self) -> None:
         with patch.dict(
@@ -71,7 +71,7 @@ class TestAuthRoutes(LedgerServiceTestCase):
 
         self.assertEqual(response.status_code, 307)
         set_cookie = response.headers["set-cookie"]
-        self.assertIn("chief_ledger_oauth_return=", set_cookie)
+        self.assertIn("kovaloop_ledger_oauth_return=", set_cookie)
         self.assertIn("/dashboard%3FclaimCode%3Dclm_abc%26agentId%3Dagent_1", set_cookie)
         self.assertIn("HttpOnly", set_cookie)
         self.assertIn("SameSite=lax", set_cookie)
@@ -103,7 +103,7 @@ class TestAuthRoutes(LedgerServiceTestCase):
 
             self.assertEqual(response.status_code, 307)
             set_cookie = response.headers["set-cookie"]
-            self.assertIn("chief_ledger_oauth_return=", set_cookie)
+            self.assertIn("kovaloop_ledger_oauth_return=", set_cookie)
             self.assertIn("/dashboard", set_cookie)
             self.assertNotIn("clm_bad", set_cookie)
 
@@ -126,8 +126,8 @@ class TestAuthRoutes(LedgerServiceTestCase):
                 "/auth/github/callback?code=abc&state=oauth-state",
                 headers={
                     "Cookie": (
-                        "chief_ledger_oauth_state=oauth-state; "
-                        "chief_ledger_oauth_return=/dashboard%3FclaimCode%3Dclm_abc%26agentId%3Dagent_1"
+                        "kovaloop_ledger_oauth_state=oauth-state; "
+                        "kovaloop_ledger_oauth_return=/dashboard%3FclaimCode%3Dclm_abc%26agentId%3Dagent_1"
                     )
                 },
                 follow_redirects=False,
@@ -138,7 +138,7 @@ class TestAuthRoutes(LedgerServiceTestCase):
             response.headers["location"],
             "/dashboard?claimCode=clm_abc&agentId=agent_1",
         )
-        self.assertIn("chief_ledger_oauth_return=", response.headers["set-cookie"])
+        self.assertIn("kovaloop_ledger_oauth_return=", response.headers["set-cookie"])
 
     def test_github_callback_rejects_invalid_stored_return_paths(self) -> None:
         async def fake_fetch_github_user(_code, redirect_uri=None):
@@ -170,8 +170,8 @@ class TestAuthRoutes(LedgerServiceTestCase):
                     "/auth/github/callback?code=abc&state=oauth-state",
                     headers={
                         "Cookie": (
-                            "chief_ledger_oauth_state=oauth-state; "
-                            f"chief_ledger_oauth_return={return_path}"
+                            "kovaloop_ledger_oauth_state=oauth-state; "
+                            f"kovaloop_ledger_oauth_return={return_path}"
                         )
                     },
                     follow_redirects=False,
@@ -185,8 +185,8 @@ class TestAuthRoutes(LedgerServiceTestCase):
             "/auth/github/callback?error=bad state&state=oauth-state",
             headers={
                 "Cookie": (
-                    "chief_ledger_oauth_state=oauth-state; "
-                    "chief_ledger_oauth_return=/dashboard%3FclaimCode%3Dclm_abc%26agentId%3Dagent_1"
+                    "kovaloop_ledger_oauth_state=oauth-state; "
+                    "kovaloop_ledger_oauth_return=/dashboard%3FclaimCode%3Dclm_abc%26agentId%3Dagent_1"
                 )
             },
             follow_redirects=False,
@@ -198,8 +198,8 @@ class TestAuthRoutes(LedgerServiceTestCase):
             "/dashboard?claimCode=clm_abc&agentId=agent_1&auth_error=bad+state",
         )
         set_cookie = response.headers["set-cookie"]
-        self.assertIn("chief_ledger_oauth_state=", set_cookie)
-        self.assertIn("chief_ledger_oauth_return=", set_cookie)
+        self.assertIn("kovaloop_ledger_oauth_state=", set_cookie)
+        self.assertIn("kovaloop_ledger_oauth_return=", set_cookie)
         self.assertIn("Max-Age=0", set_cookie)
 
     def test_root_can_receive_github_oauth_callback_error(self) -> None:
@@ -262,7 +262,7 @@ class TestAuthRoutes(LedgerServiceTestCase):
             )
             response = self.client.get(
                 "/auth/session",
-                headers={"Cookie": f"chief_ledger_session={session}"},
+                headers={"Cookie": f"kovaloop_ledger_session={session}"},
             )
 
         self.assertEqual(response.status_code, 200)
@@ -279,7 +279,7 @@ class TestAuthRoutes(LedgerServiceTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"ok": True})
         set_cookie = response.headers["set-cookie"]
-        self.assertIn("chief_ledger_session=", set_cookie)
+        self.assertIn("kovaloop_ledger_session=", set_cookie)
         self.assertIn("Max-Age=0", set_cookie)
 
     def test_auth_logout_get_clears_session_cookie_and_returns_to_dashboard(self) -> None:
@@ -288,7 +288,7 @@ class TestAuthRoutes(LedgerServiceTestCase):
         self.assertEqual(response.status_code, 307)
         self.assertEqual(response.headers["location"], "/dashboard")
         set_cookie = response.headers["set-cookie"]
-        self.assertIn("chief_ledger_session=", set_cookie)
+        self.assertIn("kovaloop_ledger_session=", set_cookie)
         self.assertIn("Max-Age=0", set_cookie)
 
     def test_coinbase_auth_supports_cdp_key_id_and_base64_private_key(self) -> None:
@@ -329,10 +329,10 @@ class TestAuthRoutes(LedgerServiceTestCase):
 
         self.assertEqual(response.status_code, 200)
         html = response.text
-        self.assertIn("Chief Ledger", html)
+        self.assertIn("Kovaloop Ledger", html)
         self.assertIn('rel="icon"', html)
         self.assertIn('class="brand-mark"', html)
-        self.assertIn("Chief Ledger logo", html)
+        self.assertIn("Kovaloop Ledger logo", html)
         self.assertIn('id="ledger-state"', html)
         self.assertNotIn('id="wallet-form"', html)
         self.assertNotIn("Agent Wallet</h2>", html)

@@ -1,4 +1,4 @@
-name: chief
+name: kovaloop
 
 services:
   ledger:

@@ -17,7 +17,7 @@ from x402_seller import (
     default_usdc_asset,
 )
 
-app = FastAPI(title="Chief x402-seller")
+app = FastAPI(title="Kovaloop x402-seller")
 
 
 def default_network() -> str:
@@ -67,7 +67,7 @@ def health() -> dict[str, Any]:
         or "",
     )
     return {
-        "service": "chief-x402-seller",
+        "service": "kovaloop-x402-seller",
         "status": "ok",
         "x402Network": os.getenv("X402_NETWORK") or default_network(),
         "x402PayToConfigured": bool(os.getenv("X402_PAY_TO")),

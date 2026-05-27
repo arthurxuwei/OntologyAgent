@@ -38,7 +38,7 @@ from utils import (
     now_iso,
 )
 
-logger = logging.getLogger("chief.ledger")
+logger = logging.getLogger("kovaloop.ledger")
 
 
 @lru_cache(maxsize=1)
@@ -113,7 +113,7 @@ def ledger_chain_payload(
     extra: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
-        "kind": "chief-ledger-event",
+        "kind": "kovaloop-ledger-event",
         "eventType": event_type,
         "entryIds": [entry.entryId for entry in entries],
         "entries": [

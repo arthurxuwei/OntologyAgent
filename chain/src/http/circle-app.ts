@@ -69,7 +69,7 @@ export function createCircleHttpApp(
 
   app.get("/health", (_req, res) => {
     res.json({
-      service: "chief-circle",
+      service: "kovaloop-circle",
       status: "ok",
       mockChain: config.network.mockChain,
       circleBaseUrl: config.circle.baseUrl,

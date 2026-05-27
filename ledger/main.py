@@ -72,7 +72,7 @@ from webhooks import (
 )
 
 
-app = FastAPI(title="Chief offchain ledger")
+app = FastAPI(title="Kovaloop offchain ledger")
 app.mount(
     "/dashboard/assets",
     StaticFiles(directory=LEDGER_DASHBOARD_ASSETS_PATH),
@@ -138,7 +138,7 @@ def agent_transfer_dashboard_metadata(
 @app.get("/health")
 def health() -> dict[str, Any]:
     get_store().load()
-    return {"service": "chief-ledger", "status": "ok"}
+    return {"service": "kovaloop-ledger", "status": "ok"}
 
 
 @app.get("/")

@@ -1,4 +1,4 @@
-// Compact 2-line transaction row, sized for the narrow CHIEF · LEDGER column
+// Compact 2-line transaction row, sized for the narrow KOVALOOP · LEDGER column
 // (~340px). Top line: timestamp · role · counterparty · receipt · amount · refund-overlay.
 // Bottom line: status pill + optional countdown / verified flag.
 // Grid math is intentionally loose so the pill and countdown wrap rather than

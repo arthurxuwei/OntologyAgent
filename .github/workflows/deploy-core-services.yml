@@ -89,7 +89,7 @@ jobs:
         id: image-meta
         run: |
           owner="${GITHUB_REPOSITORY_OWNER,,}"
-          echo "image-prefix=${REGISTRY}/${owner}/chief-core" >> "$GITHUB_OUTPUT"
+          echo "image-prefix=${REGISTRY}/${owner}/kovaloop-core" >> "$GITHUB_OUTPUT"
           echo "image-tag=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
 
       - name: Log in to GHCR
@@ -151,11 +151,15 @@ jobs:
           test -n "${LIGHTHOUSE_USER}"
           remote="${LIGHTHOUSE_USER}@${LIGHTHOUSE_HOST}"
           ssh -i ~/.ssh/lighthouse_key "${remote}" '
-            sudo install -d -o "$USER" -g "$USER" /opt/chief /opt/chief/data /opt/chief/data/ledger /opt/chief/data/chain
-            touch /opt/chief/.env
+            sudo install -d -o "$USER" -g "$USER" /opt/kovaloop /opt/kovaloop/data /opt/kovaloop/data/ledger /opt/kovaloop/data/chain
+            if [ -d /opt/chief/data ] && [ ! -e /opt/kovaloop/data/ledger/offchain_ledger.sqlite3 ] && [ ! -e /opt/kovaloop/data/ledger/offchain_ledger.json ]; then
+              sudo cp -a /opt/chief/data/. /opt/kovaloop/data/
+              sudo chown -R "$USER:$USER" /opt/kovaloop/data
+            fi
+            touch /opt/kovaloop/.env
           '
-          scp -i ~/.ssh/lighthouse_key docker-compose.core.yml "${remote}:/opt/chief/docker-compose.core.yml"
-          scp -i ~/.ssh/lighthouse_key docker-compose.cloudflare.yml "${remote}:/opt/chief/docker-compose.cloudflare.yml"
+          scp -i ~/.ssh/lighthouse_key docker-compose.core.yml "${remote}:/opt/kovaloop/docker-compose.core.yml"
+          scp -i ~/.ssh/lighthouse_key docker-compose.cloudflare.yml "${remote}:/opt/kovaloop/docker-compose.cloudflare.yml"
 
       - name: Update deployment env
         env:
@@ -167,8 +171,10 @@ jobs:
           COINBASE_ONRAMP_BEARER_TOKEN: ${{ secrets.COINBASE_ONRAMP_BEARER_TOKEN }}
           COINBASE_API_KEY_ID: ${{ secrets.COINBASE_API_KEY_ID }}
           COINBASE_API_PRIVATE_KEY: ${{ secrets.COINBASE_API_PRIVATE_KEY }}
-          GITHUB_CLIENT_ID: ${{ secrets.CHIEF_GITHUB_CLIENT_ID }}
-          GITHUB_CLIENT_SECRET: ${{ secrets.CHIEF_GITHUB_CLIENT_SECRET }}
+          GITHUB_CLIENT_ID: ${{ secrets.KOVALOOP_GITHUB_CLIENT_ID }}
+          GITHUB_CLIENT_SECRET: ${{ secrets.KOVALOOP_GITHUB_CLIENT_SECRET }}
+          LEGACY_GITHUB_CLIENT_ID: ${{ secrets.CHIEF_GITHUB_CLIENT_ID }}
+          LEGACY_GITHUB_CLIENT_SECRET: ${{ secrets.CHIEF_GITHUB_CLIENT_SECRET }}
           AUTH_SESSION_SECRET: ${{ secrets.AUTH_SESSION_SECRET }}
           PUBLIC_BASE_URL: ${{ secrets.PUBLIC_BASE_URL }}
           LEDGER_DEBUG_ADMIN_TOKEN: ${{ secrets.LEDGER_DEBUG_ADMIN_TOKEN }}
@@ -178,8 +184,10 @@ jobs:
           CIRCLE_USDC_TOKEN_ID: ${{ secrets.CIRCLE_USDC_TOKEN_ID }}
         run: |
           remote="${LIGHTHOUSE_USER}@${LIGHTHOUSE_HOST}"
+          if [ -z "${GITHUB_CLIENT_ID}" ] && [ -n "${LEGACY_GITHUB_CLIENT_ID}" ]; then GITHUB_CLIENT_ID="${LEGACY_GITHUB_CLIENT_ID}"; fi
+          if [ -z "${GITHUB_CLIENT_SECRET}" ] && [ -n "${LEGACY_GITHUB_CLIENT_SECRET}" ]; then GITHUB_CLIENT_SECRET="${LEGACY_GITHUB_CLIENT_SECRET}"; fi
           {
-            printf 'GHCR_IMAGE_PREFIX=%s\nIMAGE_TAG=%s\nCHIEF_DATA_ROOT=/opt/chief/data\nCHAIN_PROFILE=base-mainnet\nCIRCLE_BLOCKCHAIN=BASE\nCHAIN_MOCK=false\nCLOUDFLARE_TUNNEL_TOKEN=%s\nCOINBASE_ONRAMP_BEARER_TOKEN=%s\nCOINBASE_API_KEY_ID=%s\nCOINBASE_API_PRIVATE_KEY=%s\n' \
+            printf 'GHCR_IMAGE_PREFIX=%s\nIMAGE_TAG=%s\nKOVALOOP_DATA_ROOT=/opt/kovaloop/data\nCHAIN_PROFILE=base-mainnet\nCIRCLE_BLOCKCHAIN=BASE\nCHAIN_MOCK=false\nCLOUDFLARE_TUNNEL_TOKEN=%s\nCOINBASE_ONRAMP_BEARER_TOKEN=%s\nCOINBASE_API_KEY_ID=%s\nCOINBASE_API_PRIVATE_KEY=%s\n' \
               "${IMAGE_PREFIX}" \
               "${IMAGE_TAG}" \
               "${CLOUDFLARE_TUNNEL_TOKEN}" \
@@ -195,7 +203,7 @@ jobs:
             if [ -n "${CIRCLE_ENTITY_SECRET}" ]; then printf 'CIRCLE_ENTITY_SECRET=%s\n' "${CIRCLE_ENTITY_SECRET}"; fi
             if [ -n "${CIRCLE_WALLET_SET_ID}" ]; then printf 'CIRCLE_WALLET_SET_ID=%s\n' "${CIRCLE_WALLET_SET_ID}"; fi
             if [ -n "${CIRCLE_USDC_TOKEN_ID}" ]; then printf 'CIRCLE_USDC_TOKEN_ID=%s\n' "${CIRCLE_USDC_TOKEN_ID}"; fi
-          } | ssh -i ~/.ssh/lighthouse_key "${remote}" 'cat > /opt/chief/.env.deploy'
+          } | ssh -i ~/.ssh/lighthouse_key "${remote}" 'cat > /opt/kovaloop/.env.deploy'
 
       - name: Pull and restart services
         env:
@@ -210,12 +218,13 @@ jobs:
           fi
           ssh "${ssh_opts[@]}" "${remote}" '
             set -euo pipefail
-            cd /opt/chief
+            cd /opt/kovaloop
             compose_files="-f docker-compose.core.yml"
             if grep -q "^CLOUDFLARE_TUNNEL_TOKEN=." .env.deploy; then
               compose_files="${compose_files} -f docker-compose.cloudflare.yml"
             fi
             echo "Stopping existing services"
+            sudo docker rm -f chief-ledger chief-circle chief-cloudflared 2>/dev/null || true
             sudo docker compose --env-file .env --env-file .env.deploy ${compose_files} down --remove-orphans
             echo "Pruning stopped containers"
             sudo docker container prune -f

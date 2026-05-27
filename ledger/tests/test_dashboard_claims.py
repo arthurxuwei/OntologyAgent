@@ -1067,7 +1067,7 @@ class TestDashboardClaims(LedgerServiceTestCase):
                     "agentId": "agent_session_claim",
                     "claimCode": claim_code,
                 },
-                headers={"Cookie": f"chief_ledger_session={session}"},
+                headers={"Cookie": f"kovaloop_ledger_session={session}"},
             )
 
         self.assertEqual(response.status_code, 200)
@@ -1137,7 +1137,7 @@ class TestDashboardClaims(LedgerServiceTestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["detail"], "email is required")
 
-    def test_dashboard_claimable_agents_can_load_without_chief_email(self) -> None:
+    def test_dashboard_claimable_agents_can_load_without_kovaloop_email(self) -> None:
         store = main.get_store()
         store.bind_account_wallet(
             agent_id="agent_eigenflux",

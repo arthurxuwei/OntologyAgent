@@ -1,9 +1,9 @@
-name: chief-core
+name: kovaloop-core
 
 services:
   ledger:
     image: ${GHCR_IMAGE_PREFIX:?Set GHCR_IMAGE_PREFIX}/ledger:${IMAGE_TAG:-latest}
-    container_name: chief-ledger
+    container_name: kovaloop-ledger
     ports:
       - "8092:8092"
     environment:
@@ -36,14 +36,14 @@ services:
       CIRCLE_USDC_TOKEN_ID: ${CIRCLE_USDC_TOKEN_ID:-}
       X402_USDC_ASSET_ADDRESS: ${X402_USDC_ASSET_ADDRESS:-}
     volumes:
-      - ${CHIEF_DATA_ROOT:-/opt/chief/data}/ledger:/app/data
+      - ${KOVALOOP_DATA_ROOT:-/opt/kovaloop/data}/ledger:/app/data
     depends_on:
       - circle
     restart: unless-stopped
 
   circle:
     image: ${GHCR_IMAGE_PREFIX:?Set GHCR_IMAGE_PREFIX}/chain:${IMAGE_TAG:-latest}
-    container_name: chief-circle
+    container_name: kovaloop-circle
     command: npm run start:circle
     environment:
       CIRCLE_HTTP_PORT: ${CIRCLE_HTTP_PORT:-8093}
@@ -63,5 +63,5 @@ services:
       CIRCLE_USDC_TOKEN_ID: ${CIRCLE_USDC_TOKEN_ID:-}
       AGENT_WALLET_STATE_PATH: ${AGENT_WALLET_STATE_PATH:-/app/data/agent_wallet_state.json}
     volumes:
-      - ${CHIEF_DATA_ROOT:-/opt/chief/data}/chain:/app/data
+      - ${KOVALOOP_DATA_ROOT:-/opt/kovaloop/data}/chain:/app/data
     restart: unless-stopped
