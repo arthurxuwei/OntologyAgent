@@ -176,6 +176,7 @@ jobs:
           LEGACY_GITHUB_CLIENT_ID: ${{ secrets.CHIEF_GITHUB_CLIENT_ID }}
           LEGACY_GITHUB_CLIENT_SECRET: ${{ secrets.CHIEF_GITHUB_CLIENT_SECRET }}
           AUTH_SESSION_SECRET: ${{ secrets.AUTH_SESSION_SECRET }}
+          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
           PUBLIC_BASE_URL: ${{ secrets.PUBLIC_BASE_URL }}
           LEDGER_DEBUG_ADMIN_TOKEN: ${{ secrets.LEDGER_DEBUG_ADMIN_TOKEN }}
           CIRCLE_API_KEY: ${{ secrets.CIRCLE_API_KEY }}
@@ -197,6 +198,7 @@ jobs:
             if [ -n "${GITHUB_CLIENT_ID}" ]; then printf 'GITHUB_CLIENT_ID=%s\n' "${GITHUB_CLIENT_ID}"; fi
             if [ -n "${GITHUB_CLIENT_SECRET}" ]; then printf 'GITHUB_CLIENT_SECRET=%s\n' "${GITHUB_CLIENT_SECRET}"; fi
             if [ -n "${AUTH_SESSION_SECRET}" ]; then printf 'AUTH_SESSION_SECRET=%s\n' "${AUTH_SESSION_SECRET}"; fi
+            if [ -n "${ADMIN_TOKEN}" ]; then printf 'ADMIN_TOKEN=%s\n' "${ADMIN_TOKEN}"; fi
             if [ -n "${PUBLIC_BASE_URL}" ]; then printf 'PUBLIC_BASE_URL=%s\n' "${PUBLIC_BASE_URL}"; fi
             if [ -n "${LEDGER_DEBUG_ADMIN_TOKEN}" ]; then printf 'LEDGER_DEBUG_ADMIN_TOKEN=%s\n' "${LEDGER_DEBUG_ADMIN_TOKEN}"; fi
             if [ -n "${CIRCLE_API_KEY}" ]; then printf 'CIRCLE_API_KEY=%s\n' "${CIRCLE_API_KEY}"; fi

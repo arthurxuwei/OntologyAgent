@@ -325,9 +325,12 @@ class TestAuthRoutes(LedgerServiceTestCase):
         self.assertEqual(response.headers["location"], "/dashboard")
 
     def test_admin_serves_ledger_management_page(self) -> None:
-        response = self.client.get("/admin")
+        with patch.dict(os.environ, {"ADMIN_TOKEN": "admin-secret"}):
+            response = self.client.get("/admin?token=admin-secret", follow_redirects=True)
 
         self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.history[0].status_code, 307)
+        self.assertEqual(response.history[0].headers["location"], "/admin")
         html = response.text
         self.assertIn("Kovaloop Ledger", html)
         self.assertIn('rel="icon"', html)
@@ -411,6 +414,45 @@ class TestAuthRoutes(LedgerServiceTestCase):
         self.assertIsNone(account.dashboardClaimedByEmail)
         self.assertEqual(account.walletAddress, "0x1111111111111111111111111111111111111111")
         self.assertEqual(account.circleWalletId, "circle-claimed")
+
+    def test_admin_requires_configured_token(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            response = self.client.get("/admin", follow_redirects=False)
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.json()["detail"], "Admin access is not configured")
+
+    def test_admin_rejects_missing_or_invalid_token(self) -> None:
+        with patch.dict(os.environ, {"ADMIN_TOKEN": "admin-secret"}):
+            missing = self.client.get("/admin", follow_redirects=False)
+            invalid = self.client.get("/admin?token=wrong", follow_redirects=False)
+
+        self.assertEqual(missing.status_code, 401)
+        self.assertEqual(missing.json()["detail"], "Admin authentication required")
+        self.assertEqual(invalid.status_code, 401)
+        self.assertEqual(invalid.json()["detail"], "Admin authentication required")
+
+    def test_admin_token_sets_cookie_for_subsequent_access(self) -> None:
+        with patch.dict(os.environ, {"ADMIN_TOKEN": "admin-secret"}):
+            login = self.client.get("/admin?token=admin-secret", follow_redirects=False)
+            response = self.client.get("/admin", follow_redirects=False)
+
+        self.assertEqual(login.status_code, 307)
+        self.assertEqual(login.headers["location"], "/admin")
+        self.assertIn("kovaloop_ledger_admin=", login.headers["set-cookie"])
+        self.assertIn("HttpOnly", login.headers["set-cookie"])
+        self.assertEqual(response.status_code, 200)
+
+    def test_admin_summary_requires_admin_cookie(self) -> None:
+        with patch.dict(os.environ, {"ADMIN_TOKEN": "admin-secret"}):
+            missing = self.client.get("/ledger/admin/summary")
+            self.client.get("/admin?token=admin-secret", follow_redirects=False)
+            authorized = self.client.get("/ledger/admin/summary")
+
+        self.assertEqual(missing.status_code, 401)
+        self.assertEqual(missing.json()["detail"], "Admin authentication required")
+        self.assertEqual(authorized.status_code, 200)
+        self.assertIn("accounts", authorized.json())
 
     def test_dashboard_serves_user_dashboard_page(self) -> None:
         response = self.client.get("/dashboard")
@@ -602,7 +644,8 @@ class TestAuthRoutes(LedgerServiceTestCase):
         if shutil.which("node") is None:
             self.skipTest("node is required to execute ledger page helpers")
 
-        response = self.client.get("/admin")
+        with patch.dict(os.environ, {"ADMIN_TOKEN": "admin-secret"}):
+            response = self.client.get("/admin?token=admin-secret", follow_redirects=True)
 
         self.assertEqual(response.status_code, 200)
         script = response.text.split("<script>", 1)[1].split("</script>", 1)[0]

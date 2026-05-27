@@ -15,7 +15,16 @@ from fastapi.staticfiles import StaticFiles
 from payment_router import PaymentIntent, route_payment_intent
 import services
 
-from auth import complete_github_callback, fetch_github_user, sign_auth_session, verify_auth_session
+from auth import (
+    admin_token_matches,
+    complete_github_callback,
+    configured_admin_token,
+    fetch_github_user,
+    sign_admin_session,
+    sign_auth_session,
+    verify_admin_session,
+    verify_auth_session,
+)
 from clients import (
     CoinbaseAuth,
     CoinbaseOnrampClient,
@@ -162,8 +171,37 @@ async def ledger_home(
     return RedirectResponse("/dashboard", status_code=307)
 
 
+def require_admin_access(
+    admin_cookie: str | None,
+) -> None:
+    if not configured_admin_token():
+        raise HTTPException(status_code=403, detail="Admin access is not configured")
+    if not verify_admin_session(admin_cookie):
+        raise HTTPException(status_code=401, detail="Admin authentication required")
+
+
 @app.get("/admin")
-def ledger_admin() -> FileResponse:
+def ledger_admin(
+    request: Request,
+    token: str = "",
+    admin_cookie: str | None = Cookie(default=None, alias=ADMIN_COOKIE),
+) -> Response:
+    if not configured_admin_token():
+        raise HTTPException(status_code=403, detail="Admin access is not configured")
+    if token:
+        if not admin_token_matches(token):
+            raise HTTPException(status_code=401, detail="Admin authentication required")
+        response = RedirectResponse("/admin", status_code=307)
+        response.set_cookie(
+            ADMIN_COOKIE,
+            sign_admin_session(),
+            httponly=True,
+            samesite="lax",
+            secure=public_base_url(request).startswith("https://"),
+            max_age=ADMIN_SESSION_MAX_AGE_SECONDS,
+        )
+        return response
+    require_admin_access(admin_cookie)
     return FileResponse(
         LEDGER_CONSOLE_PATH,
         media_type="text/html",
@@ -524,7 +562,10 @@ async def ledger_claim(
 
 
 @app.get("/ledger/admin/summary")
-async def ledger_admin_summary() -> dict[str, Any]:
+async def ledger_admin_summary(
+    admin_cookie: str | None = Cookie(default=None, alias=ADMIN_COOKIE),
+) -> dict[str, Any]:
+    require_admin_access(admin_cookie)
     summary = get_store().admin_summary()
     accounts = await enriched_account_payloads(get_store().list_accounts())
     summary.update(

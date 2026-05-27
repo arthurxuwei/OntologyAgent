@@ -185,7 +185,9 @@ class TestStoreRouter(LedgerServiceTestCase):
         filtered_escrows = self.client.get("/ledger/escrows?agentId=agent_alpha&status=locked").json()["escrows"]
         self.assertEqual([item["escrowId"] for item in filtered_escrows], [escrow.escrowId])
 
-        summary = self.client.get("/ledger/admin/summary").json()
+        with patch.dict(os.environ, {"ADMIN_TOKEN": "admin-secret"}):
+            self.client.get("/admin?token=admin-secret", follow_redirects=False)
+            summary = self.client.get("/ledger/admin/summary").json()
         self.assertEqual(summary["accounts"], 1)
         self.assertEqual(summary["ledgerLockedAtomic"], "2000000")
         self.assertEqual(summary["escrows"], 1)

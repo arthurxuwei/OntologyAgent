@@ -4,6 +4,7 @@ import base64
 import hashlib
 import hmac
 import json
+import os
 from typing import Any
 
 import httpx
@@ -11,6 +12,7 @@ from fastapi import HTTPException, Request
 from fastapi.responses import RedirectResponse
 
 from config import (
+    ADMIN_COOKIE,
     AUTH_SESSION_MAX_AGE_SECONDS,
     GITHUB_EMAILS_URL,
     GITHUB_TOKEN_URL,
@@ -59,6 +61,57 @@ def verify_auth_session(value: str | None) -> dict[str, Any] | None:
         return None
     parsed["email"] = email
     return parsed
+
+
+def configured_admin_token() -> str | None:
+    token = os.getenv("ADMIN_TOKEN")
+    if token and token.strip():
+        return token.strip()
+    return None
+
+
+def admin_token_matches(value: str | None) -> bool:
+    configured = configured_admin_token()
+    if not configured or value is None:
+        return False
+    return hmac.compare_digest(configured, value)
+
+
+def sign_admin_session() -> str:
+    configured = configured_admin_token()
+    if not configured:
+        raise RuntimeError("ADMIN_TOKEN is required")
+    token = configured.encode("utf-8")
+    body = (
+        base64.urlsafe_b64encode(ADMIN_COOKIE.encode("utf-8"))
+        .rstrip(b"=")
+        .decode("ascii")
+    )
+    signature = hmac.new(token, body.encode("ascii"), hashlib.sha256).hexdigest()
+    return f"{body}.{signature}"
+
+
+def verify_admin_session(value: str | None) -> bool:
+    configured = configured_admin_token()
+    if not configured or not value:
+        return False
+    try:
+        body, signature = value.split(".", 1)
+    except ValueError:
+        return False
+    expected = hmac.new(
+        configured.encode("utf-8"),
+        body.encode("ascii"),
+        hashlib.sha256,
+    ).hexdigest()
+    if not hmac.compare_digest(expected, signature):
+        return False
+    padded = body + ("=" * (-len(body) % 4))
+    try:
+        decoded = base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8")
+    except ValueError:
+        return False
+    return hmac.compare_digest(decoded, ADMIN_COOKIE)
 
 
 async def fetch_github_user(code: str, redirect_uri: str | None = None) -> dict[str, Any]:

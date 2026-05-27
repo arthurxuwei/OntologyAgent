@@ -33,6 +33,8 @@ Configure these repository secrets:
 - `CLOUDFLARE_TUNNEL_TOKEN`: optional. Set this after creating a Cloudflare
   Tunnel for the domain; the deploy workflow will then start `cloudflared`
   alongside the core services.
+- `ADMIN_TOKEN`: required to access `/admin`. Open `/admin?token=<value>` once
+  to set the admin cookie, then use `/admin` normally.
 
 The workflow uses the built-in `GITHUB_TOKEN` to push images to GHCR.
 
@@ -60,6 +62,7 @@ LEDGER_SETTLEMENT_ENABLED=true
 LEDGER_SETTLEMENT_HTTP_URL=http://circle:8093
 LEDGER_SETTLEMENT_REQUIRE_SUCCESS=true
 LEDGER_WALLET_HTTP_URL=http://circle:8093
+ADMIN_TOKEN=<long-random-admin-token>
 EOF
 ```
 
