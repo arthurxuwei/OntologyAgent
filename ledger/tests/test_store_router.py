@@ -27,7 +27,6 @@ class TestStoreRouter(LedgerServiceTestCase):
         legacy_state = {
             "accounts": [],
             "entries": [],
-            "escrows": [],
             "onrampSessions": [],
             "onrampEvents": [],
             "legacySummary": {"ignored": True},
@@ -125,7 +124,6 @@ class TestStoreRouter(LedgerServiceTestCase):
         account = response.json()["account"]
         self.assertEqual(account["agentId"], "agent_buyer")
         self.assertEqual(account["availableAtomic"], "5000000")
-        self.assertEqual(account["lockedAtomic"], "0")
 
         entries = self.client.get("/ledger/accounts/agent_buyer/entries").json()["entries"]
         self.assertEqual(len(entries), 1)
@@ -169,7 +167,6 @@ class TestStoreRouter(LedgerServiceTestCase):
             self.client.get("/admin?token=admin-secret", follow_redirects=False)
             summary = self.client.get("/ledger/admin/summary").json()
         self.assertEqual(summary["accounts"], 1)
-        self.assertEqual(summary["ledgerLockedAtomic"], "0")
 
     def test_claim_domain_routes_do_not_require_matching_owner_email(self) -> None:
         store = main.get_store()
@@ -226,17 +223,6 @@ class TestStoreRouter(LedgerServiceTestCase):
             response.json()["detail"],
             "amountAtomic must be a positive integer string",
         )
-
-    def test_escrow_routes_are_removed(self) -> None:
-        responses = [
-            self.client.get("/ledger/escrows"),
-            self.client.get("/ledger/accounts/agent_alpha/escrows"),
-            self.client.post("/ledger/escrows", json={}),
-            self.client.post("/ledger/escrows/escrow_missing/release"),
-            self.client.post("/ledger/escrows/escrow_missing/refund"),
-        ]
-
-        self.assertEqual([response.status_code for response in responses], [404] * len(responses))
 
     def test_state_persists_to_sqlite_file(self) -> None:
         self.client.post(
@@ -378,13 +364,11 @@ class TestStoreRouter(LedgerServiceTestCase):
                     "agentId": "agent_legacy",
                     "asset": "USDC",
                     "availableAtomic": "7000000",
-                    "lockedAtomic": "0",
                     "createdAt": now,
                     "updatedAt": now,
                 }
             ],
             "entries": [],
-            "escrows": [],
             "onrampSessions": [],
             "onrampEvents": [],
             "circleWebhookEvents": [],
@@ -420,13 +404,11 @@ class TestStoreRouter(LedgerServiceTestCase):
                     "agentId": "agent_legacy_empty_db",
                     "asset": "USDC",
                     "availableAtomic": "3000000",
-                    "lockedAtomic": "0",
                     "createdAt": now,
                     "updatedAt": now,
                 }
             ],
             "entries": [],
-            "escrows": [],
             "onrampSessions": [],
             "onrampEvents": [],
             "circleWebhookEvents": [],
@@ -473,7 +455,6 @@ class TestStoreRouter(LedgerServiceTestCase):
                             "agentId": "agent_payload",
                             "asset": "USDC",
                             "availableAtomic": "9000000",
-                            "lockedAtomic": "0",
                             "createdAt": now,
                             "updatedAt": now,
                         }
@@ -496,7 +477,6 @@ class TestStoreRouter(LedgerServiceTestCase):
                             "agentId": "agent_payload",
                             "asset": "USDC",
                             "availableDeltaAtomic": "9000000",
-                            "lockedDeltaAtomic": "0",
                             "reason": "legacy funding",
                             "metadata": {"source": "legacy-records"},
                             "createdAt": now,
@@ -601,7 +581,6 @@ class TestStoreRouter(LedgerServiceTestCase):
                             "agentId": "agent_health_migrate",
                             "asset": "USDC",
                             "availableAtomic": "4000000",
-                            "lockedAtomic": "0",
                             "createdAt": now,
                             "updatedAt": now,
                         }
@@ -720,4 +699,3 @@ class TestStoreRouter(LedgerServiceTestCase):
         accounts_state = self.client.get("/ledger/accounts").json()
         accounts = {item["agentId"]: item for item in accounts_state["accounts"]}
         self.assertEqual(accounts["agent_buyer"]["availableAtomic"], "5000000")
-        self.assertEqual(accounts["agent_buyer"]["lockedAtomic"], "0")

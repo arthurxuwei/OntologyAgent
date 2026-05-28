@@ -22,7 +22,6 @@ class PromptBuilderTests(unittest.TestCase):
         self.assertIn("You are OntologyAgent.", prompt)
         self.assertIn("Route payments before settlement.", prompt)
         self.assertNotIn("x402 buyer flow", prompt)
-        self.assertNotIn("ledger escrow", prompt.lower())
 
     def test_empty_skill_catalog_keeps_prompt_minimal(self) -> None:
         catalog = load_skill_catalog(Path(__file__).resolve().parents[1] / "skills")

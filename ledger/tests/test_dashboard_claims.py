@@ -77,14 +77,6 @@ class TestDashboardClaims(LedgerServiceTestCase):
             reason="operator funding",
             metadata={},
         )
-        store.create_escrow(
-            buyer_agent_id="agent_alpha",
-            seller_agent_id="agent_beta",
-            amount_atomic="500000",
-            task_id="task_123",
-            description="Research task",
-            metadata={},
-        )
         store.transfer_between_agents(
             from_agent_id="agent_alpha",
             to_agent_id="agent_beta",
@@ -112,10 +104,10 @@ class TestDashboardClaims(LedgerServiceTestCase):
             alpha["agent"]["fullWalletAddress"],
             "0x1111111111111111111111111111111111111111",
         )
-        self.assertEqual(alpha["balance"]["available"], 2.0)
-        self.assertEqual(alpha["balance"]["locked"], 0.5)
+        self.assertEqual(alpha["balance"]["available"], 2.5)
+        self.assertNotIn("locked", alpha["balance"])
         self.assertEqual(alpha["balance"]["lifetimeIn"], 2.5)
-        self.assertEqual(alpha["balance"]["lifetimeOut"], 0.75)
+        self.assertEqual(alpha["balance"]["lifetimeOut"], 0.25)
         self.assertEqual(alpha["transactions"][0]["counterparty"], "other@example.com")
         self.assertNotEqual(alpha["transactions"][0]["counterparty"], "agent_beta")
         self.assertNotEqual(alpha["transactions"][0]["counterparty"], "remark should not render")
@@ -174,7 +166,6 @@ class TestDashboardClaims(LedgerServiceTestCase):
                     }
                 ],
                 "entries": [],
-                "escrows": [],
             },
         )
 
@@ -243,7 +234,6 @@ class TestDashboardClaims(LedgerServiceTestCase):
                         "email": "receiver@example.com",
                         "walletAddress": "0x1111111111111111111111111111111111111111",
                         "availableAtomic": "1000000",
-                        "lockedAtomic": "0",
                         "gatewayPendingBatchAtomic": "0",
                     }
                 ],
@@ -253,7 +243,6 @@ class TestDashboardClaims(LedgerServiceTestCase):
                         "entryType": "agent_transfer",
                         "agentId": "receiver",
                         "availableDeltaAtomic": "222000",
-                        "lockedDeltaAtomic": "0",
                         "metadata": {
                             "dashboardStatus": "pending_settle",
                             "gatewayPendingBatchAtomic": "222000",
@@ -264,7 +253,6 @@ class TestDashboardClaims(LedgerServiceTestCase):
                         "createdAt": main.now_iso(),
                     }
                 ],
-                "escrows": [],
             },
             owner_email="receiver@example.com",
         )
@@ -283,7 +271,6 @@ class TestDashboardClaims(LedgerServiceTestCase):
                         "email": "receiver@example.com",
                         "walletAddress": "0x1111111111111111111111111111111111111111",
                         "availableAtomic": "1000000",
-                        "lockedAtomic": "0",
                         "gatewayPendingBatchAtomic": "500000",
                     }
                 ],
@@ -293,7 +280,6 @@ class TestDashboardClaims(LedgerServiceTestCase):
                         "entryType": "agent_transfer",
                         "agentId": "receiver",
                         "availableDeltaAtomic": "222000",
-                        "lockedDeltaAtomic": "0",
                         "metadata": {
                             "dashboardStatus": "pending_settle",
                             "gatewayPendingBatchAtomic": "222000",
@@ -309,7 +295,6 @@ class TestDashboardClaims(LedgerServiceTestCase):
                         "entryType": "agent_transfer",
                         "agentId": "receiver",
                         "availableDeltaAtomic": "500000",
-                        "lockedDeltaAtomic": "0",
                         "metadata": {
                             "settlementMode": "gateway",
                             "transactionState": "SETTLED",
@@ -322,7 +307,6 @@ class TestDashboardClaims(LedgerServiceTestCase):
                         "entryType": "agent_transfer",
                         "agentId": "receiver",
                         "availableDeltaAtomic": "-1100000",
-                        "lockedDeltaAtomic": "0",
                         "metadata": {
                             "dashboardStatus": "pending_settle",
                             "gatewayStage": "pending_batch",
@@ -333,7 +317,6 @@ class TestDashboardClaims(LedgerServiceTestCase):
                         "createdAt": "2026-05-22T14:21:48+00:00",
                     },
                 ],
-                "escrows": [],
             },
             owner_email="receiver@example.com",
         )
@@ -363,7 +346,6 @@ class TestDashboardClaims(LedgerServiceTestCase):
                         "entryType": "agent_transfer",
                         "agentId": "receiver",
                         "availableDeltaAtomic": "1000",
-                        "lockedDeltaAtomic": "0",
                         "metadata": {
                             "settlementMode": "gateway",
                             "transactionState": "SETTLED",
@@ -376,7 +358,6 @@ class TestDashboardClaims(LedgerServiceTestCase):
                         "entryType": "agent_transfer",
                         "agentId": "receiver",
                         "availableDeltaAtomic": "1",
-                        "lockedDeltaAtomic": "0",
                         "metadata": {
                             "dashboardStatus": "pending_settle",
                             "settlementMode": "gateway",
@@ -387,7 +368,6 @@ class TestDashboardClaims(LedgerServiceTestCase):
                         "createdAt": "2026-05-23T15:44:35+00:00",
                     },
                 ],
-                "escrows": [],
             },
             owner_email="receiver@example.com",
         )
@@ -405,7 +385,6 @@ class TestDashboardClaims(LedgerServiceTestCase):
                 "entryType": "withdrawal_submitted",
                 "agentId": "receiver",
                 "availableDeltaAtomic": "0",
-                "lockedDeltaAtomic": "0",
                 "reason": "withdrawal submitted",
                 "metadata": {
                     "dashboardStatus": "withdraw_submitted",
@@ -423,7 +402,6 @@ class TestDashboardClaims(LedgerServiceTestCase):
                 "entryType": "withdrawal_submitted",
                 "agentId": "receiver",
                 "availableDeltaAtomic": "0",
-                "lockedDeltaAtomic": "0",
                 "reason": "Circle withdrawal failed",
                 "metadata": {
                     "dashboardStatus": "failed",
@@ -450,7 +428,6 @@ class TestDashboardClaims(LedgerServiceTestCase):
                 "entryType": "credit",
                 "agentId": "receiver",
                 "availableDeltaAtomic": "2500000",
-                "lockedDeltaAtomic": "0",
                 "reason": "Gateway Wallet credited",
                 "metadata": {
                     "dashboardStatus": "credited",
@@ -484,7 +461,6 @@ class TestDashboardClaims(LedgerServiceTestCase):
                         "entryType": "pending_inbound",
                         "agentId": "agent_topup",
                         "availableDeltaAtomic": "0",
-                        "lockedDeltaAtomic": "0",
                         "createdAt": "2026-05-22T08:50:22+00:00",
                         "metadata": {
                             "dashboardStatus": "pending_inbound_chain",
@@ -497,7 +473,6 @@ class TestDashboardClaims(LedgerServiceTestCase):
                         "entryType": "credit",
                         "agentId": "agent_topup",
                         "availableDeltaAtomic": "1000000",
-                        "lockedDeltaAtomic": "0",
                         "createdAt": "2026-05-22T08:50:56+00:00",
                         "metadata": {
                             "dashboardStatus": "credited",
@@ -507,7 +482,6 @@ class TestDashboardClaims(LedgerServiceTestCase):
                         },
                     },
                 ],
-                "escrows": [],
             }
         )
 
@@ -538,7 +512,6 @@ class TestDashboardClaims(LedgerServiceTestCase):
                         "entryType": "pending_inbound",
                         "agentId": "agent_topup",
                         "availableDeltaAtomic": "0",
-                        "lockedDeltaAtomic": "0",
                         "createdAt": "2026-05-22T15:08:31+00:00",
                         "metadata": {
                             "dashboardStatus": "pending_inbound_chain",
@@ -551,7 +524,6 @@ class TestDashboardClaims(LedgerServiceTestCase):
                         "entryType": "credit",
                         "agentId": "agent_topup",
                         "availableDeltaAtomic": "2100000",
-                        "lockedDeltaAtomic": "0",
                         "createdAt": "2026-05-22T15:09:05+00:00",
                         "metadata": {
                             "dashboardStatus": "credited",
@@ -561,7 +533,6 @@ class TestDashboardClaims(LedgerServiceTestCase):
                         },
                     },
                 ],
-                "escrows": [],
             }
         )
 
@@ -794,7 +765,7 @@ class TestDashboardClaims(LedgerServiceTestCase):
         self.assertNotIn("gatewayDepositResult", entries[1].metadata)
         self.assertEqual(result["account"]["availableAtomic"], "2500000")
 
-    def test_dashboard_pending_settlement_balance_uses_escrow_amount_fallback(self) -> None:
+    def test_dashboard_pending_settlement_balance_uses_metadata_amount(self) -> None:
         state = main.build_dashboard_data(
             {
                 "accounts": [
@@ -804,7 +775,6 @@ class TestDashboardClaims(LedgerServiceTestCase):
                         "email": "receiver@example.com",
                         "walletAddress": "0x1111111111111111111111111111111111111111",
                         "availableAtomic": "0",
-                        "lockedAtomic": "0",
                     }
                 ],
                 "entries": [
@@ -813,19 +783,8 @@ class TestDashboardClaims(LedgerServiceTestCase):
                         "entryType": "pending_settlement",
                         "agentId": "receiver",
                         "availableDeltaAtomic": "0",
-                        "lockedDeltaAtomic": "0",
-                        "escrowId": "escrow_pending",
-                        "metadata": {},
+                        "metadata": {"amountAtomic": "500000"},
                         "createdAt": main.now_iso(),
-                    }
-                ],
-                "escrows": [
-                    {
-                        "escrowId": "escrow_pending",
-                        "buyerAgentId": "payer",
-                        "sellerAgentId": "receiver",
-                        "amountAtomic": "500000",
-                        "description": "pending task",
                     }
                 ],
             },
@@ -1239,7 +1198,6 @@ class TestDashboardClaims(LedgerServiceTestCase):
         self.assertNotIn("const entryStatus", source)
         self.assertNotIn("fetch(`/ledger/accounts?claimedByEmail=", source)
         self.assertNotIn("/entries?limit=100", source)
-        self.assertNotIn("/escrows", source)
 
     def test_dashboard_root_waits_for_babel_global_dependencies_before_render(self) -> None:
         response = self.client.get("/dashboard")

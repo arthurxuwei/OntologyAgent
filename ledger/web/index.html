@@ -426,7 +426,6 @@
           `<div class="metric"><span>Gateway USDC Available</span><strong>${formatDecimal(summary.gatewayUsdcAvailable ?? sumDecimal(accounts, "gatewayUsdcAvailable"))}</strong></div>`,
           `<div class="metric"><span>Pending Deposits</span><strong>${formatDecimal(summary.pendingDeposits ?? sumDecimal(accounts, "gatewayUsdcPendingDeposits"))}</strong></div>`,
           `<div class="metric"><span>Pending Batch</span><strong>${formatDecimal(summary.pendingBatch ?? sumDecimal(accounts, "gatewayUsdcPendingBatch"))}</strong></div>`,
-          `<div class="metric"><span>Ledger Locked</span><strong>${formatAtomic(summary.ledgerLockedAtomic ?? sumAtomic(accounts, "lockedAtomic"))}</strong></div>`,
           `<div class="metric"><span>Onramp Sessions</span><strong>${summary.onrampSessions ?? onrampSessions.length}</strong></div>`,
           `</div>`,
           renderStateSection(
@@ -446,7 +445,6 @@
               { label: "Pending Deposits Atomic", render: (account) => formatAtomic(account.gatewayPendingDepositsAtomic) },
               { label: "Pending Batch", render: (account) => formatDecimal(account.gatewayUsdcPendingBatch) },
               { label: "Pending Batch Atomic", render: (account) => formatAtomic(account.gatewayPendingBatchAtomic) },
-              { label: "Ledger Locked", render: (account) => formatAtomic(account.lockedAtomic) },
               { label: "Updated", render: (account) => formatDate(account.updatedAt || account.createdAt) },
             ],
             accounts,
@@ -470,7 +468,6 @@
               { label: "Type", render: (entry) => statusBadge(entry.entryType) },
               { label: "Agent", render: (entry) => `<span class="mono">${shortValue(entry.agentId)}</span>` },
               { label: "Available Delta", render: (entry) => formatAtomic(entry.availableDeltaAtomic || 0) },
-              { label: "Locked Delta", render: (entry) => formatAtomic(entry.lockedDeltaAtomic || 0) },
               { label: "Reason", render: (entry) => shortValue(entry.reason || entry.entryId) },
             ],
             recentEntries,

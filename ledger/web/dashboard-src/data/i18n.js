@@ -295,7 +295,6 @@
     'mvp.dash.overview.balance_label':{ en: 'BALANCE',                         zh: '余额' },
     'mvp.dash.overview.kpi_in':       { en: 'LIFETIME IN',                     zh: '历史流入' },
     'mvp.dash.overview.kpi_out':      { en: 'LIFETIME OUT',                    zh: '历史流出' },
-    'mvp.dash.overview.kpi_escrow':   { en: 'ESCROWED',                        zh: '锁定中' },
     'mvp.dash.overview.recent_label': { en: 'RECENT TRANSACTIONS',             zh: '最近交易' },
     'mvp.dash.overview.view_all':     { en: 'View all',                        zh: '查看全部' },
     'mvp.dash.overview.empty':        { en: 'No transactions yet.',            zh: '还没有交易。' },

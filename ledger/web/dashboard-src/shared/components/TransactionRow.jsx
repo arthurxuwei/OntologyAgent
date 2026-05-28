@@ -20,7 +20,7 @@ function TransactionRow({
   counterparty,
   amount,
   direction = 'out',
-  status = 'locked',
+  status = 'released',
   timestamp = 'just now',
   countdown,
   verified,
@@ -39,7 +39,6 @@ function TransactionRow({
   const arrow = direction === 'out' ? '→' : '←';
 
   const statusMap = {
-    locked:            { label: 'LOCKED',            color: 'var(--ink-primary)',     bg: 'transparent' },
     delivery_claimed:  { label: 'DELIVERY CLAIMED',  color: 'var(--accent-amber)',    bg: 'transparent' },
     released:          { label: 'RELEASED',          color: 'var(--status-positive)', bg: 'transparent' },
     refunded:          { label: 'REFUNDED',          color: 'var(--ink-secondary)',   bg: 'transparent' },
@@ -63,7 +62,7 @@ function TransactionRow({
         color: (window.statusChipColorFor && window.statusChipColorFor(lifecycleMeta)) || 'var(--accent-amber)',
         bg: 'transparent',
       }
-    : (statusMap[status] || statusMap.locked);
+    : (statusMap[status] || statusMap.released);
   const isInverse = s.bg !== 'transparent';
   const lineThrough = status === 'expired';
   const isRefunded = status === 'refunded';

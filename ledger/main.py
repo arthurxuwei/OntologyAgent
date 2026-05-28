@@ -428,7 +428,6 @@ async def ledger_portfolio(ownerEmail: str = "") -> dict[str, Any]:
             {
                 "accounts": [],
                 "entries": [],
-                "escrows": [],
             },
         )
 
@@ -441,23 +440,16 @@ async def ledger_portfolio(ownerEmail: str = "") -> dict[str, Any]:
         if str(account.get("agentId") or "").strip()
     ]
     entries: list[dict[str, Any]] = []
-    escrows_by_id: dict[str, dict[str, Any]] = {}
     for agent_id in agent_ids:
         entries.extend(
             entry.model_dump()
             for entry in store.list_entries(agent_id=agent_id, limit=500)
         )
-        for escrow in store.list_escrows(agent_id=agent_id):
-            payload = escrow.model_dump()
-            escrow_id = str(payload.get("escrowId") or "").strip()
-            if escrow_id:
-                escrows_by_id[escrow_id] = payload
 
     return build_dashboard_data(
         {
             "accounts": accounts,
             "entries": entries,
-            "escrows": list(escrows_by_id.values()),
         },
     )
 
@@ -649,7 +641,6 @@ async def credit_agent_balance(agent_id: str, request: CreditRequest) -> dict[st
         )
         chain_record = await record_ledger_chain_event(
             event_type="credit",
-            escrow=None,
             entries=[entry],
             extra={"agentId": agent_id, "amountAtomic": request.amountAtomic},
         )
@@ -794,7 +785,6 @@ async def withdraw_agent_wallet(request: WithdrawalRequest) -> dict[str, Any]:
         )
         chain_record = await record_ledger_chain_event(
             event_type="withdrawal",
-            escrow=None,
             entries=[entry],
             extra={
                 "withdrawalId": withdrawal_id,
@@ -851,7 +841,6 @@ async def transfer_between_agents(request: AgentTransferRequest) -> dict[str, An
         )
         chain_record = await record_ledger_chain_event(
             event_type="agent_transfer",
-            escrow=None,
             entries=entries,
             extra={
                 "transferId": transfer_id,

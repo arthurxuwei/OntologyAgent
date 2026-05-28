@@ -22,7 +22,6 @@ class LedgerAccount(BaseModel):
     dashboardClaimedByEmail: Optional[str] = None
     asset: str = DEFAULT_ASSET
     availableAtomic: str = "0"
-    lockedAtomic: str = "0"
     createdAt: str
     updatedAt: str
 
@@ -33,9 +32,6 @@ class LedgerEntry(BaseModel):
     entryId: str
     entryType: Literal[
         "credit",
-        "escrow_lock",
-        "escrow_release",
-        "escrow_refund",
         "agent_transfer",
         "withdrawal",
         "pending_settlement",
@@ -45,8 +41,6 @@ class LedgerEntry(BaseModel):
     agentId: str
     asset: str = DEFAULT_ASSET
     availableDeltaAtomic: str = "0"
-    lockedDeltaAtomic: str = "0"
-    escrowId: Optional[str] = None
     reason: Optional[str] = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     createdAt: str
@@ -58,9 +52,6 @@ class LedgerChainRecord(BaseModel):
     recordId: str
     eventType: Literal[
         "credit",
-        "escrow_lock",
-        "escrow_release",
-        "escrow_refund",
         "agent_transfer",
         "withdrawal",
     ]
@@ -70,7 +61,6 @@ class LedgerChainRecord(BaseModel):
     recorderAddress: str
     txHash: Optional[str] = None
     mode: Optional[str] = None
-    escrowId: Optional[str] = None
     entryIds: list[str] = Field(default_factory=list)
     payload: dict[str, Any] = Field(default_factory=dict)
     actionResult: dict[str, Any] = Field(default_factory=dict)
@@ -83,11 +73,10 @@ class LedgerSettlementRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     recordId: str
-    eventType: Literal["escrow_release", "agent_transfer", "withdrawal"]
+    eventType: Literal["agent_transfer", "withdrawal"]
     status: Literal["submitted", "failed"]
     settlementAction: str = "settle_ledger_transfer"
     settlementHttpUrl: str
-    escrowId: Optional[str] = None
     transferId: Optional[str] = None
     fromAgentId: str
     toAgentId: Optional[str] = None
@@ -102,23 +91,6 @@ class LedgerSettlementRecord(BaseModel):
     error: Optional[str] = None
     createdAt: str
     updatedAt: str
-
-
-class EscrowRecord(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    escrowId: str
-    buyerAgentId: str
-    sellerAgentId: str
-    amountAtomic: str
-    asset: str = DEFAULT_ASSET
-    status: Literal["locked", "released", "refunded"]
-    taskId: Optional[str] = None
-    description: Optional[str] = None
-    createdAt: str
-    updatedAt: str
-    releasedAt: Optional[str] = None
-    refundedAt: Optional[str] = None
 
 
 class OnrampSessionRecord(BaseModel):
@@ -195,7 +167,6 @@ class LedgerState(BaseModel):
 
     accounts: list[LedgerAccount] = Field(default_factory=list)
     entries: list[LedgerEntry] = Field(default_factory=list)
-    escrows: list[EscrowRecord] = Field(default_factory=list)
     onrampSessions: list[OnrampSessionRecord] = Field(default_factory=list)
     onrampEvents: list[OnrampEventRecord] = Field(default_factory=list)
     circleWebhookEvents: list[CircleWebhookEventRecord] = Field(default_factory=list)

@@ -80,7 +80,6 @@ class TestWalletsOnrampState(LedgerServiceTestCase):
         self.assertEqual(payload["account"]["email"], "agent@example.com")
         self.assertEqual(payload["account"]["accountType"], "EOA")
         self.assertEqual(payload["account"]["availableAtomic"], "0")
-        self.assertEqual(payload["account"]["lockedAtomic"], "0")
 
         state = self.ledger_domain_state("agent_research")
         self.assertEqual(len(state["accounts"]), 1)
@@ -247,7 +246,6 @@ class TestWalletsOnrampState(LedgerServiceTestCase):
 
         self.assertEqual([account["agentId"] for account in state["accounts"]], ["agent_owner"])
         self.assertEqual([entry["agentId"] for entry in state["entries"]], ["agent_owner"])
-        self.assertEqual(state["escrows"], [])
         self.assertEqual(state["onrampSessions"], [])
         self.assertEqual(state["onrampEvents"], [])
         self.assertEqual(state["chainRecords"], [])
@@ -309,23 +307,6 @@ class TestWalletsOnrampState(LedgerServiceTestCase):
             reason="other funding",
             metadata={},
         )
-        store.create_escrow(
-            buyer_agent_id="agent_owner",
-            seller_agent_id="agent_counterparty",
-            amount_atomic="1000000",
-            task_id="owner_task",
-            description=None,
-            metadata={},
-        )
-        store.create_escrow(
-            buyer_agent_id="agent_other",
-            seller_agent_id="agent_counterparty",
-            amount_atomic="1000000",
-            task_id="other_task",
-            description=None,
-            metadata={},
-        )
-
         state = self.ledger_domain_state("agent_owner")
 
         self.assertEqual(
@@ -336,10 +317,7 @@ class TestWalletsOnrampState(LedgerServiceTestCase):
             {entry["agentId"] for entry in state["entries"]},
             {"agent_owner"},
         )
-        self.assertEqual(
-            [escrow["taskId"] for escrow in state["escrows"]],
-            ["owner_task"],
-        )
+        self.assertEqual(len(state["entries"]), 1)
 
     def test_ledger_state_keeps_ledger_available_separate_from_wallet_balances(self) -> None:
         class FakeWalletClient:

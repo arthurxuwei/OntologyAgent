@@ -4,8 +4,8 @@
 
 - `agent`：Python Agent 本体，负责交互式会话、tool orchestration，以及对子 Agent 的管理
 - `chain`：TypeScript 链上 REST 服务，负责直接链上执行、UserOperation、交易状态和 x402 buyer flow
-- `circle`：内部 Circle REST 服务，负责真实 Circle 钱包生命周期和 ledger release 结算
-- `ledger`：独立链下账本服务，也是公网统一入口，负责 Agent Wallet onboarding、内部余额、Escrow 锁款、放款、退款和流水记录
+- `circle`：内部 Circle REST 服务，负责真实 Circle 钱包生命周期和 ledger 转账结算
+- `ledger`：独立链下账本服务，也是公网统一入口，负责 Agent Wallet onboarding、内部余额、直接转账、提现和流水记录
 
 Agent / ZeroClaw 安装包已拆到独立仓库：[kovaloop](https://github.com/arthurxuwei/kovaloop)。
 
@@ -41,7 +41,7 @@ docker compose up -d --build
 - `agent` 子 Agent 管理：`POST /autonomy/start`、`POST /autonomy/stop`、`POST /autonomy/tick`
 - `ledger` 管理页面：`http://localhost:8092/`
 - `ledger` 健康检查：`http://localhost:8092/health`
-- `ledger` 账本状态：`GET http://localhost:8092/ledger/state`
+- `ledger` 账户列表：`GET http://localhost:8092/ledger/accounts`
 - `chain` REST：`http://localhost:8091/health`
 - `circle` REST：`http://localhost:8093/health`
 
@@ -78,7 +78,7 @@ docker compose --env-file "$(dirname "$(git rev-parse --git-common-dir)")/.env" 
 - 链上动作只能通过 `chain` REST 服务完成
 - Agent Wallet 生命周期和 Circle 转账结算由 `ledger` 统一入口触发；`circle` REST 服务只作为内部 backend
 - `chain` 暴露明确的 REST 业务接口
-- 撮合型 A2A 的 Escrow/余额状态应落在 `ledger`，而不是用 x402 或链上交易直接承担
+- 撮合型 A2A 当前只支持在 `ledger` 中完成直接 Agent Wallet 转账；x402 仅用于外部即时付费 HTTP/API 调用
 
 `agent` 启动后会注册 REST-backed 工具：
 
@@ -89,13 +89,12 @@ docker compose --env-file "$(dirname "$(git rev-parse --git-common-dir)")/.env" 
   - `run_wealth_tick`
   - `update_wealth_config`
 - 本地 Agent Wallet ledger 工具
-  - `route_payment_intent`（任何付款、x402、转账或 Escrow 动作前先选择支付方式）
+  - `route_payment_intent`（任何付款、x402、转账、提现或 funding 动作前先选择支付方式）
   - `agent_wallet_get_ledger_state`
   - `agent_wallet_get_or_create`
   - `agent_wallet_create_onramp_session`
-  - `agent_wallet_create_escrow`
-  - `agent_wallet_release_escrow`
-  - `agent_wallet_refund_escrow`
+  - `agent_wallet_transfer`
+  - `agent_wallet_settle_ledger_transfer`
 - `chain` REST-backed tools
   - `chain_get_wallet_state`（内部账本 / 自治循环使用）
   - `chain_sign_transfer`
@@ -106,17 +105,18 @@ docker compose --env-file "$(dirname "$(git rev-parse --git-common-dir)")/.env" 
 
 ### Offchain Ledger Service（V1）
 
-`ledger` 是独立 FastAPI 服务，用本地 JSON 文件保存第一版 Agent Wallet 链下账本。它面向撮合型 A2A 场景，提供内部余额和 Escrow 状态机，不负责链上签名、x402 付款或 owner 鉴权。
+`ledger` 是独立 FastAPI 服务，用本地 SQLite 文件保存 Agent Wallet 链下账本。它面向当前 transfer-only MVP，提供账户、入金、直接转账、提现、onramp session 和流水记录，不负责链上签名、x402 付款或 owner 鉴权。
 
 主要接口：
 
 - `GET /health`
-- `GET /ledger/state`
 - `POST /ledger/wallets/get-or-create`
+- `GET /ledger/accounts`
+- `GET /ledger/accounts/{agentId}`
+- `GET /ledger/accounts/{agentId}/entries`
 - `POST /ledger/accounts/{agentId}/credit`
-- `POST /ledger/escrows`
-- `POST /ledger/escrows/{escrowId}/release`
-- `POST /ledger/escrows/{escrowId}/refund`
+- `POST /ledger/transfers`
+- `POST /ledger/withdrawals`
 - `POST /onramp/sessions`
 - `GET /onramp/sessions/{sessionId}`
 - `POST /onramp/sessions/{sessionId}/confirm`
@@ -125,23 +125,21 @@ docker compose --env-file "$(dirname "$(git rev-parse --git-common-dir)")/.env" 
 
 - 金额使用 USDC atomic amount 字符串，不使用浮点数
 - `credit` 增加 Agent 可用余额
+- `transfer` 直接在两个已绑定 Agent Wallet 的账户之间结算
+- `withdrawal` 从 Agent Wallet 转出到外部地址
 - Coinbase Onramp 创建 session 时只生成 hosted onramp URL，不增加 Agent 可用余额
 - Onramp 确认后才会创建 `coinbase_onramp_confirmed` credit entry
 - 同一个 Onramp session 重复 confirm 不会重复入账
-- 创建 escrow 会把 buyer 的可用余额转为锁定余额
-- `release` 会把 buyer 锁定余额转给 seller 可用余额
-- `refund` 会把 buyer 锁定余额退回 buyer 可用余额
-- 已 release/refund 的 escrow 不能再次变更
 
-本地状态文件由 `LEDGER_STATE_PATH` 控制，Docker 默认是 `/app/data/offchain_ledger.json`，并挂载到仓库的 `./ledger/data`。
+本地 SQLite 状态文件由 `LEDGER_DB_PATH` 控制，Docker 默认挂载到 ledger 数据目录。
 
-`ledger` 自带独立管理页面：`http://localhost:8092/`。页面可以直接验证 Coinbase Onramp session、onramp confirm credit、manual credit、create escrow、release 和 refund。`agent` 的 Web Console 不承载 ledger 管理功能；agent 只通过本地工具在对话/编排时调用 ledger 能力。
+`ledger` 自带独立管理页面：`http://localhost:8092/`。页面可以直接验证 Coinbase Onramp session、onramp confirm credit、manual credit、账户、流水、转账和提现状态。`agent` 的 Web Console 不承载 ledger 管理功能；agent 只通过本地工具在对话/编排时调用 ledger 能力。
 
 ### Payment Routing
 
 Agent 同时具备 `ledger`、x402 和链上转账能力。为了避免模型自行猜测支付方式，所有付款相关动作必须先调用 `route_payment_intent`：
 
-- `deliveryMode=async_task` 或 `requiresAcceptance=true` 且不是外部服务：返回 `ledger_escrow`
+- `deliveryMode=async_task` 或 `requiresAcceptance=true`：返回 `needs_clarification`，确认是否在验收后用直接转账支付
 - `deliveryMode=funding`：返回 `onramp`
 - `deliveryMode=immediate_api` 且是外部服务：返回 `x402`
 - `deliveryMode=withdrawal`：返回 `chain_transfer`
@@ -460,7 +458,7 @@ Agent Wallet MVP 在现有 Web Console 中增加了一个 `Agent Wallet MVP` 面
 5. 在 Base Sepolia 上触发一次 x402 paid service call
 6. 在 Agent Wallet demo 状态中查看 service 与 x402 payment 记录
 
-注意：Agent Wallet 的 x402 demo payment 记录仍存储在 `agent` 的 demo state 中；撮合型 A2A 的内部余额和 Escrow 状态由独立 `ledger` 服务负责。
+注意：Agent Wallet 的 x402 demo payment 记录仍存储在 `agent` 的 demo state 中；撮合型 A2A 的内部余额和直接转账记录由独立 `ledger` 服务负责。
 
 最小配置：
 

@@ -29,7 +29,7 @@ from config import (
     DEFAULT_SETTLEMENT_HTTP_URL,
     DEFAULT_WALLET_HTTP_URL,
 )
-from models import AgentWalletRequest, EscrowRecord, LedgerChainRecord, LedgerEntry, LedgerSettlementRecord
+from models import AgentWalletRequest, LedgerChainRecord, LedgerEntry, LedgerSettlementRecord
 from store import OffchainLedgerStore
 from utils import (
     decimal_usdc_to_atomic_string,
@@ -102,13 +102,9 @@ def ledger_chain_payload(
     *,
     event_type: Literal[
         "credit",
-        "escrow_lock",
-        "escrow_release",
-        "escrow_refund",
         "agent_transfer",
         "withdrawal",
     ],
-    escrow: Optional[EscrowRecord],
     entries: list[LedgerEntry],
     extra: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
@@ -123,8 +119,6 @@ def ledger_chain_payload(
                 "agentId": entry.agentId,
                 "asset": entry.asset,
                 "availableDeltaAtomic": entry.availableDeltaAtomic,
-                "lockedDeltaAtomic": entry.lockedDeltaAtomic,
-                "escrowId": entry.escrowId,
                 "reason": entry.reason,
                 "createdAt": entry.createdAt,
             }
@@ -132,21 +126,6 @@ def ledger_chain_payload(
         ],
         "createdAt": now_iso(),
     }
-    if escrow is not None:
-        payload["escrow"] = {
-            "escrowId": escrow.escrowId,
-            "buyerAgentId": escrow.buyerAgentId,
-            "sellerAgentId": escrow.sellerAgentId,
-            "amountAtomic": escrow.amountAtomic,
-            "asset": escrow.asset,
-            "status": escrow.status,
-            "taskId": escrow.taskId,
-            "description": escrow.description,
-            "createdAt": escrow.createdAt,
-            "updatedAt": escrow.updatedAt,
-            "releasedAt": escrow.releasedAt,
-            "refundedAt": escrow.refundedAt,
-        }
     if extra:
         payload["extra"] = extra
     return payload
@@ -156,24 +135,18 @@ async def record_ledger_chain_event(
     *,
     event_type: Literal[
         "credit",
-        "escrow_lock",
-        "escrow_release",
-        "escrow_refund",
         "agent_transfer",
         "withdrawal",
     ],
-    escrow: Optional[EscrowRecord],
     entries: list[LedgerEntry],
     extra: Optional[dict[str, Any]] = None,
 ) -> Optional[LedgerChainRecord]:
     recorder = get_chain_recorder()
     record = await recorder.submit(
         event_type=event_type,
-        escrow=escrow,
         entries=entries,
         payload=ledger_chain_payload(
             event_type=event_type,
-            escrow=escrow,
             entries=entries,
             extra=extra,
         ),

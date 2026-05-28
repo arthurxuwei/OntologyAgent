@@ -60,7 +60,6 @@ class TestSettlementFlows(LedgerServiceTestCase):
         record = asyncio.run(
             recorder.submit(
                 event_type="credit",
-                escrow=None,
                 entries=[entry],
                 payload={"eventType": "credit"},
             )
@@ -123,24 +122,6 @@ class TestSettlementFlows(LedgerServiceTestCase):
         self.assertEqual(record.transactionId, "mint-tx")
         self.assertEqual(record.transactionHash, "0xmint")
         self.assertEqual(record.transactionState, "CONFIRMED")
-
-    def test_escrow_rest_workflow_is_removed(self) -> None:
-        responses = [
-            self.client.get("/ledger/escrows"),
-            self.client.get("/ledger/accounts/agent_buyer/escrows"),
-            self.client.post(
-                "/ledger/escrows",
-                json={
-                    "buyerAgentId": "agent_buyer",
-                    "sellerAgentId": "agent_seller",
-                    "amountAtomic": "3000000",
-                },
-            ),
-            self.client.post("/ledger/escrows/escrow_missing/release"),
-            self.client.post("/ledger/escrows/escrow_missing/refund"),
-        ]
-
-        self.assertEqual([response.status_code for response in responses], [404] * len(responses))
 
     def test_agent_transfer_calls_circle_then_records_ledger_entries(self) -> None:
         class FakeSettlementClient:
@@ -220,9 +201,7 @@ class TestSettlementFlows(LedgerServiceTestCase):
             item.agentId: item for item in main.get_store().load().accounts
         }
         self.assertEqual(accounts["agent_sender"].availableAtomic, "0")
-        self.assertEqual(accounts["agent_sender"].lockedAtomic, "0")
         self.assertEqual(accounts["agent_receiver"].availableAtomic, "0")
-        self.assertEqual(accounts["agent_receiver"].lockedAtomic, "0")
         self.assertEqual([entry["entryType"] for entry in payload["entries"]], ["agent_transfer", "agent_transfer"])
 
     def test_agent_transfer_rejects_single_payment_above_limit(self) -> None:

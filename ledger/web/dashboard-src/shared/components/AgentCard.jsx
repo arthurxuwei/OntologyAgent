@@ -193,7 +193,6 @@ function AgentCard({
   agentName,
   agentRole,
   balance = 0,
-  escrowed = 0,
   pendingSettlement = 0,
   status = 'unclaimed',
   walletAddress,
@@ -280,12 +279,6 @@ function AgentCard({
         amount={pendingSettlement}
         size={isMini ? 'sm' : 'lg'}
       />
-
-      {escrowed > 0 && (
-        <div className="font-mono mt-2" style={{ fontSize: '12px', letterSpacing: '0.04em', color: 'var(--accent-amber)' }}>
-          ESCROWED · {fmt(escrowed)}
-        </div>
-      )}
 
       <div className="font-mono text-[11px] mt-6 flex items-center gap-2" style={{ color: 'var(--ink-tertiary)' }}>
         <span>{walletAddress}</span>

@@ -3,9 +3,7 @@
 //
 // Layout:
 //   - Big balance number (USDC)
-//   - 2-up KPI row (lifetime in / out). Escrow dropped — MVP atomic
-//     settlement has no lock state, so escrowed is always 0 and the cell
-//     was dead space.
+//   - 2-up KPI row (lifetime in / out).
 //   - Recent 5 transactions (full list lives in Transactions tab)
 //   - "View all →" link to jump to Transactions
 
@@ -35,7 +33,7 @@
           amount={balance.pendingSettlement || 0}
         />
 
-        {/* KPI row — 2-up (escrow dropped: MVP has no lock state) */}
+        {/* KPI row */}
         <div
           className="grid"
           style={{

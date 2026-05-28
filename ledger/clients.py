@@ -17,7 +17,6 @@ from cryptography.hazmat.primitives.asymmetric import ed25519
 from config import DEFAULT_ASSET
 from models import (
     AgentWalletRequest,
-    EscrowRecord,
     GatewayDepositRequest,
     GatewayWithdrawalRequest,
     LedgerChainRecord,
@@ -205,12 +204,9 @@ class LedgerChainRecorder:
         *,
         event_type: Literal[
             "credit",
-            "escrow_lock",
-            "escrow_release",
-            "escrow_refund",
             "agent_transfer",
+            "withdrawal",
         ],
-        escrow: Optional[EscrowRecord],
         entries: list[LedgerEntry],
         payload: dict[str, Any],
     ) -> Optional[LedgerChainRecord]:
@@ -223,7 +219,6 @@ class LedgerChainRecorder:
             "eventType": event_type,
             "chainHttpUrl": self.chain_http_url,
             "recorderAddress": self.recorder_address,
-            "escrowId": escrow.escrowId if escrow is not None else None,
             "entryIds": [entry.entryId for entry in entries],
             "payload": payload,
             "createdAt": current,

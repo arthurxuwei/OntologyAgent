@@ -33,10 +33,7 @@ def dashboard_claimed_days_ago(account: dict[str, Any]) -> int:
     return max(elapsed.days, 0)
 
 
-def dashboard_counterparty(
-    entry: dict[str, Any],
-    escrow_by_id: dict[str, dict[str, Any]],
-) -> str:
+def dashboard_counterparty(entry: dict[str, Any]) -> str:
     metadata = entry.get("metadata")
     if isinstance(metadata, dict):
         counterparty_email = metadata.get("counterpartyEmail")
@@ -64,17 +61,6 @@ def dashboard_counterparty(
             if isinstance(value, str) and value.strip():
                 return value.strip()
 
-    escrow_id = entry.get("escrowId")
-    if isinstance(escrow_id, str) and escrow_id in escrow_by_id:
-        escrow = escrow_by_id[escrow_id]
-        agent_id = entry.get("agentId")
-        buyer_id = escrow.get("buyerAgentId")
-        seller_id = escrow.get("sellerAgentId")
-        if agent_id == buyer_id and seller_id:
-            return str(seller_id)
-        if agent_id == seller_id and buyer_id:
-            return str(buyer_id)
-        return str(escrow.get("description") or escrow_id)
     entry_type = str(entry.get("entryType") or "")
     reason = str(entry.get("reason") or "").strip()
     if "onramp" in entry_type or "onramp" in reason.lower():
@@ -82,17 +68,8 @@ def dashboard_counterparty(
     return reason or "Ledger"
 
 
-def dashboard_base_amount_atomic(
-    entry: dict[str, Any],
-    escrow_by_id: dict[str, dict[str, Any]],
-) -> Decimal:
-    escrow = escrow_by_id.get(str(entry.get("escrowId") or ""))
-    if escrow:
-        return atomic_decimal(escrow.get("amountAtomic"))
-    return max(
-        abs(atomic_decimal(entry.get("availableDeltaAtomic"))),
-        abs(atomic_decimal(entry.get("lockedDeltaAtomic"))),
-    )
+def dashboard_base_amount_atomic(entry: dict[str, Any]) -> Decimal:
+    return abs(atomic_decimal(entry.get("availableDeltaAtomic")))
 
 
 def decimal_usdc(value: Any, fallback: Decimal = Decimal("0")) -> Decimal:
@@ -137,28 +114,18 @@ def dashboard_withdraw_available_atomic(account: dict[str, Any]) -> str:
 
 def dashboard_transaction(
     entry: dict[str, Any],
-    escrow_by_id: dict[str, dict[str, Any]],
     active_gateway_pending_entry_ids: Optional[set[str]] = None,
     active_gateway_pending_deposit_entry_ids: Optional[set[str]] = None,
 ) -> dict[str, Any]:
     entry_type = str(entry.get("entryType") or "ledger")
     available_delta = atomic_decimal(entry.get("availableDeltaAtomic"))
-    locked_delta = atomic_decimal(entry.get("lockedDeltaAtomic"))
     metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
     dashboard_status = metadata.get("dashboardStatus")
-    escrow = escrow_by_id.get(str(entry.get("escrowId") or ""))
-    base_amount_atomic = dashboard_base_amount_atomic(entry, escrow_by_id)
+    base_amount_atomic = dashboard_base_amount_atomic(entry)
     amount_atomic = parse_dashboard_amount_atomic(entry, base_amount_atomic)
-    agent_id = entry.get("agentId")
-    direction = "out" if available_delta < 0 or locked_delta > 0 else "in"
-    if entry_type == "escrow_release" and escrow and agent_id == escrow.get("buyerAgentId"):
-        direction = "out"
+    direction = "out" if available_delta < 0 else "in"
     status = "released"
-    if entry_type == "escrow_lock":
-        status = "locked"
-    elif entry_type == "escrow_refund":
-        status = "refunded"
-    elif "onramp" in entry_type or entry_type == "credit":
+    if "onramp" in entry_type or entry_type == "credit":
         status = "onramp"
     if (
         entry_type == "agent_transfer"
@@ -205,11 +172,9 @@ def dashboard_transaction(
         role = "withdrawal"
     elif status in {"onramp", "credited", "pending_inbound_chain"} and entry_type == "credit":
         role = "deposit"
-    elif status == "refunded":
-        role = "refund"
     transaction = {
-        "id": entry.get("entryId") or entry.get("escrowId") or "ledger_entry",
-        "counterparty": dashboard_counterparty(entry, escrow_by_id),
+        "id": entry.get("entryId") or "ledger_entry",
+        "counterparty": dashboard_counterparty(entry),
         "amount": atomic_to_usdc(amount_atomic),
         "amountAtomic": str(int(amount_atomic)),
         "direction": direction,
@@ -239,7 +204,6 @@ def dashboard_transaction(
 
 def active_gateway_pending_entry_ids(
     agent_entries: list[dict[str, Any]],
-    escrow_by_id: dict[str, dict[str, Any]],
     current_gateway_pending_batch_atomic: Any,
 ) -> Optional[set[str]]:
     if current_gateway_pending_batch_atomic is None:
@@ -258,10 +222,7 @@ def active_gateway_pending_entry_ids(
             continue
         if str(metadata.get("transactionState") or "").upper() not in FINAL_GATEWAY_TRANSFER_STATES:
             continue
-        amount = parse_dashboard_amount_atomic(
-            entry,
-            dashboard_base_amount_atomic(entry, escrow_by_id),
-        )
+        amount = parse_dashboard_amount_atomic(entry, dashboard_base_amount_atomic(entry))
         if amount <= 0 or amount > remaining:
             continue
         entry_id = str(entry.get("entryId") or "")
@@ -273,7 +234,6 @@ def active_gateway_pending_entry_ids(
 
 def active_gateway_pending_deposit_entry_ids(
     agent_entries: list[dict[str, Any]],
-    escrow_by_id: dict[str, dict[str, Any]],
     current_gateway_pending_deposits_atomic: Any,
 ) -> Optional[set[str]]:
     if current_gateway_pending_deposits_atomic is None:
@@ -290,10 +250,7 @@ def active_gateway_pending_deposit_entry_ids(
             continue
         if not metadata.get("linkedEntryId"):
             continue
-        amount = parse_dashboard_amount_atomic(
-            entry,
-            dashboard_base_amount_atomic(entry, escrow_by_id),
-        )
+        amount = parse_dashboard_amount_atomic(entry, dashboard_base_amount_atomic(entry))
         if amount <= 0 or amount > remaining:
             continue
         entry_id = str(entry.get("entryId") or "")
@@ -322,7 +279,6 @@ def empty_dashboard_agent(account: dict[str, Any]) -> dict[str, Any]:
         },
         "balance": {
             "available": 0.0,
-            "locked": 0.0,
             "lifetimeIn": 0.0,
             "lifetimeOut": 0.0,
         },
@@ -345,16 +301,6 @@ def build_dashboard_data(
         for entry in ledger_state.get("entries", [])
         if isinstance(entry, dict)
     ]
-    escrows = [
-        escrow
-        for escrow in ledger_state.get("escrows", [])
-        if isinstance(escrow, dict)
-    ]
-    escrow_by_id = {
-        str(escrow.get("escrowId")): escrow
-        for escrow in escrows
-        if escrow.get("escrowId")
-    }
     normalized_owner_email = normalize_email(owner_email)
     entries_by_agent: dict[str, list[dict[str, Any]]] = {}
     for entry in sorted(entries, key=lambda item: str(item.get("createdAt") or ""), reverse=True):
@@ -390,13 +336,11 @@ def build_dashboard_data(
         gateway_pending_batch_atomic = account.get("gatewayPendingBatchAtomic")
         active_pending_entry_ids = active_gateway_pending_entry_ids(
             agent_entries,
-            escrow_by_id,
             gateway_pending_batch_atomic,
         )
         gateway_pending_deposits_atomic = account.get("gatewayPendingDepositsAtomic")
         active_pending_deposit_entry_ids = active_gateway_pending_deposit_entry_ids(
             agent_entries,
-            escrow_by_id,
             gateway_pending_deposits_atomic,
         )
         lifetime_in = sum(
@@ -410,14 +354,10 @@ def build_dashboard_data(
             if atomic_decimal(entry.get("availableDeltaAtomic")) < 0
         )
         pending_settlement_atomic = sum(
-            parse_dashboard_amount_atomic(
-                entry,
-                dashboard_base_amount_atomic(entry, escrow_by_id),
-            )
+            parse_dashboard_amount_atomic(entry, dashboard_base_amount_atomic(entry))
             for entry in agent_entries
             if dashboard_transaction(
                 entry,
-                escrow_by_id,
                 active_pending_entry_ids,
                 active_pending_deposit_entry_ids,
             )["status"] == "pending_settle"
@@ -443,7 +383,6 @@ def build_dashboard_data(
                 "available": dashboard_available_usdc(account),
                 "withdrawAvailable": atomic_to_usdc(withdraw_available_atomic),
                 "withdrawAvailableAtomic": withdraw_available_atomic,
-                "locked": atomic_to_usdc(account.get("lockedAtomic")),
                 "lifetimeIn": round(lifetime_in, 6),
                 "lifetimeOut": round(lifetime_out, 6),
                 "pendingSettlement": atomic_to_usdc(pending_settlement_atomic),
@@ -452,7 +391,6 @@ def build_dashboard_data(
             "transactions": [
                 dashboard_transaction(
                     entry,
-                    escrow_by_id,
                     active_pending_entry_ids,
                     active_pending_deposit_entry_ids,
                 )
@@ -477,7 +415,6 @@ def scoped_ledger_state(
         state = dict(ledger_state)
         state["accounts"] = []
         state["entries"] = []
-        state["escrows"] = []
         state["onrampSessions"] = []
         state["onrampEvents"] = []
         state["circleWebhookEvents"] = []
@@ -504,21 +441,6 @@ def scoped_ledger_state(
         if str(entry.get("entryId") or "").strip()
     }
 
-    escrows = [
-        escrow
-        for escrow in ledger_state.get("escrows", [])
-        if isinstance(escrow, dict)
-        and (
-            str(escrow.get("buyerAgentId") or "").strip() == scoped_agent_id
-            or str(escrow.get("sellerAgentId") or "").strip() == scoped_agent_id
-        )
-    ]
-    escrow_ids = {
-        str(escrow.get("escrowId") or "").strip()
-        for escrow in escrows
-        if str(escrow.get("escrowId") or "").strip()
-    }
-
     onramp_sessions = [
         session
         for session in ledger_state.get("onrampSessions", [])
@@ -535,12 +457,9 @@ def scoped_ledger_state(
         record
         for record in ledger_state.get("chainRecords", [])
         if isinstance(record, dict)
-        and (
-            str(record.get("escrowId") or "").strip() in escrow_ids
-            or any(
-                str(entry_id or "").strip() in entry_ids
-                for entry_id in record.get("entryIds", [])
-            )
+        and any(
+            str(entry_id or "").strip() in entry_ids
+            for entry_id in record.get("entryIds", [])
         )
     ]
     settlement_records = [
@@ -548,8 +467,7 @@ def scoped_ledger_state(
         for record in ledger_state.get("settlementRecords", [])
         if isinstance(record, dict)
         and (
-            str(record.get("escrowId") or "").strip() in escrow_ids
-            or str(record.get("fromAgentId") or "").strip() == scoped_agent_id
+            str(record.get("fromAgentId") or "").strip() == scoped_agent_id
             or str(record.get("toAgentId") or "").strip() == scoped_agent_id
         )
     ]
@@ -557,7 +475,6 @@ def scoped_ledger_state(
     state = dict(ledger_state)
     state["accounts"] = accounts
     state["entries"] = entries
-    state["escrows"] = escrows
     state["onrampSessions"] = onramp_sessions
     state["onrampEvents"] = [
         event
