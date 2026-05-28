@@ -44,21 +44,6 @@ def build_rest_tools(environ: Mapping[str, str]) -> list[StructuredTool]:
             description="Transfer settled Agent Wallet funds between internal agents.",
         ),
         StructuredTool.from_function(
-            coroutine=client.agent_wallet_create_escrow,
-            name="agent_wallet_create_escrow",
-            description="Create ledger escrow for accepted asynchronous work.",
-        ),
-        StructuredTool.from_function(
-            coroutine=client.agent_wallet_release_escrow,
-            name="agent_wallet_release_escrow",
-            description="Release a ledger escrow after acceptance.",
-        ),
-        StructuredTool.from_function(
-            coroutine=client.agent_wallet_refund_escrow,
-            name="agent_wallet_refund_escrow",
-            description="Refund a ledger escrow when work is rejected or cancelled.",
-        ),
-        StructuredTool.from_function(
             coroutine=client.agent_wallet_settle_ledger_transfer,
             name="agent_wallet_settle_ledger_transfer",
             description="Withdraw Agent Wallet USDC to an external Base address.",
@@ -211,33 +196,6 @@ class RestActionClient:
                 "metadata": metadata or {},
             },
         )
-
-    async def agent_wallet_create_escrow(
-        self,
-        buyerAgentId: str,
-        sellerAgentId: str,
-        amountAtomic: str,
-        taskId: Optional[str] = None,
-        description: Optional[str] = None,
-        metadata: Optional[dict[str, Any]] = None,
-    ) -> dict[str, Any]:
-        return await self._post_ledger(
-            "/ledger/escrows",
-            {
-                "buyerAgentId": buyerAgentId,
-                "sellerAgentId": sellerAgentId,
-                "amountAtomic": amountAtomic,
-                "taskId": taskId,
-                "description": description,
-                "metadata": metadata or {},
-            },
-        )
-
-    async def agent_wallet_release_escrow(self, escrowId: str) -> dict[str, Any]:
-        return await self._post_ledger(f"/ledger/escrows/{escrowId}/release", {})
-
-    async def agent_wallet_refund_escrow(self, escrowId: str) -> dict[str, Any]:
-        return await self._post_ledger(f"/ledger/escrows/{escrowId}/refund", {})
 
     async def agent_wallet_settle_ledger_transfer(
         self,

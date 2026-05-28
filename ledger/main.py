@@ -56,7 +56,6 @@ from services import (
     ledger_state_with_circle_balances,
     record_ledger_chain_event,
     settle_agent_transfer,
-    settle_escrow_release,
     settle_withdrawal,
 )
 from store import OffchainLedgerStore, migrate_ledger_state_payload
@@ -469,12 +468,6 @@ def list_ledger_account_entries(agent_id: str, limit: int | None = None) -> dict
     return {"entries": [entry.model_dump() for entry in entries]}
 
 
-@app.get("/ledger/accounts/{agent_id}/escrows")
-def list_ledger_account_escrows(agent_id: str, status: str = "") -> dict[str, Any]:
-    escrows = get_store().list_escrows(agent_id=agent_id, status=status)
-    return {"escrows": [escrow.model_dump() for escrow in escrows]}
-
-
 @app.get("/ledger/accounts/{agent_id}")
 async def get_ledger_account(agent_id: str) -> dict[str, Any]:
     account = get_store().get_account(agent_id)
@@ -496,12 +489,6 @@ def list_ledger_entries(
         limit=_limit(limit, default=50),
     )
     return {"entries": [entry.model_dump() for entry in entries]}
-
-
-@app.get("/ledger/escrows")
-def list_ledger_escrows(agentId: str = "", status: str = "") -> dict[str, Any]:
-    escrows = get_store().list_escrows(agent_id=agentId, status=status)
-    return {"escrows": [escrow.model_dump() for escrow in escrows]}
 
 
 @app.get("/ledger/onramp-sessions")
@@ -830,31 +817,6 @@ async def withdraw_agent_wallet(request: WithdrawalRequest) -> dict[str, Any]:
     }
 
 
-@app.post("/ledger/escrows")
-async def create_escrow(request: CreateEscrowRequest) -> dict[str, Any]:
-    try:
-        escrow, entry = get_store().create_escrow(
-            buyer_agent_id=request.buyerAgentId,
-            seller_agent_id=request.sellerAgentId,
-            amount_atomic=request.amountAtomic,
-            task_id=request.taskId,
-            description=request.description,
-            metadata=request.metadata,
-        )
-        chain_record = await record_ledger_chain_event(
-            event_type="escrow_lock",
-            escrow=escrow,
-            entries=[entry],
-        )
-    except (LookupError, ValueError, LedgerChainRecordError) as error:
-        raise http_error(error) from error
-    return {
-        "escrow": escrow.model_dump(),
-        "entry": entry.model_dump(),
-        "chainRecord": chain_record.model_dump() if chain_record is not None else None,
-    }
-
-
 @app.post("/ledger/transfers")
 async def transfer_between_agents(request: AgentTransferRequest) -> dict[str, Any]:
     transfer_id = f"transfer_{uuid.uuid4().hex}"
@@ -909,54 +871,5 @@ async def transfer_between_agents(request: AgentTransferRequest) -> dict[str, An
         "toAccount": receiver.model_dump(),
         "entries": [entry.model_dump() for entry in entries],
         "settlementRecord": settlement_record.model_dump(),
-        "chainRecord": chain_record.model_dump() if chain_record is not None else None,
-    }
-
-
-@app.post("/ledger/escrows/{escrow_id}/release")
-async def release_escrow(escrow_id: str) -> dict[str, Any]:
-    try:
-        locked_escrow = get_store().get_escrow(escrow_id)
-        if locked_escrow.status != "locked":
-            raise ValueError("escrow is not locked")
-        settlement_record = await settle_escrow_release(locked_escrow)
-        escrow = get_store().release_escrow(escrow_id)
-        entries = get_store().entries_for_escrow_event(
-            escrow_id=escrow.escrowId,
-            entry_type="escrow_release",
-        )
-        chain_record = await record_ledger_chain_event(
-            event_type="escrow_release",
-            escrow=escrow,
-            entries=entries,
-        )
-    except (LookupError, ValueError, LedgerChainRecordError, LedgerSettlementError) as error:
-        raise http_error(error) from error
-    return {
-        "escrow": escrow.model_dump(),
-        "settlementRecord": settlement_record.model_dump()
-        if settlement_record is not None
-        else None,
-        "chainRecord": chain_record.model_dump() if chain_record is not None else None,
-    }
-
-
-@app.post("/ledger/escrows/{escrow_id}/refund")
-async def refund_escrow(escrow_id: str) -> dict[str, Any]:
-    try:
-        escrow = get_store().refund_escrow(escrow_id)
-        entries = get_store().entries_for_escrow_event(
-            escrow_id=escrow.escrowId,
-            entry_type="escrow_refund",
-        )
-        chain_record = await record_ledger_chain_event(
-            event_type="escrow_refund",
-            escrow=escrow,
-            entries=entries,
-        )
-    except (LookupError, ValueError, LedgerChainRecordError) as error:
-        raise http_error(error) from error
-    return {
-        "escrow": escrow.model_dump(),
         "chainRecord": chain_record.model_dump() if chain_record is not None else None,
     }

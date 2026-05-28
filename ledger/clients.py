@@ -303,58 +303,6 @@ class LedgerSettlementClient:
         self.require_success = require_success
         self.transport = transport
 
-    async def submit_release(self, escrow: EscrowRecord) -> Optional[LedgerSettlementRecord]:
-        if not self.enabled:
-            return None
-
-        current = now_iso()
-        base_record = {
-            "recordId": f"settle_{uuid.uuid4().hex}",
-            "eventType": "escrow_release",
-            "settlementHttpUrl": self.settlement_http_url,
-            "escrowId": escrow.escrowId,
-            "fromAgentId": escrow.buyerAgentId,
-            "toAgentId": escrow.sellerAgentId,
-            "asset": escrow.asset,
-            "amountAtomic": escrow.amountAtomic,
-            "createdAt": current,
-            "updatedAt": current,
-        }
-        try:
-            result = await self._submit_settlement_transfer(
-                from_agent_id=escrow.buyerAgentId,
-                to_agent_id=escrow.sellerAgentId,
-                amount_atomic=escrow.amountAtomic,
-                ref_id=f"{escrow.escrowId}:release",
-            )
-            transfer = result
-            if transfer.get("error") is not None:
-                raise RuntimeError(json.dumps(transfer["error"], sort_keys=True))
-            return LedgerSettlementRecord(
-                **base_record,
-                status="submitted",
-                transactionId=transfer.get("transactionId")
-                if isinstance(transfer.get("transactionId"), str)
-                else None,
-                transactionHash=transfer.get("transactionHash")
-                if isinstance(transfer.get("transactionHash"), str)
-                else None,
-                transactionState=transfer.get("state")
-                if isinstance(transfer.get("state"), str)
-                else None,
-                mode=transfer.get("mode") if isinstance(transfer.get("mode"), str) else None,
-                actionResult=result,
-            )
-        except Exception as error:
-            record = LedgerSettlementRecord(
-                **base_record,
-                status="failed",
-                error=str(error),
-            )
-            if self.require_success:
-                raise LedgerSettlementError(record) from error
-            return record
-
     async def submit_agent_transfer(
         self,
         *,

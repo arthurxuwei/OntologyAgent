@@ -13,7 +13,7 @@ because the internal Circle REST entrypoint lives in the same `chain/` package a
 
 This phase exposes only the ledger UI and ledger REST API directly to the
 public internet. Circle REST is an internal backend used by ledger for wallet
-onboarding and escrow release settlement. Use only sandbox/testnet credentials,
+onboarding, direct transfer settlement, and withdrawals. Use only sandbox/testnet credentials,
 set strict spend caps, and keep real funds out of the configured wallets.
 
 Before using mainnet funds or production Circle credentials, put these endpoints

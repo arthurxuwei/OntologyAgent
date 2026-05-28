@@ -112,7 +112,6 @@ class LedgerServiceTestCase(unittest.TestCase):
             entries = self.client.get(f"/ledger/accounts/{agent_id}/entries?limit=500").json()[
                 "entries"
             ]
-            escrows = self.client.get(f"/ledger/accounts/{agent_id}/escrows").json()["escrows"]
             onramp_sessions = self.client.get(
                 f"/ledger/onramp-sessions?agentId={agent_id}&limit=500"
             ).json()["onrampSessions"]
@@ -121,20 +120,24 @@ class LedgerServiceTestCase(unittest.TestCase):
                 {
                     "accounts": accounts,
                     "entries": entries,
-                    "escrows": escrows,
                     "onrampSessions": onramp_sessions,
                 }
             )
             return state
+        state = main.get_store().load().model_dump()
+        state.update(
+            {
+                "accounts": self.client.get("/ledger/accounts").json()["accounts"],
+                "entries": self.client.get("/ledger/entries?limit=500").json()["entries"],
+                "onrampSessions": self.client.get(
+                    "/ledger/onramp-sessions?limit=500"
+                ).json()["onrampSessions"],
+            }
+        )
         return {
-            "accounts": self.client.get("/ledger/accounts").json()["accounts"],
-            "entries": self.client.get("/ledger/entries?limit=500").json()["entries"],
-            "escrows": self.client.get("/ledger/escrows").json()["escrows"],
-            "onrampSessions": self.client.get("/ledger/onramp-sessions?limit=500").json()[
-                "onrampSessions"
-            ],
-            "onrampEvents": main.get_store().load().model_dump()["onrampEvents"],
-            "circleWebhookEvents": main.get_store().load().model_dump()["circleWebhookEvents"],
-            "chainRecords": main.get_store().load().model_dump()["chainRecords"],
-            "settlementRecords": main.get_store().load().model_dump()["settlementRecords"],
+            **state,
+            "onrampEvents": state["onrampEvents"],
+            "circleWebhookEvents": state["circleWebhookEvents"],
+            "chainRecords": state["chainRecords"],
+            "settlementRecords": state["settlementRecords"],
         }

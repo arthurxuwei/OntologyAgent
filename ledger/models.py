@@ -284,17 +284,6 @@ class GatewayWithdrawalRequest(BaseModel):
         return normalize_evm_address(value)
 
 
-class CreateEscrowRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-
-    buyerAgentId: str
-    sellerAgentId: str
-    amountAtomic: str
-    taskId: Optional[str] = None
-    description: Optional[str] = None
-    metadata: dict[str, Any] = Field(default_factory=dict)
-
-
 class AgentTransferRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 

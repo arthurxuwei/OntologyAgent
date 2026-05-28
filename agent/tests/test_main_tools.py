@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch
 
 import main
+from rest_tool_registry import build_rest_tools
 from langchain_core.tools import StructuredTool
 
 
@@ -28,6 +29,21 @@ class MainToolRegistryTests(unittest.TestCase):
             tools = main.build_tools()
 
         self.assertEqual({tool.name for tool in tools}, {"route_payment_intent"})
+
+    def test_rest_registry_exposes_transfer_tools_without_escrow(self) -> None:
+        tools = build_rest_tools(
+            {
+                "LEDGER_HTTP_URL": "http://ledger.test",
+                "CHAIN_HTTP_URL": "http://chain.test",
+            }
+        )
+        names = {tool.name for tool in tools}
+
+        self.assertIn("agent_wallet_transfer", names)
+        self.assertIn("agent_wallet_settle_ledger_transfer", names)
+        self.assertNotIn("agent_wallet_create_escrow", names)
+        self.assertNotIn("agent_wallet_release_escrow", names)
+        self.assertNotIn("agent_wallet_refund_escrow", names)
 
     def test_get_agent_prompt_includes_dynamic_skills(self) -> None:
         class Catalog:

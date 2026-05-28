@@ -183,13 +183,6 @@ async def record_ledger_chain_event(
     return get_store().add_chain_record(record)
 
 
-async def settle_escrow_release(escrow: EscrowRecord) -> Optional[LedgerSettlementRecord]:
-    record = await get_ledger_settlement_client().submit_release(escrow)
-    if record is None:
-        return None
-    return get_store().add_settlement_record(record)
-
-
 async def settle_agent_transfer(
     *,
     from_agent_id: str,

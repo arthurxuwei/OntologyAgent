@@ -6,9 +6,9 @@ from pydantic import BaseModel, ConfigDict, HttpUrl
 
 
 PaymentMethod = Literal[
-    "ledger_escrow",
     "ledger_transfer",
     "gateway_nanopayment",
+    "gateway_withdrawal",
     "circle_withdrawal",
     "x402",
     "chain_transfer",
@@ -79,26 +79,14 @@ def route_payment_intent(intent: PaymentIntent) -> PaymentRouteDecision:
         }
 
     if intent.deliveryMode == "async_task" or intent.requiresAcceptance:
-        if intent.externalService:
-            return {
-                "method": "needs_clarification",
-                "reason": (
-                    "external asynchronous work needs clarification because the current "
-                    "MVP escrow ledger only governs internal Agent Wallet balances."
-                ),
-                "allowedTools": [],
-            }
         return {
-            "method": "ledger_escrow",
+            "method": "needs_clarification",
             "reason": (
-                "Matched asynchronous task payments require ledger escrow so funds can "
-                "be locked, released after acceptance, or refunded."
+                "The current payment backend only supports direct transfers, withdrawals, "
+                "onramp funding, and immediate x402 API calls. Clarify whether this "
+                "accepted async task should be paid as a direct transfer after acceptance."
             ),
-            "allowedTools": [
-                "agent_wallet_create_escrow",
-                "agent_wallet_release_escrow",
-                "agent_wallet_refund_escrow",
-            ],
+            "allowedTools": [],
         }
 
     if intent.deliveryMode == "immediate_api" and intent.externalService:

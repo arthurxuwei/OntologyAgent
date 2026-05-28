@@ -111,15 +111,9 @@ class TestStoreRouter(LedgerServiceTestCase):
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
-        self.assertEqual(payload["method"], "ledger_escrow")
-        self.assertEqual(
-            payload["allowedTools"],
-            [
-                "agent_wallet_create_escrow",
-                "agent_wallet_release_escrow",
-                "agent_wallet_refund_escrow",
-            ],
-        )
+        self.assertEqual(payload["method"], "needs_clarification")
+        self.assertEqual(payload["allowedTools"], [])
+        self.assertIn("only supports direct transfers", payload["reason"])
 
     def test_credit_creates_account_and_entry(self) -> None:
         response = self.client.post(
@@ -143,7 +137,7 @@ class TestStoreRouter(LedgerServiceTestCase):
         self.assertEqual(self.client.get("/dashboard/data").status_code, 404)
         self.assertEqual(self.client.get("/dashboard/claimable-agents").status_code, 404)
 
-    def test_domain_account_entry_escrow_and_admin_routes(self) -> None:
+    def test_domain_account_entry_and_admin_routes(self) -> None:
         store = main.get_store()
         store.bind_account_wallet(
             agent_id="agent_alpha",
@@ -159,38 +153,23 @@ class TestStoreRouter(LedgerServiceTestCase):
             reason="operator funding",
             metadata={},
         )
-        escrow, _entry = store.create_escrow(
-            buyer_agent_id="agent_alpha",
-            seller_agent_id="agent_beta",
-            amount_atomic="2000000",
-            task_id="task_123",
-            description="Research task",
-            metadata={},
-        )
 
         accounts = self.client.get("/ledger/accounts?ownerEmail=alpha@example.com").json()
         self.assertEqual([account["agentId"] for account in accounts["accounts"]], ["agent_alpha"])
-        self.assertEqual(accounts["accounts"][0]["availableAtomic"], "3000000")
+        self.assertEqual(accounts["accounts"][0]["availableAtomic"], "5000000")
 
         account = self.client.get("/ledger/accounts/agent_alpha").json()["account"]
         self.assertEqual(account["agentName"], "Alpha")
 
         entries = self.client.get("/ledger/accounts/agent_alpha/entries?limit=1").json()["entries"]
         self.assertEqual(len(entries), 1)
-        self.assertEqual(entries[0]["entryType"], "escrow_lock")
-
-        escrows = self.client.get("/ledger/accounts/agent_alpha/escrows").json()["escrows"]
-        self.assertEqual([item["escrowId"] for item in escrows], [escrow.escrowId])
-
-        filtered_escrows = self.client.get("/ledger/escrows?agentId=agent_alpha&status=locked").json()["escrows"]
-        self.assertEqual([item["escrowId"] for item in filtered_escrows], [escrow.escrowId])
+        self.assertEqual(entries[0]["entryType"], "credit")
 
         with patch.dict(os.environ, {"ADMIN_TOKEN": "admin-secret"}):
             self.client.get("/admin?token=admin-secret", follow_redirects=False)
             summary = self.client.get("/ledger/admin/summary").json()
         self.assertEqual(summary["accounts"], 1)
-        self.assertEqual(summary["ledgerLockedAtomic"], "2000000")
-        self.assertEqual(summary["escrows"], 1)
+        self.assertEqual(summary["ledgerLockedAtomic"], "0")
 
     def test_claim_domain_routes_do_not_require_matching_owner_email(self) -> None:
         store = main.get_store()
@@ -248,11 +227,16 @@ class TestStoreRouter(LedgerServiceTestCase):
             "amountAtomic must be a positive integer string",
         )
 
-    def test_missing_escrow_returns_not_found(self) -> None:
-        response = self.client.post("/ledger/escrows/escrow_missing/release")
+    def test_escrow_routes_are_removed(self) -> None:
+        responses = [
+            self.client.get("/ledger/escrows"),
+            self.client.get("/ledger/accounts/agent_alpha/escrows"),
+            self.client.post("/ledger/escrows", json={}),
+            self.client.post("/ledger/escrows/escrow_missing/release"),
+            self.client.post("/ledger/escrows/escrow_missing/refund"),
+        ]
 
-        self.assertEqual(response.status_code, 404)
-        self.assertEqual(response.json()["detail"], "escrow not found")
+        self.assertEqual([response.status_code for response in responses], [404] * len(responses))
 
     def test_state_persists_to_sqlite_file(self) -> None:
         self.client.post(
@@ -717,45 +701,23 @@ class TestStoreRouter(LedgerServiceTestCase):
         self.assertEqual(result["allowedTools"], ["agent_wallet_settle_ledger_transfer"])
 
     def test_ledger_rest_routes_operate_on_local_store(self) -> None:
-        self.client.post(
-            "/ledger/accounts/agent_buyer/credit",
-            json={"amountAtomic": "5000000", "reason": "demo funding"},
+        store = main.get_store()
+        store.bind_account_wallet(
+            agent_id="agent_buyer",
+            agent_name="Buyer",
+            email="buyer@example.com",
+            wallet_address="0x1111111111111111111111111111111111111111",
+            circle_wallet_id="circle-buyer",
+            account_type="EOA",
         )
-        escrow = self.client.post(
-            "/ledger/escrows",
-            json={
-                "buyerAgentId": "agent_buyer",
-                "sellerAgentId": "agent_seller",
-                "amountAtomic": "3000000",
-                "taskId": "task_123",
-                "description": "Research task",
-            },
-        ).json()["escrow"]
-        released = self.client.post(f"/ledger/escrows/{escrow['escrowId']}/release").json()[
-            "escrow"
-        ]
+        store.credit(
+            agent_id="agent_buyer",
+            amount_atomic="5000000",
+            reason="demo funding",
+            metadata={},
+        )
+
         accounts_state = self.client.get("/ledger/accounts").json()
-
-        self.assertEqual(released["status"], "released")
         accounts = {item["agentId"]: item for item in accounts_state["accounts"]}
-        self.assertEqual(accounts["agent_buyer"]["availableAtomic"], "2000000")
+        self.assertEqual(accounts["agent_buyer"]["availableAtomic"], "5000000")
         self.assertEqual(accounts["agent_buyer"]["lockedAtomic"], "0")
-        self.assertEqual(accounts["agent_seller"]["availableAtomic"], "3000000")
-
-        self.client.post(
-            "/ledger/accounts/agent_refund_buyer/credit",
-            json={"amountAtomic": "4000000", "reason": "demo funding"},
-        )
-        refund_escrow = self.client.post(
-            "/ledger/escrows",
-            json={
-                "buyerAgentId": "agent_refund_buyer",
-                "sellerAgentId": "agent_refund_seller",
-                "amountAtomic": "1000000",
-            },
-        ).json()["escrow"]
-        refunded = self.client.post(
-            f"/ledger/escrows/{refund_escrow['escrowId']}/refund"
-        ).json()["escrow"]
-
-        self.assertEqual(refunded["status"], "refunded")
