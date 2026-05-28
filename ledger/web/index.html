@@ -415,7 +415,6 @@
       function renderLedgerState(state) {
         const accounts = Array.isArray(state?.accounts) ? state.accounts : [];
         const entries = Array.isArray(state?.entries) ? state.entries : [];
-        const escrows = Array.isArray(state?.escrows) ? state.escrows : [];
         const onrampSessions = Array.isArray(state?.onrampSessions) ? state.onrampSessions : [];
         const summary = state?.summary || {};
         const recentEntries = entries.slice(0, 6);
@@ -428,7 +427,7 @@
           `<div class="metric"><span>Pending Deposits</span><strong>${formatDecimal(summary.pendingDeposits ?? sumDecimal(accounts, "gatewayUsdcPendingDeposits"))}</strong></div>`,
           `<div class="metric"><span>Pending Batch</span><strong>${formatDecimal(summary.pendingBatch ?? sumDecimal(accounts, "gatewayUsdcPendingBatch"))}</strong></div>`,
           `<div class="metric"><span>Ledger Locked</span><strong>${formatAtomic(summary.ledgerLockedAtomic ?? sumAtomic(accounts, "lockedAtomic"))}</strong></div>`,
-          `<div class="metric"><span>Escrows / Onramps</span><strong>${summary.escrows ?? escrows.length} / ${summary.onrampSessions ?? onrampSessions.length}</strong></div>`,
+          `<div class="metric"><span>Onramp Sessions</span><strong>${summary.onrampSessions ?? onrampSessions.length}</strong></div>`,
           `</div>`,
           renderStateSection(
             "Accounts",
@@ -452,18 +451,6 @@
             ],
             accounts,
             "No accounts",
-          ),
-          renderStateSection(
-            "Escrows",
-            [
-              { label: "Status", render: (escrow) => statusBadge(escrow.status) },
-              { label: "Buyer", render: (escrow) => `<span class="mono">${shortValue(escrow.buyerAgentId)}</span>` },
-              { label: "Seller", render: (escrow) => `<span class="mono">${shortValue(escrow.sellerAgentId)}</span>` },
-              { label: "Amount", render: (escrow) => formatAtomic(escrow.amountAtomic) },
-              { label: "Task", render: (escrow) => `<span class="mono">${shortValue(escrow.taskId || escrow.escrowId)}</span>` },
-            ],
-            escrows,
-            "No escrows",
           ),
           renderStateSection(
             "Onramp Sessions",
@@ -495,18 +482,16 @@
       }
 
       async function refreshLedgerState() {
-        const [summary, accounts, entries, escrows, onrampSessions] = await Promise.all([
+        const [summary, accounts, entries, onrampSessions] = await Promise.all([
           requestJson("/ledger/admin/summary", { method: "GET" }),
           requestJson("/ledger/accounts", { method: "GET" }),
           requestJson("/ledger/entries?limit=50", { method: "GET" }),
-          requestJson("/ledger/escrows", { method: "GET" }),
           requestJson("/ledger/onramp-sessions?limit=50", { method: "GET" }),
         ]);
         renderLedgerState({
           summary,
           accounts: accounts.accounts || [],
           entries: entries.entries || [],
-          escrows: escrows.escrows || [],
           onrampSessions: onrampSessions.onrampSessions || [],
         });
       }

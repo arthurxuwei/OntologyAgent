@@ -354,7 +354,9 @@ class TestAuthRoutes(LedgerServiceTestCase):
         self.assertNotIn('id="refund-button"', html)
         self.assertIn("/ledger/admin/summary", html)
         self.assertNotIn("/onramp/sessions", html)
-        self.assertIn("/ledger/escrows", html)
+        self.assertNotIn("/ledger/escrows", html)
+        self.assertNotIn("Escrows", html)
+        self.assertNotIn("No escrows", html)
         self.assertIn("Onramp Sessions", html)
         self.assertIn('{ label: "Email"', html)
         self.assertIn('{ label: "Claimed"', html)
@@ -676,10 +678,9 @@ class TestAuthRoutes(LedgerServiceTestCase):
                 "};"
                 "global.fetch = async (url, options = {}) => {"
                 "fetchCalls.push({ url, method: options.method || 'GET', body: options.body || null });"
-                "if (url === '/ledger/admin/summary') return { ok: true, json: async () => ({ accounts: 1, circleUsdcAvailable: '1.98', gatewayUsdcAvailable: '0.75', pendingDeposits: '2.25', pendingBatch: '0.1', ledgerLockedAtomic: '3000000', escrows: 1, onrampSessions: 1 }) };"
+                "if (url === '/ledger/admin/summary') return { ok: true, json: async () => ({ accounts: 1, circleUsdcAvailable: '1.98', gatewayUsdcAvailable: '0.75', pendingDeposits: '2.25', pendingBatch: '0.1', ledgerLockedAtomic: '3000000', onrampSessions: 1 }) };"
                 "if (url === '/ledger/accounts') return { ok: true, json: async () => ({ accounts: [{ agentId: 'agent_buyer', email: 'buyer@example.com', walletAddress: '0x1111111111111111111111111111111111111111', circleUsdcBalance: '1.98', gatewayUsdcAvailable: '0.75', gatewayUsdcTotal: '1.25', gatewayUsdcWithdrawable: '0.5', gatewayUsdcWithdrawing: '0.5', gatewayUsdcPendingDeposits: '2.25', gatewayPendingDepositsAtomic: '2250000', gatewayUsdcPendingBatch: '0.1', gatewayPendingBatchAtomic: '100000', availableAtomic: '5000000', lockedAtomic: '3000000' }] }) };"
                 "if (url === '/ledger/entries?limit=50') return { ok: true, json: async () => ({ entries: [{ entryId: 'entry_1', entryType: 'credit', agentId: 'agent_buyer' }] }) };"
-                "if (url === '/ledger/escrows') return { ok: true, json: async () => ({ escrows: [{ escrowId: 'escrow_1', buyerAgentId: 'agent_buyer', sellerAgentId: 'agent_seller', amountAtomic: '3000000', status: 'locked' }] }) };"
                 "if (url === '/ledger/onramp-sessions?limit=50') return { ok: true, json: async () => ({ onrampSessions: [{ sessionId: 'onramp_1', agentId: 'agentA', paymentAmount: '10.00', status: 'created', onrampUrl: 'https://pay.coinbase.com/buy/select-asset?sessionToken=abc' }] }) };"
                 "return { ok: true, json: async () => ({ ok: true }) };"
                 "};"
@@ -690,6 +691,7 @@ class TestAuthRoutes(LedgerServiceTestCase):
                 "stateHtml: elements.get('ledger-state').innerHTML,"
                 "stateText: elements.get('ledger-state').textContent,"
                 "stateCall: fetchCalls.find((call) => call.url === '/ledger/admin/summary'),"
+                "escrowCall: fetchCalls.find((call) => call.url === '/ledger/escrows') || null,"
                 "walletCall: fetchCalls.find((call) => call.url === '/ledger/wallets/get-or-create') || null,"
                 "openCall: window.openCalls[0] || null,"
                 "listeners: Array.from(listeners.keys())"
@@ -727,11 +729,13 @@ class TestAuthRoutes(LedgerServiceTestCase):
         self.assertIn("Email", output["stateHtml"])
         self.assertIn("buyer@example.com", output["stateHtml"])
         self.assertIn("0x1111111111111111111111111111111111111111", output["stateHtml"])
-        self.assertIn("agent_seller", output["stateHtml"])
-        self.assertIn("escrow_1", output["stateHtml"])
+        self.assertNotIn("Escrows", output["stateHtml"])
+        self.assertNotIn("agent_seller", output["stateHtml"])
+        self.assertNotIn("escrow_1", output["stateHtml"])
         self.assertIn("onramp_1", output["stateHtml"])
         self.assertIn("entry_1", output["stateHtml"])
         self.assertEqual(output["stateCall"]["method"], "GET")
+        self.assertIsNone(output["escrowCall"])
         self.assertNotIn("{", output["stateHtml"])
         self.assertNotIn('"accounts"', output["stateHtml"])
         self.assertIsNone(output["walletCall"])
