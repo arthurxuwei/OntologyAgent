@@ -23,6 +23,15 @@ class PromptBuilderTests(unittest.TestCase):
         self.assertIn("Route payments before settlement.", prompt)
         self.assertNotIn("x402 buyer flow", prompt)
 
+    def test_build_agent_prompt_preserves_micro_usdc_amounts(self) -> None:
+        catalog = SkillCatalog(skills=())
+
+        prompt = build_agent_prompt(catalog)
+
+        self.assertIn("1 USDC = 1000000 atomic units", prompt)
+        self.assertIn("never round it to 0 USDC", prompt)
+        self.assertIn("10 atomic units must be reported as 0.000010 USDC", prompt)
+
     def test_empty_skill_catalog_keeps_prompt_minimal(self) -> None:
         catalog = load_skill_catalog(Path(__file__).resolve().parents[1] / "skills")
 

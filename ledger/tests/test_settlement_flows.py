@@ -847,7 +847,10 @@ class TestSettlementFlows(LedgerServiceTestCase):
                 withdrawal_id="withdrawal_existing_weekly",
             )
 
-        with patch.object(services, "get_ledger_wallet_client", return_value=FakeWalletClient()):
+        with (
+            patch.object(services, "get_ledger_wallet_client", return_value=FakeWalletClient()),
+            patch("store.now_iso", return_value="2026-05-31T00:00:00+00:00"),
+        ):
             response = self.client.post(
                 "/ledger/withdrawals",
                 json={

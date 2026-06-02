@@ -72,6 +72,10 @@ def dashboard_base_amount_atomic(entry: dict[str, Any]) -> Decimal:
     return abs(atomic_decimal(entry.get("availableDeltaAtomic")))
 
 
+def dashboard_amount_display(amount_atomic: Decimal) -> str:
+    return f"{amount_atomic / Decimal('1000000'):.6f}"
+
+
 def decimal_usdc(value: Any, fallback: Decimal = Decimal("0")) -> Decimal:
     try:
         return Decimal(str(value))
@@ -177,6 +181,7 @@ def dashboard_transaction(
         "counterparty": dashboard_counterparty(entry),
         "amount": atomic_to_usdc(amount_atomic),
         "amountAtomic": str(int(amount_atomic)),
+        "amountDisplay": dashboard_amount_display(amount_atomic),
         "direction": direction,
         "role": role,
         "status": status,

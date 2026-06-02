@@ -419,7 +419,26 @@ class TestDashboardClaims(LedgerServiceTestCase):
             self.assertEqual(tx["direction"], "out")
             self.assertEqual(tx["role"], "withdrawal")
             self.assertEqual(tx["amountAtomic"], "1250000")
+            self.assertEqual(tx["amountDisplay"], "1.250000")
             self.assertEqual(tx["counterparty"], "External · 0x222222...222222")
+
+    def test_dashboard_transaction_exposes_micro_usdc_display_string(self) -> None:
+        tx = main.dashboard_transaction(
+            {
+                "entryId": "entry_micro_transfer",
+                "entryType": "agent_transfer",
+                "agentId": "receiver",
+                "availableDeltaAtomic": "10",
+                "reason": "micro transfer",
+                "metadata": {},
+                "createdAt": main.now_iso(),
+            },
+            {},
+        )
+
+        self.assertEqual(tx["amount"], 0.00001)
+        self.assertEqual(tx["amountAtomic"], "10")
+        self.assertEqual(tx["amountDisplay"], "0.000010")
 
     def test_dashboard_credited_gateway_rows_are_deposits(self) -> None:
         tx = main.dashboard_transaction(
