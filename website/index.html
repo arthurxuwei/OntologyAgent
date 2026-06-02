@@ -3481,16 +3481,8 @@
 /* ────────────────────────────────────────────────────────────────
  * Waitlist form submission
  * ────────────────────────────────────────────────────────────────
- * POSTs the form data as JSON to WAITLIST_ENDPOINT.
- *
- *   ►► BEFORE DEPLOY: replace WAITLIST_ENDPOINT with your real URL.
- *      See TECH-HANDOFF.md for recommended backends (Google Sheets +
- *      Apps Script is the suggested default).
- *
- * While WAITLIST_ENDPOINT is the placeholder, submissions are NOT sent
- * over the network — they log to console and the UI shows the success
- * state, so the page is fully demoable before the backend is wired. */
-const WAITLIST_ENDPOINT = 'REPLACE_ME_WITH_YOUR_ENDPOINT';
+ * POSTs the form data as JSON to the ledger waitlist endpoint. */
+const WAITLIST_ENDPOINT = 'https://ledger.kovaloop.ai/waitlist/applications';
 
 (function waitlistForm() {
   const form = document.getElementById('waitlistForm');
@@ -3519,18 +3511,12 @@ const WAITLIST_ENDPOINT = 'REPLACE_ME_WITH_YOUR_ENDPOINT';
     submitBtn.innerHTML = '<span class="i18n-zh">提交中⋯</span><span class="i18n-en">Submitting⋯</span>';
 
     try {
-      if (WAITLIST_ENDPOINT === 'REPLACE_ME_WITH_YOUR_ENDPOINT') {
-        // Placeholder mode: don't POST, just simulate success.
-        console.info('[Waitlist · placeholder mode] Would POST:', data);
-        await new Promise(r => setTimeout(r, 350));
-      } else {
-        const res = await fetch(WAITLIST_ENDPOINT, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(data),
-        });
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-      }
+      const res = await fetch(WAITLIST_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
       form.style.display = 'none';
       success.style.display = 'block';
     } catch (err) {

@@ -22,6 +22,7 @@ from models import (
     LedgerState,
     OnrampEventRecord,
     OnrampSessionRecord,
+    WaitlistApplication,
 )
 from utils import (
     add_atomic,
@@ -501,6 +502,20 @@ class OffchainLedgerStore:
             OnrampEventRecord,
             event.eventId,
             event,
+        )
+
+    def append_waitlist_application(
+        self,
+        application: WaitlistApplication,
+    ) -> WaitlistApplication:
+        return self._write(
+            lambda connection: self._append_record(
+                connection,
+                "ledger_waitlist_applications",
+                WaitlistApplication,
+                application.applicationId,
+                application,
+            )
         )
 
     def load(self) -> LedgerState:
@@ -1484,6 +1499,11 @@ class OffchainLedgerStore:
         )
         for table_name, _state_field, model_type, _record_id in LEDGER_COLLECTIONS:
             self._ensure_record_table(connection, table_name, model_type)
+        self._ensure_record_table(
+            connection,
+            "ledger_waitlist_applications",
+            WaitlistApplication,
+        )
         self._ensure_query_indexes(connection)
 
     def _table_exists(self, connection: sqlite3.Connection, table_name: str) -> bool:
@@ -1563,6 +1583,18 @@ class OffchainLedgerStore:
             """
             CREATE INDEX IF NOT EXISTS idx_ledger_settlement_records_from_to
             ON ledger_settlement_records("fromAgentId", "toAgentId")
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_ledger_waitlist_applications_email
+            ON ledger_waitlist_applications("email")
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_ledger_waitlist_applications_created
+            ON ledger_waitlist_applications("createdAt")
             """
         )
 

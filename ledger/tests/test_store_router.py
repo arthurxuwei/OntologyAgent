@@ -269,6 +269,75 @@ class TestStoreRouter(LedgerServiceTestCase):
         self.assertEqual(json.loads(entry[2]), {})
         self.assertIsNone(old_records_table)
 
+    def test_waitlist_application_submission_appends_each_request(self) -> None:
+        first = self.client.post(
+            "/waitlist/applications",
+            json={
+                "email": "Founder@Example.COM",
+                "name": "Founder",
+                "company": "Example Labs",
+                "intent": "agent wallet beta",
+                "lang": "zh",
+                "page_url": "https://kovaloop.ai/#cta",
+                "submitted_at": "2026-06-02T08:00:00.000Z",
+            },
+            headers={"user-agent": "waitlist-test/1.0"},
+        )
+        second = self.client.post(
+            "/waitlist/applications",
+            json={
+                "email": "founder@example.com",
+                "name": "Founder",
+                "company": "Example Labs",
+                "intent": "second note",
+                "lang": "en",
+                "page_url": "https://kovaloop.ai/en#cta",
+                "submitted_at": "2026-06-02T08:01:00.000Z",
+            },
+        )
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 200)
+        first_payload = first.json()
+        second_payload = second.json()
+        self.assertTrue(first_payload["ok"])
+        self.assertTrue(first_payload["applicationId"].startswith("waitlist_"))
+        self.assertNotEqual(first_payload["applicationId"], second_payload["applicationId"])
+
+        import sqlite3
+
+        connection = sqlite3.connect(self.db_path)
+        try:
+            rows = connection.execute(
+                """
+                SELECT email, name, company, intent, lang, pageUrl, submittedAt, userAgent
+                FROM ledger_waitlist_applications
+                ORDER BY position ASC
+                """
+            ).fetchall()
+        finally:
+            connection.close()
+
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0][0], "founder@example.com")
+        self.assertEqual(rows[0][1], "Founder")
+        self.assertEqual(rows[0][2], "Example Labs")
+        self.assertEqual(rows[0][3], "agent wallet beta")
+        self.assertEqual(rows[0][4], "zh")
+        self.assertEqual(rows[0][5], "https://kovaloop.ai/#cta")
+        self.assertEqual(rows[0][6], "2026-06-02T08:00:00.000Z")
+        self.assertEqual(rows[0][7], "waitlist-test/1.0")
+        self.assertEqual(rows[1][3], "second note")
+
+    def test_waitlist_application_requires_email_and_name(self) -> None:
+        response = self.client.post(
+            "/waitlist/applications",
+            json={"email": "", "name": "", "intent": "missing contact"},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["detail"], "email and name are required")
+
     def test_sqlite_store_drops_empty_legacy_records_table_after_relation_writes(self) -> None:
         self.client.post(
             "/ledger/accounts/agent_buyer/credit",

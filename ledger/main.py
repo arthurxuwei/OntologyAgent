@@ -10,6 +10,7 @@ from urllib.parse import quote, urlencode
 
 import httpx
 from fastapi import Cookie, FastAPI, Header, HTTPException, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from payment_router import PaymentIntent, route_payment_intent
@@ -81,6 +82,35 @@ from webhooks import (
 
 
 app = FastAPI(title="Kovaloop offchain ledger")
+
+
+def waitlist_cors_origins() -> list[str]:
+    configured = os.getenv("WAITLIST_CORS_ORIGINS", "").strip()
+    if configured:
+        return [
+            origin.strip()
+            for origin in configured.split(",")
+            if origin.strip()
+        ]
+    return [
+        "https://kovaloop.ai",
+        "https://www.kovaloop.ai",
+        "http://localhost:8080",
+        "http://localhost:8000",
+        "http://localhost:3000",
+        "http://127.0.0.1:8080",
+        "http://127.0.0.1:8000",
+        "http://127.0.0.1:3000",
+    ]
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=waitlist_cors_origins(),
+    allow_methods=["POST", "OPTIONS"],
+    allow_headers=["Content-Type"],
+    max_age=86400,
+)
 app.mount(
     "/dashboard/assets",
     StaticFiles(directory=LEDGER_DASHBOARD_ASSETS_PATH),
@@ -348,6 +378,47 @@ async def auth_logout_redirect() -> RedirectResponse:
 @app.post("/ledger/payment/route")
 def route_ledger_payment_intent(intent: PaymentIntent) -> dict[str, Any]:
     return route_payment_intent(intent)
+
+
+def optional_text(value: str | None) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
+def request_client_ip(request: Request) -> str | None:
+    forwarded_for = request.headers.get("x-forwarded-for", "")
+    if forwarded_for.strip():
+        first = forwarded_for.split(",", 1)[0].strip()
+        if first:
+            return first
+    return request.client.host if request.client else None
+
+
+@app.post("/waitlist/applications")
+def create_waitlist_application(
+    application_request: CreateWaitlistApplicationRequest,
+    request: Request,
+) -> dict[str, Any]:
+    email = normalize_email(application_request.email)
+    name = optional_text(application_request.name)
+    if email is None or name is None:
+        raise HTTPException(status_code=400, detail="email and name are required")
+
+    application = WaitlistApplication(
+        applicationId=f"waitlist_{uuid.uuid4().hex}",
+        email=email,
+        name=name,
+        company=optional_text(application_request.company),
+        intent=optional_text(application_request.intent),
+        lang=optional_text(application_request.lang),
+        pageUrl=optional_text(application_request.page_url),
+        submittedAt=optional_text(application_request.submitted_at),
+        clientIp=request_client_ip(request),
+        userAgent=optional_text(request.headers.get("user-agent")),
+        createdAt=now_iso(),
+    )
+    saved = get_store().append_waitlist_application(application)
+    return {"ok": True, "applicationId": saved.applicationId}
 
 
 @app.post("/ledger/claims/link")

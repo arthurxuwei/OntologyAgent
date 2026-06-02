@@ -162,6 +162,22 @@ class CircleWebhookEventRecord(BaseModel):
     updatedAt: str
 
 
+class WaitlistApplication(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    applicationId: str
+    email: str
+    name: str
+    company: Optional[str] = None
+    intent: Optional[str] = None
+    lang: Optional[str] = None
+    pageUrl: Optional[str] = None
+    submittedAt: Optional[str] = None
+    clientIp: Optional[str] = None
+    userAgent: Optional[str] = None
+    createdAt: str
+
+
 class LedgerState(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -229,6 +245,21 @@ class DebugResetDashboardClaimsRequest(BaseModel):
 
     confirm: str = Field(min_length=1)
     agentIds: list[str] = Field(default_factory=list)
+
+
+class CreateWaitlistApplicationRequest(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        str_strip_whitespace=True,
+    )
+
+    email: str = ""
+    name: str = ""
+    company: Optional[str] = None
+    intent: Optional[str] = None
+    lang: Optional[str] = None
+    page_url: Optional[str] = None
+    submitted_at: Optional[str] = None
 
 
 class GatewayDepositRequest(BaseModel):
