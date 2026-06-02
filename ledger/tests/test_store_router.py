@@ -338,6 +338,23 @@ class TestStoreRouter(LedgerServiceTestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["detail"], "email and name are required")
 
+    def test_waitlist_application_allows_public_site_cors_preflight(self) -> None:
+        response = self.client.options(
+            "/waitlist/applications",
+            headers={
+                "Origin": "https://kovaloop.ai",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "content-type",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.headers["access-control-allow-origin"],
+            "https://kovaloop.ai",
+        )
+        self.assertIn("POST", response.headers["access-control-allow-methods"])
+
     def test_sqlite_store_drops_empty_legacy_records_table_after_relation_writes(self) -> None:
         self.client.post(
             "/ledger/accounts/agent_buyer/credit",

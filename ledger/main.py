@@ -629,6 +629,18 @@ async def ledger_admin_summary(
     return summary
 
 
+@app.get("/ledger/admin/waitlist-applications")
+def ledger_admin_waitlist_applications(
+    limit: int | None = 100,
+    admin_cookie: str | None = Cookie(default=None, alias=ADMIN_COOKIE),
+) -> dict[str, Any]:
+    require_admin_access(admin_cookie)
+    applications = get_store().list_waitlist_applications(
+        limit=_limit(limit, default=100),
+    )
+    return {"applications": [application.model_dump() for application in applications]}
+
+
 @app.post("/onramp/sessions")
 async def create_onramp_session(request: CreateOnrampSessionRequest) -> dict[str, Any]:
     store = get_store()

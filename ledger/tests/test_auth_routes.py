@@ -363,6 +363,10 @@ class TestAuthRoutes(LedgerServiceTestCase):
         self.assertIn('{ label: "Gateway Withdrawable"', html)
         self.assertIn('{ label: "Pending Deposits Atomic"', html)
         self.assertIn('{ label: "Pending Batch Atomic"', html)
+        self.assertIn("/ledger/admin/waitlist-applications", html)
+        self.assertIn("Waitlist Applications", html)
+        self.assertIn('{ label: "Intent"', html)
+        self.assertIn("waitlistApplications", html)
         self.assertNotIn('id="debug-claims-form"', html)
         self.assertNotIn('id="debug-token"', html)
         self.assertNotIn('id="debug-claim-agent-ids"', html)
@@ -449,6 +453,47 @@ class TestAuthRoutes(LedgerServiceTestCase):
         self.assertEqual(missing.json()["detail"], "Admin authentication required")
         self.assertEqual(authorized.status_code, 200)
         self.assertIn("accounts", authorized.json())
+
+    def test_admin_waitlist_applications_requires_admin_cookie_and_lists_requests(self) -> None:
+        self.client.post(
+            "/waitlist/applications",
+            json={
+                "email": "Founder@Example.COM",
+                "name": "Founder",
+                "company": "Example Labs",
+                "intent": "first use case",
+                "lang": "zh",
+                "page_url": "https://kovaloop.ai/#cta",
+                "submitted_at": "2026-06-02T08:00:00.000Z",
+            },
+        )
+        self.client.post(
+            "/waitlist/applications",
+            json={
+                "email": "founder@example.com",
+                "name": "Founder",
+                "company": "Example Labs",
+                "intent": "second use case",
+                "lang": "en",
+                "page_url": "https://kovaloop.ai/en#cta",
+                "submitted_at": "2026-06-02T08:01:00.000Z",
+            },
+        )
+
+        with patch.dict(os.environ, {"ADMIN_TOKEN": "admin-secret"}):
+            missing = self.client.get("/ledger/admin/waitlist-applications")
+            self.client.get("/admin?token=admin-secret", follow_redirects=False)
+            authorized = self.client.get("/ledger/admin/waitlist-applications?limit=10")
+
+        self.assertEqual(missing.status_code, 401)
+        self.assertEqual(missing.json()["detail"], "Admin authentication required")
+        self.assertEqual(authorized.status_code, 200)
+        applications = authorized.json()["applications"]
+        self.assertEqual(len(applications), 2)
+        self.assertEqual([item["intent"] for item in applications], ["second use case", "first use case"])
+        self.assertEqual(applications[0]["email"], "founder@example.com")
+        self.assertEqual(applications[0]["lang"], "en")
+        self.assertTrue(applications[0]["applicationId"].startswith("waitlist_"))
 
     def test_dashboard_serves_user_dashboard_page(self) -> None:
         response = self.client.get("/dashboard")
@@ -676,6 +721,7 @@ class TestAuthRoutes(LedgerServiceTestCase):
                 "if (url === '/ledger/accounts') return { ok: true, json: async () => ({ accounts: [{ agentId: 'agent_buyer', email: 'buyer@example.com', walletAddress: '0x1111111111111111111111111111111111111111', circleUsdcBalance: '1.98', gatewayUsdcAvailable: '0.75', gatewayUsdcTotal: '1.25', gatewayUsdcWithdrawable: '0.5', gatewayUsdcWithdrawing: '0.5', gatewayUsdcPendingDeposits: '2.25', gatewayPendingDepositsAtomic: '2250000', gatewayUsdcPendingBatch: '0.1', gatewayPendingBatchAtomic: '100000', availableAtomic: '5000000' }] }) };"
                 "if (url === '/ledger/entries?limit=50') return { ok: true, json: async () => ({ entries: [{ entryId: 'entry_1', entryType: 'credit', agentId: 'agent_buyer' }] }) };"
                 "if (url === '/ledger/onramp-sessions?limit=50') return { ok: true, json: async () => ({ onrampSessions: [{ sessionId: 'onramp_1', agentId: 'agentA', paymentAmount: '10.00', status: 'created', onrampUrl: 'https://pay.coinbase.com/buy/select-asset?sessionToken=abc' }] }) };"
+                "if (url === '/ledger/admin/waitlist-applications?limit=100') return { ok: true, json: async () => ({ applications: [{ applicationId: 'waitlist_1', email: 'founder@example.com', name: 'Founder', company: 'Example Labs', intent: 'agent payments', lang: 'zh', pageUrl: 'https://kovaloop.ai/#cta', submittedAt: '2026-06-02T08:00:00.000Z', createdAt: '2026-06-02T08:00:01+00:00' }] }) };"
                 "return { ok: true, json: async () => ({ ok: true }) };"
                 "};"
                 "(async () => {"
@@ -685,6 +731,7 @@ class TestAuthRoutes(LedgerServiceTestCase):
                 "stateHtml: elements.get('ledger-state').innerHTML,"
                 "stateText: elements.get('ledger-state').textContent,"
                 "stateCall: fetchCalls.find((call) => call.url === '/ledger/admin/summary'),"
+                "waitlistCall: fetchCalls.find((call) => call.url === '/ledger/admin/waitlist-applications?limit=100'),"
                 "walletCall: fetchCalls.find((call) => call.url === '/ledger/wallets/get-or-create') || null,"
                 "openCall: window.openCalls[0] || null,"
                 "listeners: Array.from(listeners.keys())"
@@ -722,7 +769,12 @@ class TestAuthRoutes(LedgerServiceTestCase):
         self.assertIn("0x1111111111111111111111111111111111111111", output["stateHtml"])
         self.assertIn("onramp_1", output["stateHtml"])
         self.assertIn("entry_1", output["stateHtml"])
+        self.assertIn("Waitlist Applications", output["stateHtml"])
+        self.assertIn("founder@example.com", output["stateHtml"])
+        self.assertIn("agent payments", output["stateHtml"])
+        self.assertIn("https://kovaloop.ai/#cta", output["stateHtml"])
         self.assertEqual(output["stateCall"]["method"], "GET")
+        self.assertEqual(output["waitlistCall"]["method"], "GET")
         self.assertNotIn("{", output["stateHtml"])
         self.assertNotIn('"accounts"', output["stateHtml"])
         self.assertIsNone(output["walletCall"])

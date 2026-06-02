@@ -518,6 +518,26 @@ class OffchainLedgerStore:
             )
         )
 
+    def list_waitlist_applications(
+        self,
+        *,
+        limit: Optional[int] = None,
+    ) -> list[WaitlistApplication]:
+        safe_limit = max(0, min(int(limit or 0), 500)) if limit is not None else 100
+
+        def read(connection: sqlite3.Connection) -> list[WaitlistApplication]:
+            sql = """
+                SELECT * FROM ledger_waitlist_applications
+                ORDER BY "createdAt" DESC, position DESC, record_id DESC
+                LIMIT ?
+            """
+            return [
+                record_to_model(record_from_row(row, WaitlistApplication), WaitlistApplication)
+                for row in connection.execute(sql, (safe_limit,)).fetchall()
+            ]
+
+        return self._read(read)
+
     def load(self) -> LedgerState:
         return self._read(self._load_state_from_db)
 

@@ -416,6 +416,7 @@
         const accounts = Array.isArray(state?.accounts) ? state.accounts : [];
         const entries = Array.isArray(state?.entries) ? state.entries : [];
         const onrampSessions = Array.isArray(state?.onrampSessions) ? state.onrampSessions : [];
+        const waitlistApplications = Array.isArray(state?.waitlistApplications) ? state.waitlistApplications : [];
         const summary = state?.summary || {};
         const recentEntries = entries.slice(0, 6);
         ledgerStateEl.innerHTML = [
@@ -463,6 +464,22 @@
             "No onramp sessions",
           ),
           renderStateSection(
+            "Waitlist Applications",
+            [
+              { label: "Submitted", render: (application) => formatDate(application.submittedAt || application.createdAt) },
+              { label: "Email", render: (application) => shortValue(application.email) },
+              { label: "Name", render: (application) => shortValue(application.name) },
+              { label: "Company", render: (application) => shortValue(application.company) },
+              { label: "Intent", render: (application) => shortValue(application.intent) },
+              { label: "Lang", render: (application) => shortValue(application.lang) },
+              { label: "Page", render: (application) => shortValue(application.pageUrl) },
+              { label: "IP", render: (application) => `<span class="mono">${shortValue(application.clientIp)}</span>` },
+              { label: "User Agent", render: (application) => shortValue(application.userAgent) },
+            ],
+            waitlistApplications,
+            "No waitlist applications yet.",
+          ),
+          renderStateSection(
             "Recent Entries",
             [
               { label: "Type", render: (entry) => statusBadge(entry.entryType) },
@@ -479,17 +496,19 @@
       }
 
       async function refreshLedgerState() {
-        const [summary, accounts, entries, onrampSessions] = await Promise.all([
+        const [summary, accounts, entries, onrampSessions, waitlistApplications] = await Promise.all([
           requestJson("/ledger/admin/summary", { method: "GET" }),
           requestJson("/ledger/accounts", { method: "GET" }),
           requestJson("/ledger/entries?limit=50", { method: "GET" }),
           requestJson("/ledger/onramp-sessions?limit=50", { method: "GET" }),
+          requestJson("/ledger/admin/waitlist-applications?limit=100", { method: "GET" }),
         ]);
         renderLedgerState({
           summary,
           accounts: accounts.accounts || [],
           entries: entries.entries || [],
           onrampSessions: onrampSessions.onrampSessions || [],
+          waitlistApplications: waitlistApplications.applications || [],
         });
       }
 
