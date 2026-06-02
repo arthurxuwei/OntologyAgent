@@ -6,4 +6,5 @@ services:
     depends_on:
       - ledger
       - circle
+      - website
     restart: unless-stopped

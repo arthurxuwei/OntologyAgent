@@ -151,7 +151,7 @@ jobs:
           test -n "${LIGHTHOUSE_USER}"
           remote="${LIGHTHOUSE_USER}@${LIGHTHOUSE_HOST}"
           ssh -i ~/.ssh/lighthouse_key "${remote}" '
-            sudo install -d -o "$USER" -g "$USER" /opt/kovaloop /opt/kovaloop/data /opt/kovaloop/data/ledger /opt/kovaloop/data/chain
+            sudo install -d -o "$USER" -g "$USER" /opt/kovaloop /opt/kovaloop/data /opt/kovaloop/data/ledger /opt/kovaloop/data/chain /opt/kovaloop/website
             if [ -d /opt/chief/data ] && [ ! -e /opt/kovaloop/data/ledger/offchain_ledger.sqlite3 ] && [ ! -e /opt/kovaloop/data/ledger/offchain_ledger.json ]; then
               sudo cp -a /opt/chief/data/. /opt/kovaloop/data/
               sudo chown -R "$USER:$USER" /opt/kovaloop/data
@@ -159,7 +159,9 @@ jobs:
             touch /opt/kovaloop/.env
           '
           scp -i ~/.ssh/lighthouse_key docker-compose.core.yml "${remote}:/opt/kovaloop/docker-compose.core.yml"
+          scp -i ~/.ssh/lighthouse_key docker-compose.website.yml "${remote}:/opt/kovaloop/docker-compose.website.yml"
           scp -i ~/.ssh/lighthouse_key docker-compose.cloudflare.yml "${remote}:/opt/kovaloop/docker-compose.cloudflare.yml"
+          scp -i ~/.ssh/lighthouse_key website/index.html "${remote}:/opt/kovaloop/website/index.html"
 
       - name: Update deployment env
         env:
@@ -187,6 +189,7 @@ jobs:
           remote="${LIGHTHOUSE_USER}@${LIGHTHOUSE_HOST}"
           if [ -z "${GITHUB_CLIENT_ID}" ] && [ -n "${LEGACY_GITHUB_CLIENT_ID}" ]; then GITHUB_CLIENT_ID="${LEGACY_GITHUB_CLIENT_ID}"; fi
           if [ -z "${GITHUB_CLIENT_SECRET}" ] && [ -n "${LEGACY_GITHUB_CLIENT_SECRET}" ]; then GITHUB_CLIENT_SECRET="${LEGACY_GITHUB_CLIENT_SECRET}"; fi
+          if [ -z "${CIRCLE_USDC_TOKEN_ID}" ]; then CIRCLE_USDC_TOKEN_ID="aa7bb533-aeb8-535c-bd65-354aed91ea3d"; fi
           {
             printf 'GHCR_IMAGE_PREFIX=%s\nIMAGE_TAG=%s\nKOVALOOP_DATA_ROOT=/opt/kovaloop/data\nCHAIN_PROFILE=base-mainnet\nCIRCLE_BLOCKCHAIN=BASE\nCHAIN_MOCK=false\nLEDGER_SETTLEMENT_ENABLED=true\nLEDGER_SETTLEMENT_REQUIRE_SUCCESS=true\nCLOUDFLARE_TUNNEL_TOKEN=%s\nCOINBASE_ONRAMP_BEARER_TOKEN=%s\nCOINBASE_API_KEY_ID=%s\nCOINBASE_API_PRIVATE_KEY=%s\n' \
               "${IMAGE_PREFIX}" \
@@ -221,7 +224,7 @@ jobs:
           ssh "${ssh_opts[@]}" "${remote}" '
             set -euo pipefail
             cd /opt/kovaloop
-            compose_files="-f docker-compose.core.yml"
+            compose_files="-f docker-compose.core.yml -f docker-compose.website.yml"
             if grep -q "^CLOUDFLARE_TUNNEL_TOKEN=." .env.deploy; then
               compose_files="${compose_files} -f docker-compose.cloudflare.yml"
             fi
