@@ -124,7 +124,7 @@ def migrate_ledger_state_payload(raw: Any) -> Any:
 
 LedgerRecordId = Callable[[dict[str, Any], int], str]
 
-AGENT_TRANSFER_SINGLE_LIMIT_ATOMIC = 1_000
+AGENT_TRANSFER_SINGLE_LIMIT_ATOMIC = 10_000
 WITHDRAWAL_DAILY_LIMIT_ATOMIC = 5_000_000
 WITHDRAWAL_WEEKLY_LIMIT_ATOMIC = 10_000_000
 WITHDRAWAL_DAILY_WINDOW = timedelta(hours=24)
@@ -895,7 +895,7 @@ class OffchainLedgerStore:
     ) -> None:
         amount = parse_positive_atomic(amount_atomic)
         if amount > AGENT_TRANSFER_SINGLE_LIMIT_ATOMIC:
-            raise ValueError("single transfer limit exceeded: max 0.001 USDC")
+            raise ValueError("single transfer limit exceeded: max 0.01 USDC")
 
         def read(connection: sqlite3.Connection) -> None:
             sender = self._find_account_row(connection, from_agent_id)
