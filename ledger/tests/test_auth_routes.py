@@ -54,6 +54,30 @@ class TestAuthRoutes(LedgerServiceTestCase):
         self.assertIn("scope=read%3Auser+user%3Aemail", location)
         self.assertIn("kovaloop_ledger_oauth_state=", response.headers["set-cookie"])
 
+    def test_google_login_redirects_to_google_oauth(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "GOOGLE_CLIENT_ID": "google-client",
+                "GOOGLE_CLIENT_SECRET": "google-secret",
+                "AUTH_SESSION_SECRET": "session-secret",
+                "PUBLIC_BASE_URL": "https://ledger.example.test",
+            },
+        ):
+            response = self.client.get("/auth/google/login", follow_redirects=False)
+
+        self.assertEqual(response.status_code, 307)
+        location = response.headers["location"]
+        self.assertTrue(location.startswith("https://accounts.google.com/o/oauth2/v2/auth?"))
+        self.assertIn("client_id=google-client", location)
+        self.assertIn("response_type=code", location)
+        self.assertIn("scope=openid+email+profile", location)
+        self.assertIn(
+            "redirect_uri=https%3A%2F%2Fledger.example.test%2Fauth%2Fgoogle%2Fcallback",
+            location,
+        )
+        self.assertIn("kovaloop_ledger_oauth_state=", response.headers["set-cookie"])
+
     def test_github_login_accepts_dashboard_return_path(self) -> None:
         with patch.dict(
             os.environ,
@@ -139,6 +163,51 @@ class TestAuthRoutes(LedgerServiceTestCase):
             "/dashboard?claimCode=clm_abc&agentId=agent_1",
         )
         self.assertIn("kovaloop_ledger_oauth_return=", response.headers["set-cookie"])
+
+    def test_google_callback_redirects_to_stored_claim_return_path_and_sets_session(self) -> None:
+        async def fake_fetch_google_user(_code, redirect_uri=None):
+            self.assertEqual(
+                redirect_uri,
+                "https://ledger.example.test/auth/google/callback",
+            )
+            return {
+                "provider": "google",
+                "login": "owner@example.com",
+                "name": "Google User",
+                "email": "OWNER@EXAMPLE.COM",
+                "avatar_url": "https://example.test/avatar.png",
+            }
+
+        with patch.dict(
+            os.environ,
+            {
+                "AUTH_SESSION_SECRET": "session-secret",
+                "PUBLIC_BASE_URL": "https://ledger.example.test",
+            },
+        ), patch.object(
+            auth,
+            "fetch_google_user",
+            side_effect=fake_fetch_google_user,
+        ):
+            response = self.client.get(
+                "/auth/google/callback?code=abc&state=oauth-state",
+                headers={
+                    "Cookie": (
+                        "kovaloop_ledger_oauth_state=oauth-state; "
+                        "kovaloop_ledger_oauth_return=/dashboard%3FclaimCode%3Dclm_abc%26agentId%3Dagent_1"
+                    )
+                },
+                follow_redirects=False,
+            )
+
+        self.assertEqual(response.status_code, 307)
+        self.assertEqual(
+            response.headers["location"],
+            "/dashboard?claimCode=clm_abc&agentId=agent_1",
+        )
+        set_cookie = response.headers["set-cookie"]
+        self.assertIn("kovaloop_ledger_session=", set_cookie)
+        self.assertIn("kovaloop_ledger_oauth_return=", set_cookie)
 
     def test_github_callback_rejects_invalid_stored_return_paths(self) -> None:
         async def fake_fetch_github_user(_code, redirect_uri=None):
@@ -270,6 +339,42 @@ class TestAuthRoutes(LedgerServiceTestCase):
         self.assertTrue(payload["authenticated"])
         self.assertEqual(payload["user"]["provider"], "github")
         self.assertEqual(payload["user"]["login"], "octo")
+        self.assertEqual(payload["user"]["email"], "owner@example.com")
+        self.assertEqual(payload["claimedAgentIds"], ["agent_existing"])
+
+    def test_auth_session_returns_signed_google_user(self) -> None:
+        main.get_store().bind_account_wallet(
+            agent_id="agent_existing",
+            agent_name="Existing Agent",
+            email="owner@example.com",
+            wallet_address="0x1111111111111111111111111111111111111111",
+            circle_wallet_id="circle-existing",
+        )
+        main.get_store().claim_dashboard_account(
+            agent_id="agent_existing",
+            email="owner@example.com",
+            dashboard_email="owner@example.com",
+        )
+        with patch.dict(os.environ, {"AUTH_SESSION_SECRET": "session-secret"}):
+            session = main.sign_auth_session(
+                {
+                    "provider": "google",
+                    "login": "owner@example.com",
+                    "name": "Google User",
+                    "email": "OWNER@EXAMPLE.COM",
+                    "avatar_url": "https://example.test/avatar.png",
+                }
+            )
+            response = self.client.get(
+                "/auth/session",
+                headers={"Cookie": f"kovaloop_ledger_session={session}"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["authenticated"])
+        self.assertEqual(payload["user"]["provider"], "google")
+        self.assertEqual(payload["user"]["login"], "owner@example.com")
         self.assertEqual(payload["user"]["email"], "owner@example.com")
         self.assertEqual(payload["claimedAgentIds"], ["agent_existing"])
 
@@ -511,7 +616,10 @@ class TestAuthRoutes(LedgerServiceTestCase):
         self.assertIn('href="/dashboard/assets/dashboard.css"', html)
         self.assertIn('src="/dashboard/assets/dashboard/DashboardApp.jsx"', html)
         self.assertIn("githubLoginHref", source)
+        self.assertIn("googleLoginHref", source)
         self.assertIn('href={githubLoginHref}', source)
+        self.assertIn('href={googleLoginHref}', source)
+        self.assertIn("mvp.dash.auth.google_button", source)
         self.assertIn("fetch('/auth/session'", source)
         self.assertIn("claimedAgentIds: payload.claimedAgentIds || []", source)
         self.assertIn("Object.prototype.hasOwnProperty.call(opts, 'claimedAgentIds')", source)

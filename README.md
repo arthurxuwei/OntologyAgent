@@ -380,6 +380,8 @@ PRIVATE_KEY=0x... \
 - `AUTONOMY_MODEL`：自治循环专用模型；为空时回退到 `BRAIN_AGENT_MODEL`
 - `GITHUB_CLIENT_ID`：Agent Wallet MVP 的 GitHub OAuth client id
 - `GITHUB_CLIENT_SECRET`：Agent Wallet MVP 的 GitHub OAuth client secret
+- `GOOGLE_CLIENT_ID`：Agent Wallet MVP 的 Google/Gmail OAuth client id
+- `GOOGLE_CLIENT_SECRET`：Agent Wallet MVP 的 Google/Gmail OAuth client secret
 - `AUTH_SESSION_SECRET`：签名 Agent Wallet owner session cookie；Docker 默认使用本地开发 secret
 - `PUBLIC_BASE_URL`：OAuth callback 使用的公开 base URL，默认 `http://localhost:8000`
 - `AGENT_WALLET_STATE_PATH`：Agent Wallet 本地 demo 状态文件，Docker 默认 `/app/data/agent_wallet_state.json`
@@ -464,6 +466,8 @@ Agent Wallet MVP 在现有 Web Console 中增加了一个 `Agent Wallet MVP` 面
 
 - `GITHUB_CLIENT_ID`
 - `GITHUB_CLIENT_SECRET`
+- `GOOGLE_CLIENT_ID`
+- `GOOGLE_CLIENT_SECRET`
 - `AUTH_SESSION_SECRET`
 - `PUBLIC_BASE_URL`
 - `CIRCLE_API_KEY`

@@ -515,6 +515,7 @@
   function providerDisplay(t, provider) {
     switch (provider) {
       case 'github': return t('mvp.dash.settings.account_provider_github');
+      case 'google': return t('mvp.dash.settings.account_provider_google');
       case 'email':  return t('mvp.dash.settings.account_provider_email');
       default:       return provider || '—';
     }

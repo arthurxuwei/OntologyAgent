@@ -175,6 +175,8 @@ jobs:
           COINBASE_API_PRIVATE_KEY: ${{ secrets.COINBASE_API_PRIVATE_KEY }}
           GITHUB_CLIENT_ID: ${{ secrets.KOVALOOP_GITHUB_CLIENT_ID }}
           GITHUB_CLIENT_SECRET: ${{ secrets.KOVALOOP_GITHUB_CLIENT_SECRET }}
+          GOOGLE_CLIENT_ID: ${{ secrets.KOVALOOP_GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.KOVALOOP_GOOGLE_CLIENT_SECRET }}
           LEGACY_GITHUB_CLIENT_ID: ${{ secrets.CHIEF_GITHUB_CLIENT_ID }}
           LEGACY_GITHUB_CLIENT_SECRET: ${{ secrets.CHIEF_GITHUB_CLIENT_SECRET }}
           AUTH_SESSION_SECRET: ${{ secrets.AUTH_SESSION_SECRET }}
@@ -200,6 +202,8 @@ jobs:
               "${COINBASE_API_PRIVATE_KEY}"
             if [ -n "${GITHUB_CLIENT_ID}" ]; then printf 'GITHUB_CLIENT_ID=%s\n' "${GITHUB_CLIENT_ID}"; fi
             if [ -n "${GITHUB_CLIENT_SECRET}" ]; then printf 'GITHUB_CLIENT_SECRET=%s\n' "${GITHUB_CLIENT_SECRET}"; fi
+            if [ -n "${GOOGLE_CLIENT_ID}" ]; then printf 'GOOGLE_CLIENT_ID=%s\n' "${GOOGLE_CLIENT_ID}"; fi
+            if [ -n "${GOOGLE_CLIENT_SECRET}" ]; then printf 'GOOGLE_CLIENT_SECRET=%s\n' "${GOOGLE_CLIENT_SECRET}"; fi
             if [ -n "${AUTH_SESSION_SECRET}" ]; then printf 'AUTH_SESSION_SECRET=%s\n' "${AUTH_SESSION_SECRET}"; fi
             if [ -n "${ADMIN_TOKEN}" ]; then printf 'ADMIN_TOKEN=%s\n' "${ADMIN_TOKEN}"; fi
             if [ -n "${PUBLIC_BASE_URL}" ]; then printf 'PUBLIC_BASE_URL=%s\n' "${PUBLIC_BASE_URL}"; fi

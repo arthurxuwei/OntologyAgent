@@ -17,6 +17,8 @@ from config import (
     GITHUB_EMAILS_URL,
     GITHUB_TOKEN_URL,
     GITHUB_USER_URL,
+    GOOGLE_TOKEN_URL,
+    GOOGLE_USERINFO_URL,
     OAUTH_RETURN_COOKIE,
     OAUTH_STATE_COOKIE,
     SESSION_COOKIE,
@@ -54,7 +56,7 @@ def verify_auth_session(value: str | None) -> dict[str, Any] | None:
         parsed = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8"))
     except (ValueError, json.JSONDecodeError):
         return None
-    if not isinstance(parsed, dict) or parsed.get("provider") != "github":
+    if not isinstance(parsed, dict) or parsed.get("provider") not in {"github", "google"}:
         return None
     email = normalize_email(parsed.get("email"))
     if not email:
@@ -175,6 +177,52 @@ async def fetch_github_user(code: str, redirect_uri: str | None = None) -> dict[
     }
 
 
+async def fetch_google_user(code: str, redirect_uri: str | None = None) -> dict[str, Any]:
+    client_id = require_env("GOOGLE_CLIENT_ID")
+    client_secret = require_env("GOOGLE_CLIENT_SECRET")
+    token_request = {
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "code": code,
+        "grant_type": "authorization_code",
+    }
+    if redirect_uri:
+        token_request["redirect_uri"] = redirect_uri
+    async with httpx.AsyncClient(timeout=20) as client:
+        token_response = await client.post(
+            GOOGLE_TOKEN_URL,
+            headers={"Accept": "application/json"},
+            data=token_request,
+        )
+        token_response.raise_for_status()
+        token_payload = token_response.json()
+        access_token = token_payload.get("access_token")
+        if not access_token:
+            raise RuntimeError("Google OAuth token exchange did not return access_token")
+
+        profile_response = await client.get(
+            GOOGLE_USERINFO_URL,
+            headers={
+                "Accept": "application/json",
+                "Authorization": f"Bearer {access_token}",
+            },
+        )
+        profile_response.raise_for_status()
+        profile = profile_response.json()
+
+    email = normalize_email(profile.get("email"))
+    if not email or profile.get("email_verified") is False:
+        raise RuntimeError("Google account does not expose a verified email")
+    name = str(profile.get("name") or email).strip()
+    return {
+        "provider": "google",
+        "login": email,
+        "name": name,
+        "email": email,
+        "avatar_url": profile.get("picture"),
+    }
+
+
 async def complete_github_callback(
     request: Request,
     *,
@@ -196,6 +244,46 @@ async def complete_github_callback(
         raise HTTPException(status_code=400, detail="Invalid GitHub OAuth state")
     try:
         user = await fetch_github_user(code)
+        session_value = sign_auth_session(user)
+    except (RuntimeError, httpx.HTTPError) as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    response = RedirectResponse(safe_dashboard_return_path(stored_return), status_code=307)
+    response.set_cookie(
+        SESSION_COOKIE,
+        session_value,
+        httponly=True,
+        samesite="lax",
+        secure=public_base_url(request).startswith("https://"),
+        max_age=AUTH_SESSION_MAX_AGE_SECONDS,
+    )
+    response.delete_cookie(OAUTH_STATE_COOKIE)
+    response.delete_cookie(OAUTH_RETURN_COOKIE)
+    return response
+
+
+async def complete_google_callback(
+    request: Request,
+    *,
+    code: str = "",
+    state: str = "",
+    error: str = "",
+    stored_state: str | None = None,
+    stored_return: str | None = None,
+    redirect_uri: str | None = None,
+) -> RedirectResponse:
+    if error:
+        response = RedirectResponse(
+            dashboard_return_path_with_query(stored_return, {"auth_error": error}),
+            status_code=307,
+        )
+        response.delete_cookie(OAUTH_STATE_COOKIE)
+        response.delete_cookie(OAUTH_RETURN_COOKIE)
+        return response
+    if not code or not state or not stored_state or not hmac.compare_digest(state, stored_state):
+        raise HTTPException(status_code=400, detail="Invalid Google OAuth state")
+    try:
+        user = await fetch_google_user(code, redirect_uri=redirect_uri)
         session_value = sign_auth_session(user)
     except (RuntimeError, httpx.HTTPError) as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc

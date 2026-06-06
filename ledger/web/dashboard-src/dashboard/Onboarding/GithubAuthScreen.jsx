@@ -1,6 +1,6 @@
 // MVP onboarding · sign in via the real GitHub OAuth flow.
 //
-// The dashboard does not ask for an email directly. GitHub returns the owner
+// The dashboard does not ask for an email directly. OAuth returns the owner
 // identity to the ledger service, which stores it in an HttpOnly session cookie;
 // MvpAppStateProvider hydrates the browser state from /auth/session.
 
@@ -11,6 +11,7 @@
     const authError = params.get('auth_error');
     const returnTo = window.location.pathname + window.location.search;
     const githubLoginHref = `/auth/github/login?returnTo=${encodeURIComponent(returnTo)}`;
+    const googleLoginHref = `/auth/google/login?returnTo=${encodeURIComponent(returnTo)}`;
 
     return (
       <div
@@ -55,28 +56,63 @@
             {t('mvp.dash.auth.subhead')}
           </div>
 
-          <a
-            href={githubLoginHref}
-            className="font-body"
+          <div
             style={{
               marginTop: '32px',
-              padding: '12px 22px',
-              background: '#1A1A1A',
-              color: '#FFFFFF',
-              border: '1px solid #1A1A1A',
-              fontSize: '14px',
-              fontWeight: 500,
-              letterSpacing: '0.02em',
-              cursor: 'pointer',
-              display: 'inline-flex',
-              alignItems: 'center',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'flex-start',
               gap: '10px',
-              textDecoration: 'none',
             }}
           >
-            <OctocatGlyph size={18} fill="#FFFFFF" />
-            {t('mvp.dash.auth.github_button')}
-          </a>
+            <a
+              href={googleLoginHref}
+              className="font-body"
+              style={{
+                minWidth: '218px',
+                padding: '12px 22px',
+                background: '#FFFFFF',
+                color: '#1F1F1F',
+                border: '1px solid #DADCE0',
+                fontSize: '14px',
+                fontWeight: 500,
+                letterSpacing: '0.02em',
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '10px',
+                textDecoration: 'none',
+              }}
+            >
+              <GoogleGlyph size={18} />
+              {t('mvp.dash.auth.google_button')}
+            </a>
+
+            <a
+              href={githubLoginHref}
+              className="font-body"
+              style={{
+                minWidth: '218px',
+                padding: '12px 22px',
+                background: '#1A1A1A',
+                color: '#FFFFFF',
+                border: '1px solid #1A1A1A',
+                fontSize: '14px',
+                fontWeight: 500,
+                letterSpacing: '0.02em',
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '10px',
+                textDecoration: 'none',
+              }}
+            >
+              <OctocatGlyph size={18} fill="#FFFFFF" />
+              {t('mvp.dash.auth.github_button')}
+            </a>
+          </div>
 
           {authError && (
             <div
@@ -333,6 +369,22 @@
         aria-hidden="true"
       >
         <path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12" />
+      </svg>
+    );
+  }
+
+  function GoogleGlyph({ size = 20 }) {
+    return (
+      <svg
+        viewBox="0 0 24 24"
+        width={size}
+        height={size}
+        aria-hidden="true"
+      >
+        <path fill="#4285F4" d="M23.49 12.27c0-.79-.07-1.54-.19-2.27H12v4.29h6.47c-.28 1.5-1.13 2.77-2.41 3.62v2.96h3.9c2.28-2.1 3.53-5.19 3.53-8.6z" />
+        <path fill="#34A853" d="M12 24c3.24 0 5.96-1.07 7.95-2.91l-3.9-2.96c-1.08.72-2.46 1.15-4.05 1.15-3.12 0-5.77-2.11-6.71-4.95H1.27v3.05C3.25 21.31 7.31 24 12 24z" />
+        <path fill="#FBBC05" d="M5.29 14.33A7.21 7.21 0 0 1 4.91 12c0-.81.14-1.6.38-2.33V6.62H1.27A11.98 11.98 0 0 0 0 12c0 1.93.46 3.76 1.27 5.38l4.02-3.05z" />
+        <path fill="#EA4335" d="M12 4.72c1.76 0 3.34.61 4.59 1.8l3.45-3.45C17.95 1.13 15.23 0 12 0 7.31 0 3.25 2.69 1.27 6.62l4.02 3.05C6.23 6.83 8.88 4.72 12 4.72z" />
       </svg>
     );
   }

@@ -203,19 +203,20 @@
     'mvp.s7.final_button':   { en: 'Restart demo',            zh: '重新播放' },
     'mvp.s7.final_dashboard':{ en: 'Open dashboard →',        zh: '打开 dashboard →' },
 
-    // ── Onboarding · GitHub OAuth and claim-code ownership ────────────────
+    // ── Onboarding · OAuth and claim-code ownership ──────────────────────
     'mvp.dash.auth.slug':                  { en: 'KOVALOOP · SIGN IN', zh: 'KOVALOOP · 登录' },
     'mvp.dash.auth.headline':              { en: 'Sign in to your agent wallet.', zh: '登录你的 agent 钱包。' },
     'mvp.dash.auth.subhead': {
-      en: 'Continue with GitHub. Kovaloop uses your account email to record claims after you enter a claim code.',
-      zh: '使用 GitHub 登录。输入 claim code 后,Kovaloop 会用当前账号邮箱记录认领关系。',
+      en: 'Continue with Gmail or GitHub. Kovaloop uses your account email to record claims after you enter a claim code.',
+      zh: '使用 Gmail 或 GitHub 登录。输入 claim code 后,Kovaloop 会用当前账号邮箱记录认领关系。',
     },
     'mvp.dash.auth.github_button':         { en: 'Continue with GitHub',  zh: '用 GitHub 继续' },
-    'mvp.dash.auth.error':                 { en: 'GitHub authorization was cancelled or failed. Please try again.', zh: 'GitHub 授权已取消或失败,请重试。' },
+    'mvp.dash.auth.google_button':         { en: 'Continue with Gmail',   zh: '用 Gmail 继续' },
+    'mvp.dash.auth.error':                 { en: 'Authorization was cancelled or failed. Please try again.', zh: '授权已取消或失败,请重试。' },
     'mvp.dash.auth.checking':              { en: 'CHECKING SESSION',      zh: '正在检查登录状态' },
     'mvp.dash.auth.note': {
-      en: 'No email entry here: ownership comes from GitHub OAuth.',
-      zh: '这里不手动输入邮箱: 所有权来自 GitHub OAuth。',
+      en: 'No email entry here: ownership comes from OAuth.',
+      zh: '这里不手动输入邮箱: 所有权来自 OAuth。',
     },
     'mvp.dash.auth.consent_subdomain':     { en: 'authorize',             zh: 'authorize' },
     'mvp.dash.auth.consent_title':         { en: 'Authorize Kovaloop',       zh: '授权 Kovaloop' },
@@ -266,6 +267,7 @@
     // ── Settings · Account card ───────────────────────────────────────────
     'mvp.dash.settings.account_signed_in_via': { en: 'SIGNED IN VIA',     zh: '登录方式' },
     'mvp.dash.settings.account_provider_github': { en: 'GitHub',          zh: 'GitHub' },
+    'mvp.dash.settings.account_provider_google': { en: 'Google',          zh: 'Google' },
     'mvp.dash.settings.account_provider_email':  { en: 'Email',           zh: '邮箱' },
     'mvp.dash.settings.account_sign_out':        { en: 'Sign out',        zh: '退出登录' },
 

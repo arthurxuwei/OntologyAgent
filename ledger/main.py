@@ -19,6 +19,7 @@ import services
 from auth import (
     admin_token_matches,
     complete_github_callback,
+    complete_google_callback,
     configured_admin_token,
     fetch_github_user,
     sign_admin_session,
@@ -354,6 +355,67 @@ async def github_callback(
         error=error,
         stored_state=stored_state,
         stored_return=stored_return,
+    )
+
+
+@app.get("/auth/google/login")
+async def google_login(request: Request, returnTo: str = "") -> RedirectResponse:
+    try:
+        require_env("GOOGLE_CLIENT_ID")
+        require_env("GOOGLE_CLIENT_SECRET")
+        require_env("AUTH_SESSION_SECRET")
+    except RuntimeError as error:
+        raise HTTPException(status_code=500, detail=str(error)) from error
+
+    state = secrets.token_urlsafe(24)
+    redirect_uri = f"{public_base_url(request)}/auth/google/callback"
+    query = urlencode(
+        {
+            "client_id": os.getenv("GOOGLE_CLIENT_ID", ""),
+            "redirect_uri": redirect_uri,
+            "response_type": "code",
+            "scope": "openid email profile",
+            "state": state,
+        }
+    )
+    response = RedirectResponse(f"{GOOGLE_AUTHORIZE_URL}?{query}", status_code=307)
+    response.set_cookie(
+        OAUTH_STATE_COOKIE,
+        state,
+        httponly=True,
+        samesite="lax",
+        secure=public_base_url(request).startswith("https://"),
+        max_age=600,
+    )
+    response.set_cookie(
+        OAUTH_RETURN_COOKIE,
+        quote(safe_dashboard_return_path(returnTo), safe="/"),
+        httponly=True,
+        samesite="lax",
+        secure=public_base_url(request).startswith("https://"),
+        max_age=600,
+    )
+    return response
+
+
+@app.get("/auth/google/callback")
+@app.get("/dashboard/auth/google/callback")
+async def google_callback(
+    request: Request,
+    code: str = "",
+    state: str = "",
+    error: str = "",
+    stored_state: str | None = Cookie(default=None, alias=OAUTH_STATE_COOKIE),
+    stored_return: str | None = Cookie(default=None, alias=OAUTH_RETURN_COOKIE),
+) -> RedirectResponse:
+    return await complete_google_callback(
+        request,
+        code=code,
+        state=state,
+        error=error,
+        stored_state=stored_state,
+        stored_return=stored_return,
+        redirect_uri=f"{public_base_url(request)}/auth/google/callback",
     )
 
 
