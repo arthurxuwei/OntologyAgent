@@ -289,8 +289,8 @@ class GatewayWithdrawalRequest(BaseModel):
 class AgentTransferRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    fromEmail: str = Field(min_length=1)
-    toEmail: str = Field(min_length=1)
+    fromAgentId: str = Field(min_length=1)
+    toAgentId: str = Field(min_length=1)
     amountAtomic: str = Field(min_length=1)
     reason: Optional[str] = None
     metadata: dict[str, Any] = Field(default_factory=dict)

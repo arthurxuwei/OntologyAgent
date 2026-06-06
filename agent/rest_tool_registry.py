@@ -180,8 +180,8 @@ class RestActionClient:
 
     async def agent_wallet_transfer(
         self,
-        fromEmail: str,
-        toEmail: str,
+        fromAgentId: str,
+        toAgentId: str,
         amountAtomic: str,
         reason: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None,
@@ -189,8 +189,8 @@ class RestActionClient:
         return await self._post_ledger(
             "/ledger/transfers",
             {
-                "fromEmail": fromEmail,
-                "toEmail": toEmail,
+                "fromAgentId": fromAgentId,
+                "toAgentId": toAgentId,
                 "amountAtomic": amountAtomic,
                 "reason": reason,
                 "metadata": metadata or {},

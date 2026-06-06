@@ -894,8 +894,12 @@ async def withdraw_agent_wallet(request: WithdrawalRequest) -> dict[str, Any]:
 async def transfer_between_agents(request: AgentTransferRequest) -> dict[str, Any]:
     transfer_id = f"transfer_{uuid.uuid4().hex}"
     try:
-        sender_account = get_store().account_by_email(request.fromEmail)
-        receiver_account = get_store().account_by_email(request.toEmail)
+        sender_account = get_store().get_account(request.fromAgentId)
+        receiver_account = get_store().get_account(request.toAgentId)
+        if sender_account is None:
+            raise LookupError(f"ledger account not found: {request.fromAgentId}")
+        if receiver_account is None:
+            raise LookupError(f"ledger account not found: {request.toAgentId}")
         get_store().validate_agent_transfer(
             from_agent_id=sender_account.agentId,
             to_agent_id=receiver_account.agentId,
@@ -909,8 +913,8 @@ async def transfer_between_agents(request: AgentTransferRequest) -> dict[str, An
         )
         transfer_metadata = {
             **request.metadata,
-            "fromEmail": normalize_email(request.fromEmail),
-            "toEmail": normalize_email(request.toEmail),
+            "fromAgentId": sender_account.agentId,
+            "toAgentId": receiver_account.agentId,
             **agent_transfer_dashboard_metadata(settlement_record),
         }
         sender, receiver, entries = get_store().transfer_between_agents(
@@ -929,8 +933,6 @@ async def transfer_between_agents(request: AgentTransferRequest) -> dict[str, An
                 "transferId": transfer_id,
                 "fromAgentId": sender_account.agentId,
                 "toAgentId": receiver_account.agentId,
-                "fromEmail": normalize_email(request.fromEmail),
-                "toEmail": normalize_email(request.toEmail),
                 "amountAtomic": request.amountAtomic,
                 "settlementRecordId": settlement_record.recordId,
             },

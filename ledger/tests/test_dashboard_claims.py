@@ -83,8 +83,8 @@ class TestDashboardClaims(LedgerServiceTestCase):
             amount_atomic="250000",
             reason="remark should not render",
             metadata={
-                "fromEmail": "owner@example.com",
-                "toEmail": "other@example.com",
+                "fromAgentId": "agent_alpha",
+                "toAgentId": "agent_beta",
             },
             transfer_id="transfer_123",
             settlement_record_id=None,
@@ -108,8 +108,8 @@ class TestDashboardClaims(LedgerServiceTestCase):
         self.assertNotIn("locked", alpha["balance"])
         self.assertEqual(alpha["balance"]["lifetimeIn"], 2.5)
         self.assertEqual(alpha["balance"]["lifetimeOut"], 0.25)
-        self.assertEqual(alpha["transactions"][0]["counterparty"], "other@example.com")
-        self.assertNotEqual(alpha["transactions"][0]["counterparty"], "agent_beta")
+        self.assertEqual(alpha["transactions"][0]["counterparty"], "agent_beta")
+        self.assertNotEqual(alpha["transactions"][0]["counterparty"], "other@example.com")
         self.assertNotEqual(alpha["transactions"][0]["counterparty"], "remark should not render")
         self.assertEqual(alpha["transactions"][0]["status"], "released")
 

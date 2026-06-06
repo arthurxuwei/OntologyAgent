@@ -40,17 +40,17 @@ def dashboard_counterparty(entry: dict[str, Any]) -> str:
         if isinstance(counterparty_email, str) and counterparty_email.strip():
             return counterparty_email.strip()
 
-        from_email = metadata.get("fromEmail")
-        to_email = metadata.get("toEmail")
+        from_agent_id = metadata.get("fromAgentId")
+        to_agent_id = metadata.get("toAgentId")
         if (
             entry.get("entryType") == "agent_transfer"
-            and isinstance(from_email, str)
-            and from_email.strip()
-            and isinstance(to_email, str)
-            and to_email.strip()
+            and isinstance(from_agent_id, str)
+            and from_agent_id.strip()
+            and isinstance(to_agent_id, str)
+            and to_agent_id.strip()
         ):
             available_delta = atomic_decimal(entry.get("availableDeltaAtomic"))
-            return to_email.strip() if available_delta < 0 else from_email.strip()
+            return to_agent_id.strip() if available_delta < 0 else from_agent_id.strip()
 
         for key in (
             "counterpartyAgentId",

@@ -41,6 +41,11 @@ class MainToolRegistryTests(unittest.TestCase):
 
         self.assertIn("agent_wallet_transfer", names)
         self.assertIn("agent_wallet_settle_ledger_transfer", names)
+        transfer_tool = next(tool for tool in tools if tool.name == "agent_wallet_transfer")
+        self.assertIn("fromAgentId", transfer_tool.args)
+        self.assertIn("toAgentId", transfer_tool.args)
+        self.assertNotIn("fromEmail", transfer_tool.args)
+        self.assertNotIn("toEmail", transfer_tool.args)
 
     def test_get_agent_prompt_includes_dynamic_skills(self) -> None:
         class Catalog:

@@ -185,8 +185,8 @@ class TestSettlementFlows(LedgerServiceTestCase):
             response = self.client.post(
                 "/ledger/transfers",
                 json={
-                    "fromEmail": "sender@example.com",
-                    "toEmail": "receiver@example.com",
+                    "fromAgentId": "agent_sender",
+                    "toAgentId": "agent_receiver",
                     "amountAtomic": "10000",
                     "reason": "direct payment",
                 },
@@ -235,8 +235,8 @@ class TestSettlementFlows(LedgerServiceTestCase):
             response = self.client.post(
                 "/ledger/transfers",
                 json={
-                    "fromEmail": "sender@example.com",
-                    "toEmail": "receiver@example.com",
+                    "fromAgentId": "agent_sender",
+                    "toAgentId": "agent_receiver",
                     "amountAtomic": "10001",
                     "reason": "direct payment",
                 },
@@ -249,6 +249,19 @@ class TestSettlementFlows(LedgerServiceTestCase):
         )
         self.assertEqual(fake_settlement.calls, [])
         self.assertEqual(main.get_store().load().entries, [])
+
+    def test_agent_transfer_rejects_email_address_contract(self) -> None:
+        response = self.client.post(
+            "/ledger/transfers",
+            json={
+                "fromEmail": "sender@example.com",
+                "toEmail": "receiver@example.com",
+                "amountAtomic": "1000",
+                "reason": "legacy email transfer",
+            },
+        )
+
+        self.assertEqual(response.status_code, 422)
 
     def test_agent_transfer_pending_batch_surfaces_as_settling_in_dashboard(self) -> None:
         class FakeSettlementClient:
@@ -296,8 +309,8 @@ class TestSettlementFlows(LedgerServiceTestCase):
             response = self.client.post(
                 "/ledger/transfers",
                 json={
-                    "fromEmail": "sender@example.com",
-                    "toEmail": "receiver@example.com",
+                    "fromAgentId": "agent_sender",
+                    "toAgentId": "agent_receiver",
                     "amountAtomic": "1000",
                     "reason": "direct payment",
                 },
@@ -366,8 +379,8 @@ class TestSettlementFlows(LedgerServiceTestCase):
             response = self.client.post(
                 "/ledger/transfers",
                 json={
-                    "fromEmail": "sender@example.com",
-                    "toEmail": "receiver@example.com",
+                    "fromAgentId": "agent_sender",
+                    "toAgentId": "agent_receiver",
                     "amountAtomic": "1000",
                     "reason": "direct payment",
                 },
@@ -430,8 +443,8 @@ class TestSettlementFlows(LedgerServiceTestCase):
             response = self.client.post(
                 "/ledger/transfers",
                 json={
-                    "fromEmail": "sender@example.com",
-                    "toEmail": "receiver@example.com",
+                    "fromAgentId": "agent_sender",
+                    "toAgentId": "agent_receiver",
                     "amountAtomic": "1000",
                 },
             )
@@ -1037,8 +1050,8 @@ class TestSettlementFlows(LedgerServiceTestCase):
         response = self.client.post(
             "/ledger/transfers",
             json={
-                "fromEmail": "sender@example.com",
-                "toEmail": "receiver@example.com",
+                "fromAgentId": "agent_sender",
+                "toAgentId": "agent_receiver",
                 "amountAtomic": "1000",
             },
         )
