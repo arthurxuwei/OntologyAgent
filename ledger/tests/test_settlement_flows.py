@@ -21,6 +21,19 @@ from helpers import LedgerServiceTestCase
 
 
 class TestSettlementFlows(LedgerServiceTestCase):
+    def claim_for_withdrawal(
+        self,
+        *,
+        agent_id: str,
+        account_email: str = "owner@example.com",
+        dashboard_email: str = "owner@example.com",
+    ) -> None:
+        main.get_store().claim_dashboard_account(
+            agent_id=agent_id,
+            email=account_email,
+            dashboard_email=dashboard_email,
+        )
+
     def test_chain_recorder_posts_rest_execution(self) -> None:
         calls = []
 
@@ -515,6 +528,11 @@ class TestSettlementFlows(LedgerServiceTestCase):
             wallet_address="0x1111111111111111111111111111111111111111",
             circle_wallet_id="circle_sender",
         )
+        self.claim_for_withdrawal(
+            agent_id="agent_sender",
+            account_email="sender@example.com",
+            dashboard_email="sender@example.com",
+        )
         fake_settlement = FakeSettlementClient()
 
         with patch.object(
@@ -522,6 +540,7 @@ class TestSettlementFlows(LedgerServiceTestCase):
         ):
             response = self.client.post(
                 "/ledger/withdrawals",
+                headers=self.dashboard_auth_headers("sender@example.com"),
                 json={
                     "agentId": "agent_sender",
                     "ownerEmail": "sender@example.com",
@@ -547,6 +566,73 @@ class TestSettlementFlows(LedgerServiceTestCase):
         )
         self.assertTrue(payload["entry"]["metadata"]["counterparty"].startswith("External"))
         self.assertEqual(payload["route"]["method"], "gateway_withdrawal")
+
+    def test_withdrawal_requires_dashboard_login(self) -> None:
+        response = self.client.post(
+            "/ledger/withdrawals",
+            json={
+                "agentId": "agent_sender",
+                "ownerEmail": "sender@example.com",
+                "destinationAddress": "0x2222222222222222222222222222222222222222",
+                "amountAtomic": "1250000",
+            },
+        )
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.json()["detail"], "Dashboard authentication required")
+
+    def test_withdrawal_requires_claimed_agent_owner(self) -> None:
+        store = main.get_store()
+        store.bind_account_wallet(
+            agent_id="agent_unclaimed",
+            agent_name="Unclaimed",
+            email="owner@example.com",
+            wallet_address="0x1111111111111111111111111111111111111111",
+            circle_wallet_id="circle-unclaimed",
+        )
+
+        response = self.client.post(
+            "/ledger/withdrawals",
+            headers=self.dashboard_auth_headers("owner@example.com"),
+            json={
+                "agentId": "agent_unclaimed",
+                "ownerEmail": "owner@example.com",
+                "destinationAddress": "0x2222222222222222222222222222222222222222",
+                "amountAtomic": "1250000",
+            },
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.json()["detail"], "agent must be claimed before withdrawal")
+
+    def test_withdrawal_rejects_non_owner_dashboard_user(self) -> None:
+        store = main.get_store()
+        store.bind_account_wallet(
+            agent_id="agent_claimed",
+            agent_name="Claimed",
+            email="agent-profile@example.com",
+            wallet_address="0x1111111111111111111111111111111111111111",
+            circle_wallet_id="circle-claimed",
+        )
+        store.claim_dashboard_account(
+            agent_id="agent_claimed",
+            email="agent-profile@example.com",
+            dashboard_email="owner@example.com",
+        )
+
+        response = self.client.post(
+            "/ledger/withdrawals",
+            headers=self.dashboard_auth_headers("attacker@example.com"),
+            json={
+                "agentId": "agent_claimed",
+                "ownerEmail": "attacker@example.com",
+                "destinationAddress": "0x2222222222222222222222222222222222222222",
+                "amountAtomic": "1250000",
+            },
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.json()["detail"], "dashboard user is not authorized for this agent")
 
     def test_withdrawal_records_submitted_and_withdrawn_entries(self) -> None:
         class FakeSettlementClient:
@@ -581,6 +667,7 @@ class TestSettlementFlows(LedgerServiceTestCase):
             wallet_address="0x1111111111111111111111111111111111111111",
             circle_wallet_id="circle-withdraw",
         )
+        self.claim_for_withdrawal(agent_id="agent_withdraw")
         store.credit(
             agent_id="agent_withdraw",
             amount_atomic="2000000",
@@ -591,6 +678,7 @@ class TestSettlementFlows(LedgerServiceTestCase):
         with patch.object(services, "get_ledger_settlement_client", return_value=FakeSettlementClient()):
             response = self.client.post(
                 "/ledger/withdrawals",
+                headers=self.dashboard_auth_headers("owner@example.com"),
                 json={
                     "agentId": "agent_withdraw",
                     "ownerEmail": "owner@example.com",
@@ -656,6 +744,7 @@ class TestSettlementFlows(LedgerServiceTestCase):
             wallet_address="0x1111111111111111111111111111111111111111",
             circle_wallet_id="circle-gateway-available",
         )
+        self.claim_for_withdrawal(agent_id="agent_gateway_available")
         fake_settlement = FakeSettlementClient()
 
         with patch.object(services, "get_ledger_wallet_client", return_value=FakeWalletClient()), patch.object(
@@ -663,6 +752,7 @@ class TestSettlementFlows(LedgerServiceTestCase):
         ):
             response = self.client.post(
                 "/ledger/withdrawals",
+                headers=self.dashboard_auth_headers("owner@example.com"),
                 json={
                     "agentId": "agent_gateway_available",
                     "ownerEmail": "owner@example.com",
@@ -716,6 +806,11 @@ class TestSettlementFlows(LedgerServiceTestCase):
             wallet_address="0x1111111111111111111111111111111111111111",
             circle_wallet_id="circle-agent-bound-email",
         )
+        self.claim_for_withdrawal(
+            agent_id="agent_agent_bound_email",
+            account_email="agent-bound@example.com",
+            dashboard_email="kovaloop-user@example.com",
+        )
         fake_settlement = FakeSettlementClient()
 
         with patch.object(services, "get_ledger_wallet_client", return_value=FakeWalletClient()), patch.object(
@@ -723,6 +818,7 @@ class TestSettlementFlows(LedgerServiceTestCase):
         ):
             response = self.client.post(
                 "/ledger/withdrawals",
+                headers=self.dashboard_auth_headers("kovaloop-user@example.com"),
                 json={
                     "agentId": "agent_agent_bound_email",
                     "ownerEmail": "kovaloop-user@example.com",
@@ -754,10 +850,12 @@ class TestSettlementFlows(LedgerServiceTestCase):
             wallet_address="0x1111111111111111111111111111111111111111",
             circle_wallet_id="circle-gateway-low",
         )
+        self.claim_for_withdrawal(agent_id="agent_gateway_low")
 
         with patch.object(services, "get_ledger_wallet_client", return_value=FakeWalletClient()):
             response = self.client.post(
                 "/ledger/withdrawals",
+                headers=self.dashboard_auth_headers("owner@example.com"),
                 json={
                     "agentId": "agent_gateway_low",
                     "ownerEmail": "owner@example.com",
@@ -795,6 +893,7 @@ class TestSettlementFlows(LedgerServiceTestCase):
             wallet_address="0x1111111111111111111111111111111111111111",
             circle_wallet_id="circle-daily-limit",
         )
+        self.claim_for_withdrawal(agent_id="agent_daily_limit")
         store.withdrawal_submitted(
             agent_id="agent_daily_limit",
             destination_address="0x2222222222222222222222222222222222222222",
@@ -810,6 +909,7 @@ class TestSettlementFlows(LedgerServiceTestCase):
         ):
             response = self.client.post(
                 "/ledger/withdrawals",
+                headers=self.dashboard_auth_headers("owner@example.com"),
                 json={
                     "agentId": "agent_daily_limit",
                     "ownerEmail": "owner@example.com",
@@ -850,6 +950,7 @@ class TestSettlementFlows(LedgerServiceTestCase):
             wallet_address="0x1111111111111111111111111111111111111111",
             circle_wallet_id="circle-weekly-limit",
         )
+        self.claim_for_withdrawal(agent_id="agent_weekly_limit")
         with patch("store.now_iso", return_value="2026-05-25T00:00:00+00:00"):
             store.withdrawal_submitted(
                 agent_id="agent_weekly_limit",
@@ -866,6 +967,7 @@ class TestSettlementFlows(LedgerServiceTestCase):
         ):
             response = self.client.post(
                 "/ledger/withdrawals",
+                headers=self.dashboard_auth_headers("owner@example.com"),
                 json={
                     "agentId": "agent_weekly_limit",
                     "ownerEmail": "owner@example.com",
@@ -916,6 +1018,7 @@ class TestSettlementFlows(LedgerServiceTestCase):
             wallet_address="0x1111111111111111111111111111111111111111",
             circle_wallet_id="circle-failed-limit",
         )
+        self.claim_for_withdrawal(agent_id="agent_failed_limit")
         failed_entry = store.withdrawal_submitted(
             agent_id="agent_failed_limit",
             destination_address="0x2222222222222222222222222222222222222222",
@@ -940,6 +1043,7 @@ class TestSettlementFlows(LedgerServiceTestCase):
         ):
             response = self.client.post(
                 "/ledger/withdrawals",
+                headers=self.dashboard_auth_headers("owner@example.com"),
                 json={
                     "agentId": "agent_failed_limit",
                     "ownerEmail": "owner@example.com",
@@ -980,12 +1084,18 @@ class TestSettlementFlows(LedgerServiceTestCase):
             wallet_address="0x1111111111111111111111111111111111111111",
             circle_wallet_id="circle_sender",
         )
+        self.claim_for_withdrawal(
+            agent_id="agent_sender",
+            account_email="sender@example.com",
+            dashboard_email="sender@example.com",
+        )
 
         with patch.object(
             services, "get_ledger_settlement_client", return_value=FakeSettlementClient()
         ):
             response = self.client.post(
                 "/ledger/withdrawals",
+                headers=self.dashboard_auth_headers("sender@example.com"),
                 json={
                     "agentId": "agent_sender",
                     "ownerEmail": "sender@example.com",

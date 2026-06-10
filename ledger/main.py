@@ -210,6 +210,29 @@ def require_admin_access(
         raise HTTPException(status_code=401, detail="Admin authentication required")
 
 
+def require_dashboard_withdrawal_access(
+    *,
+    session_cookie: str | None,
+    account: LedgerAccount | None,
+    owner_email: str | None,
+) -> str:
+    session_user = verify_auth_session(session_cookie)
+    session_email = normalize_email((session_user or {}).get("email"))
+    if session_email is None:
+        raise HTTPException(status_code=401, detail="Dashboard authentication required")
+    if account is None:
+        raise HTTPException(status_code=404, detail="agent account not found")
+    claimed_email = normalize_email(account.dashboardClaimedByEmail)
+    if claimed_email is None:
+        raise HTTPException(status_code=403, detail="agent must be claimed before withdrawal")
+    if not secrets.compare_digest(claimed_email, session_email):
+        raise HTTPException(status_code=403, detail="dashboard user is not authorized for this agent")
+    request_owner_email = normalize_email(owner_email)
+    if request_owner_email is not None and not secrets.compare_digest(request_owner_email, session_email):
+        raise HTTPException(status_code=403, detail="ownerEmail must match authenticated dashboard user")
+    return session_email
+
+
 @app.get("/admin")
 def ledger_admin(
     request: Request,
@@ -836,19 +859,19 @@ async def deposit_agent_wallet_to_gateway(request: GatewayDepositRequest) -> dic
         raise http_error(error) from error
 
 
-@app.post("/ledger/gateway/withdrawals")
-async def withdraw_agent_wallet_from_gateway(request: GatewayWithdrawalRequest) -> dict[str, Any]:
-    try:
-        parse_positive_atomic(request.amountAtomic)
-        return await services.get_ledger_wallet_client().gateway_withdraw(request)
-    except (ValueError, RuntimeError) as error:
-        raise http_error(error) from error
-
-
 @app.post("/ledger/withdrawals")
-async def withdraw_agent_wallet(request: WithdrawalRequest) -> dict[str, Any]:
+async def withdraw_agent_wallet(
+    request: WithdrawalRequest,
+    session_cookie: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+) -> dict[str, Any]:
     withdrawal_id = f"withdrawal_{uuid.uuid4().hex}"
     try:
+        account_model = get_store().get_account(request.agentId)
+        owner_email = require_dashboard_withdrawal_access(
+            session_cookie=session_cookie,
+            account=account_model,
+            owner_email=request.ownerEmail,
+        )
         route = route_payment_intent(
             PaymentIntent(
                 purpose="withdraw Agent Wallet USDC to an external Base address",
@@ -859,7 +882,6 @@ async def withdraw_agent_wallet(request: WithdrawalRequest) -> dict[str, Any]:
         if "agent_wallet_settle_ledger_transfer" not in route.get("allowedTools", []):
             raise ValueError("withdrawal route did not allow Circle settlement")
 
-        account_model = get_store().get_account(request.agentId)
         synced_account = None
         if account_model is not None:
             synced_account = (await enriched_account_payloads([account_model]))[0]
@@ -867,7 +889,7 @@ async def withdraw_agent_wallet(request: WithdrawalRequest) -> dict[str, Any]:
         get_store().validate_withdrawal(
             agent_id=request.agentId,
             amount_atomic=request.amountAtomic,
-            owner_email=request.ownerEmail,
+            owner_email=owner_email,
             available_atomic=available_atomic,
             available_label=available_label,
         )

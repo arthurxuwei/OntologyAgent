@@ -44,6 +44,7 @@ class LedgerServiceTestCase(unittest.TestCase):
         self.previous_wallet_http_url = os.environ.get("LEDGER_WALLET_HTTP_URL")
         self.previous_circle_api_key = os.environ.get("CIRCLE_API_KEY")
         self.previous_circle_webhook_verify = os.environ.get("CIRCLE_WEBHOOK_VERIFY_SIGNATURE")
+        self.previous_auth_session_secret = os.environ.get("AUTH_SESSION_SECRET")
         os.environ["LEDGER_STATE_PATH"] = self.state_path
         os.environ["LEDGER_DB_PATH"] = self.db_path
         os.environ["LEDGER_CHAIN_RECORD_ENABLED"] = "false"
@@ -51,6 +52,7 @@ class LedgerServiceTestCase(unittest.TestCase):
         os.environ["LEDGER_SETTLEMENT_ENABLED"] = "false"
         os.environ["LEDGER_SETTLEMENT_REQUIRE_SUCCESS"] = "false"
         os.environ["CIRCLE_WEBHOOK_VERIFY_SIGNATURE"] = "false"
+        os.environ["AUTH_SESSION_SECRET"] = "test-auth-session-secret"
         main.get_store.cache_clear()
         main.get_coinbase_onramp_client.cache_clear()
         main.get_chain_recorder.cache_clear()
@@ -90,6 +92,7 @@ class LedgerServiceTestCase(unittest.TestCase):
         self._restore_env("LEDGER_WALLET_HTTP_URL", self.previous_wallet_http_url)
         self._restore_env("CIRCLE_API_KEY", self.previous_circle_api_key)
         self._restore_env("CIRCLE_WEBHOOK_VERIFY_SIGNATURE", self.previous_circle_webhook_verify)
+        self._restore_env("AUTH_SESSION_SECRET", self.previous_auth_session_secret)
         main.get_coinbase_onramp_client.cache_clear()
         main.get_chain_recorder.cache_clear()
         main.get_ledger_settlement_client.cache_clear()
@@ -100,6 +103,17 @@ class LedgerServiceTestCase(unittest.TestCase):
             os.environ.pop(name, None)
         else:
             os.environ[name] = previous
+
+    def dashboard_auth_headers(self, email: str) -> dict[str, str]:
+        value = auth.sign_auth_session(
+            {
+                "provider": "google",
+                "login": email,
+                "name": email,
+                "email": email,
+            }
+        )
+        return {"Cookie": f"{main.SESSION_COOKIE}={value}"}
 
     def ledger_domain_state(self, agent_id: str | None = None) -> dict:
         if agent_id:
