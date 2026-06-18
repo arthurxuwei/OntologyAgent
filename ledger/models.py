@@ -178,6 +178,29 @@ class WaitlistApplication(BaseModel):
     createdAt: str
 
 
+class AgentProfile(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schemaVersion: int = 1
+    agentId: str
+    agentName: str
+    ownerEmail: str
+    description: Optional[str] = None
+    credentialPublicKey: str
+    credentialStatus: Literal["active", "revoked"] = "active"
+    createdAt: str
+    updatedAt: str
+
+
+class AgentIdentityAlias(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    provider: str
+    externalId: str
+    agentId: str
+    createdAt: str
+
+
 class LedgerState(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -188,6 +211,8 @@ class LedgerState(BaseModel):
     circleWebhookEvents: list[CircleWebhookEventRecord] = Field(default_factory=list)
     chainRecords: list[LedgerChainRecord] = Field(default_factory=list)
     settlementRecords: list[LedgerSettlementRecord] = Field(default_factory=list)
+    agentProfiles: list[AgentProfile] = Field(default_factory=list)
+    agentIdentityAliases: list[AgentIdentityAlias] = Field(default_factory=list)
 
 
 class CreditRequest(BaseModel):
@@ -230,6 +255,35 @@ class ClaimLinkResponse(BaseModel):
     walletAddress: Optional[str] = None
     circleWalletId: Optional[str] = None
     accountType: Optional[str] = None
+
+
+class AgentAliasInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    provider: str = Field(min_length=1)
+    externalId: str = Field(min_length=1)
+
+
+class CreateAgentProfileRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    agentName: str = Field(min_length=1)
+    ownerEmail: str = Field(min_length=1)
+    description: Optional[str] = None
+    credentialPublicKey: str = Field(min_length=1)
+    aliases: list[AgentAliasInput] = Field(default_factory=list)
+
+
+class RotateAgentCredentialRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    credentialPublicKey: str = Field(min_length=1)
+
+
+class UpdateAgentProfileRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    description: Optional[str] = None
 
 
 class DashboardClaimRequest(BaseModel):
