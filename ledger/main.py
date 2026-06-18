@@ -617,11 +617,22 @@ async def create_claim_link(request: ClaimLinkRequest) -> dict[str, Any]:
     if owner_email is None:
         raise HTTPException(status_code=400, detail="email is required")
 
+    agent_id = request.agentId or None
+    if agent_id is None and request.alias is not None:
+        resolved = get_store().get_profile_id_by_alias(
+            request.alias.provider, request.alias.externalId
+        )
+        if resolved is None:
+            raise HTTPException(status_code=404, detail="alias not found")
+        agent_id = resolved
+    if agent_id is None:
+        raise HTTPException(status_code=400, detail="agentId or alias is required")
+
     try:
         payload = await get_or_create_agent_wallet(
             AgentWalletRequest(
                 agentName=request.agentName,
-                agentId=request.agentId,
+                agentId=agent_id,
                 email=owner_email,
                 agentDescription=request.agentDescription,
             )
@@ -638,12 +649,12 @@ async def create_claim_link(request: ClaimLinkRequest) -> dict[str, Any]:
 
     claim_code = claim_code_for_account(account, owner_email)
     response = ClaimLinkResponse(
-        agentId=str(account.get("agentId") or request.agentId),
+        agentId=str(account.get("agentId") or agent_id),
         agentName=str(account.get("agentName") or request.agentName),
         ownerEmail=owner_email,
         claimCode=claim_code,
-        claimUrl=dashboard_url({"claimCode": claim_code, "agentId": request.agentId}),
-        agentUrl=dashboard_url({"agentId": request.agentId}),
+        claimUrl=dashboard_url({"claimCode": claim_code, "agentId": agent_id}),
+        agentUrl=dashboard_url({"agentId": agent_id}),
         walletAddress=(
             str(account.get("walletAddress") or wallet.get("walletAddress"))
             if account.get("walletAddress") or wallet.get("walletAddress")

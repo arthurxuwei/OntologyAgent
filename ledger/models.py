@@ -3,7 +3,7 @@ from __future__ import annotations
 from decimal import Decimal, InvalidOperation
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
 
 from config import DEFAULT_ASSET
 from utils import normalize_evm_address
@@ -234,13 +234,27 @@ class AgentWalletRequest(BaseModel):
     agentDescription: Optional[str] = None
 
 
+class AgentAliasInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    provider: str = Field(min_length=1)
+    externalId: str = Field(min_length=1)
+
+
 class ClaimLinkRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    agentId: str = Field(min_length=1)
+    agentId: Optional[str] = None
     agentName: str = Field(min_length=1)
     email: str
     agentDescription: Optional[str] = None
+    alias: Optional[AgentAliasInput] = None
+
+    @model_validator(mode="after")
+    def _require_identity(self) -> "ClaimLinkRequest":
+        if not (self.agentId or self.alias):
+            raise ValueError("agentId or alias is required")
+        return self
 
 
 class ClaimLinkResponse(BaseModel):
@@ -255,13 +269,6 @@ class ClaimLinkResponse(BaseModel):
     walletAddress: Optional[str] = None
     circleWalletId: Optional[str] = None
     accountType: Optional[str] = None
-
-
-class AgentAliasInput(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-
-    provider: str = Field(min_length=1)
-    externalId: str = Field(min_length=1)
 
 
 class CreateAgentProfileRequest(BaseModel):

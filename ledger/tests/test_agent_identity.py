@@ -331,5 +331,32 @@ class TestAgentAuthenticatedPatch(LedgerServiceTestCase):
         self.assertEqual(second.status_code, 401)
 
 
+class TestClaimLinkAlias(LedgerServiceTestCase):
+    def test_claim_link_resolves_alias_to_canonical_id(self) -> None:
+        with patch.object(services, "get_ledger_wallet_client", return_value=_FakeWalletClient()):
+            created = self.client.post(
+                "/ledger/profiles",
+                json={
+                    "agentName": "OntologyAgent",
+                    "ownerEmail": "owner@example.com",
+                    "credentialPublicKey": "pk",
+                    "aliases": [{"provider": "eigenflux", "externalId": "312586087945994240"}],
+                },
+                headers=self.dashboard_auth_headers("owner@example.com"),
+            )
+            agent_id = created.json()["profile"]["agentId"]
+
+            response = self.client.post(
+                "/ledger/claims/link",
+                json={
+                    "agentName": "OntologyAgent",
+                    "email": "owner@example.com",
+                    "alias": {"provider": "eigenflux", "externalId": "312586087945994240"},
+                },
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["agentId"], agent_id)
+
+
 if __name__ == "__main__":
     unittest.main()
