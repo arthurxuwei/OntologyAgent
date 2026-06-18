@@ -887,7 +887,6 @@ class TestDashboardClaims(LedgerServiceTestCase):
                 json={
                     "agentId": "312586087945994240",
                     "agentName": "OpenClaw OntologyAgent",
-                    "email": "OWNER@example.com",
                     "agentDescription": "OpenClaw profile bio",
                 },
             )
@@ -922,7 +921,6 @@ class TestDashboardClaims(LedgerServiceTestCase):
                 json={
                     "agentId": "312586087945994240",
                     "agentName": "OpenClaw OntologyAgent",
-                    "email": "OWNER@example.com",
                 },
             )
 
@@ -953,7 +951,7 @@ class TestDashboardClaims(LedgerServiceTestCase):
             circle_wallet_id="circle-manual",
             account_type="EOA",
         )
-        claim_code = main.claim_code_for_account(account.model_dump(), "owner@example.com")
+        claim_code = main.claim_code_for_account(account.model_dump())
 
         response = self.client.post(
             "/ledger/claims",
@@ -985,7 +983,7 @@ class TestDashboardClaims(LedgerServiceTestCase):
             circle_wallet_id="circle-cross-email",
             account_type="EOA",
         )
-        claim_code = main.claim_code_for_account(account.model_dump(), "agent-owner@example.com")
+        claim_code = main.claim_code_for_account(account.model_dump())
 
         response = self.client.get(
             "/ledger/claims/candidates"
@@ -1007,7 +1005,7 @@ class TestDashboardClaims(LedgerServiceTestCase):
             circle_wallet_id="circle-session-claim",
             account_type="EOA",
         )
-        claim_code = main.claim_code_for_account(account.model_dump(), "agent-owner@example.com")
+        claim_code = main.claim_code_for_account(account.model_dump())
 
         with patch.dict(os.environ, {"AUTH_SESSION_SECRET": "session-secret"}):
             session = main.sign_auth_session(
@@ -1041,7 +1039,6 @@ class TestDashboardClaims(LedgerServiceTestCase):
             json={
                 "agentId": "",
                 "agentName": "OpenClaw OntologyAgent",
-                "email": "owner@example.com",
             },
         )
 
@@ -1050,7 +1047,7 @@ class TestDashboardClaims(LedgerServiceTestCase):
     def test_claim_link_uses_existing_account_and_404s_when_missing(self) -> None:
         missing = self.client.post(
             "/ledger/claims/link",
-            json={"agentId": "kloop_agent_NONE", "agentName": "A", "email": "o@example.com"},
+            json={"agentId": "kloop_agent_NONE", "agentName": "A"},
         )
         self.assertEqual(missing.status_code, 404)
 
@@ -1064,7 +1061,7 @@ class TestDashboardClaims(LedgerServiceTestCase):
         )
         ok = self.client.post(
             "/ledger/claims/link",
-            json={"agentId": "kloop_agent_SEED", "agentName": "OntologyAgent", "email": "o@example.com"},
+            json={"agentId": "kloop_agent_SEED", "agentName": "OntologyAgent"},
         )
         self.assertEqual(ok.status_code, 200)
         body = ok.json()
@@ -1072,18 +1069,43 @@ class TestDashboardClaims(LedgerServiceTestCase):
         self.assertEqual(body["walletAddress"], "0x1111111111111111111111111111111111111111")
         self.assertTrue(body["claimCode"].startswith("clm_"))
 
-    def test_claim_link_endpoint_requires_email_via_route_logic(self) -> None:
-        response = self.client.post(
-            "/ledger/claims/link",
-            json={
-                "agentId": "312586087945994240",
-                "agentName": "OpenClaw OntologyAgent",
-                "email": "   ",
-            },
-        )
+    def test_claim_link_without_request_email_uses_account_email(self) -> None:
+        from utils import claim_code_for_account
 
-        self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.json()["detail"], "email is required")
+        main.get_store().bind_account_wallet(
+            agent_id="kloop_agent_C",
+            agent_name="OntologyAgent",
+            email="owner@example.com",
+            wallet_address="0x1111111111111111111111111111111111111111",
+            circle_wallet_id="circle-wallet-1",
+            account_type="EOA",
+        )
+        resp = self.client.post(
+            "/ledger/claims/link",
+            json={"agentId": "kloop_agent_C", "agentName": "OntologyAgent"},
+        )
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        acct = main.get_store().get_account("kloop_agent_C").model_dump()
+        # claim code is keyed on the canonical agentId — matching what the
+        # dashboard-claim verification recomputes; no request email is needed.
+        self.assertEqual(body["claimCode"], claim_code_for_account(acct))
+
+    def test_claim_link_without_account_email_still_succeeds(self) -> None:
+        main.get_store().bind_account_wallet(
+            agent_id="kloop_agent_D",
+            agent_name="OntologyAgent",
+            email=None,
+            wallet_address="0x2222222222222222222222222222222222222222",
+            circle_wallet_id="circle-wallet-2",
+            account_type="EOA",
+        )
+        resp = self.client.post(
+            "/ledger/claims/link",
+            json={"agentId": "kloop_agent_D", "agentName": "OntologyAgent"},
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.json()["claimCode"].startswith("clm_"))
 
     def test_dashboard_claimable_agents_can_load_without_kovaloop_email(self) -> None:
         store = main.get_store()

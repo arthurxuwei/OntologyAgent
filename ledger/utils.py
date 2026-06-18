@@ -145,14 +145,14 @@ def short_address(value: Any) -> str:
     return f"{text[:10]}...{text[-6:]}"
 
 
-def claim_code_for_account(account: dict[str, Any], owner_email: str) -> str:
+def claim_code_for_account(account: dict[str, Any]) -> str:
+    # Claim code is keyed on the canonical agentId (+ wallet), not on email.
+    # Ownership/email is bound at claim time via the dashboard OAuth login.
     agent_id = str(account.get("agentId") or "").strip()
     wallet_address = str(
         account.get("walletAddress") or account.get("circleWalletId") or ""
     ).strip()
-    seed = f"{normalize_email(owner_email) or ''}:{agent_id}:{wallet_address}".encode(
-        "utf-8"
-    )
+    seed = f"{agent_id}:{wallet_address}".encode("utf-8")
     return "clm_" + hashlib.sha256(seed).hexdigest()[:18]
 
 

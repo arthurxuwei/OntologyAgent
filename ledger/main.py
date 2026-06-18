@@ -590,10 +590,6 @@ async def update_agent_profile(agent_id: str, request: Request) -> dict[str, Any
 
 @app.post("/ledger/claims/link")
 async def create_claim_link(request: ClaimLinkRequest) -> dict[str, Any]:
-    owner_email = normalize_email(request.email)
-    if owner_email is None:
-        raise HTTPException(status_code=400, detail="email is required")
-
     agent_id = request.agentId
     account_model = get_store().get_account(agent_id)
     if account_model is None:
@@ -602,11 +598,13 @@ async def create_claim_link(request: ClaimLinkRequest) -> dict[str, Any]:
         )
     account = account_model.model_dump()
 
-    claim_code = claim_code_for_account(account, owner_email)
+    # The claim code is keyed on the canonical agentId; the runtime supplies no
+    # email. Ownership is bound by the web OAuth login at claim time.
+    claim_code = claim_code_for_account(account)
     response = ClaimLinkResponse(
         agentId=str(account.get("agentId") or agent_id),
         agentName=str(account.get("agentName") or request.agentName),
-        ownerEmail=owner_email,
+        ownerEmail=normalize_email(account.get("email")) or "",
         claimCode=claim_code,
         claimUrl=dashboard_url({"claimCode": claim_code, "agentId": agent_id}),
         agentUrl=dashboard_url({"agentId": agent_id}),
@@ -718,11 +716,10 @@ async def ledger_claim_candidates() -> dict[str, Any]:
     accounts = await enriched_account_payloads(get_store().list_accounts(claimable=True))
     candidates = []
     for account in accounts:
-        account_email = normalize_email(account.get("email"))
         candidates.append(
             {
                 "account": account,
-                "claimCode": claim_code_for_account(account, account_email or ""),
+                "claimCode": claim_code_for_account(account),
             }
         )
     return {"candidates": candidates}
@@ -741,15 +738,13 @@ async def ledger_claim(
     account = account_model.model_dump() if account_model is not None else None
     if account is None:
         raise HTTPException(status_code=404, detail="agent account not found")
-    account_email = normalize_email(account.get("email"))
-    if account_email is None:
-        raise HTTPException(status_code=400, detail="agent account email is required")
-    expected_code = claim_code_for_account(account, account_email)
+    account_email = normalize_email(account.get("email")) or ""
+    expected_code = claim_code_for_account(account)
     if not secrets.compare_digest(expected_code, request.claimCode.strip()):
         raise HTTPException(status_code=400, detail="invalid claim code")
     claimed = get_store().claim_dashboard_account(
         agent_id=request.agentId,
-        email=account_email,
+        email=account_email or owner_email,
         dashboard_email=owner_email,
     )
     return {

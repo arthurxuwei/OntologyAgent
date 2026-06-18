@@ -230,7 +230,6 @@ class ClaimLinkRequest(BaseModel):
 
     agentId: str = Field(min_length=1)
     agentName: str = Field(min_length=1)
-    email: str
     agentDescription: Optional[str] = None
 
 
