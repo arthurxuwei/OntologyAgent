@@ -573,6 +573,44 @@ def rotate_profile_credential(
     return {"profile": rotate_agent_credential(agent_id, request.credentialPublicKey)}
 
 
+async def require_agent_signature(request: Request, agent_id: str) -> AgentProfile:
+    profile = get_store().get_agent_profile(agent_id)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="agent profile not found")
+    header_agent_id = request.headers.get("X-KovaLoop-Agent-Id")
+    timestamp = request.headers.get("X-KovaLoop-Timestamp")
+    nonce = request.headers.get("X-KovaLoop-Nonce")
+    signature = request.headers.get("X-KovaLoop-Signature")
+    if not (header_agent_id and timestamp and nonce and signature):
+        raise HTTPException(status_code=401, detail="agent signature headers required")
+    if not secrets.compare_digest(header_agent_id, agent_id):
+        raise HTTPException(status_code=401, detail="agent id mismatch")
+    body = (await request.body()).decode("utf-8")
+    if not agent_auth.check_timestamp_and_nonce(timestamp, nonce):
+        raise HTTPException(status_code=401, detail="stale or replayed request")
+    if not agent_auth.verify_agent_signature(
+        public_key_b64=profile.credentialPublicKey,
+        agent_id=agent_id,
+        timestamp=timestamp,
+        nonce=nonce,
+        body=body,
+        signature_b64=signature,
+    ):
+        raise HTTPException(status_code=401, detail="invalid agent signature")
+    return profile
+
+
+@app.patch("/ledger/profiles/{agent_id}")
+async def update_agent_profile(agent_id: str, request: Request) -> dict[str, Any]:
+    profile = await require_agent_signature(request, agent_id)
+    try:
+        parsed = UpdateAgentProfileRequest.model_validate_json(await request.body())
+    except Exception as error:
+        raise HTTPException(status_code=400, detail="invalid request body") from error
+    updated = get_store().update_agent_description(profile.agentId, parsed.description)
+    return {"profile": assemble_profile_payload(updated)}
+
+
 @app.post("/ledger/claims/link")
 async def create_claim_link(request: ClaimLinkRequest) -> dict[str, Any]:
     owner_email = normalize_email(request.email)

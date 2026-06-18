@@ -9,6 +9,7 @@ import pydantic
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 import agent_auth
+import main
 import services
 from helpers import LedgerServiceTestCase
 from models import (
@@ -266,6 +267,68 @@ class TestProfileEndpoints(LedgerServiceTestCase):
             headers=self.dashboard_auth_headers("owner@example.com"),
         )
         self.assertEqual(ok.status_code, 200)
+
+
+class TestAgentAuthenticatedPatch(LedgerServiceTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        agent_auth.reset_nonce_cache()
+
+    def _create_with_key(self, public_b64: str) -> str:
+        with patch.object(services, "get_ledger_wallet_client", return_value=_FakeWalletClient()):
+            response = self.client.post(
+                "/ledger/profiles",
+                json={
+                    "agentName": "OntologyAgent",
+                    "ownerEmail": "owner@example.com",
+                    "credentialPublicKey": public_b64,
+                },
+            )
+        return response.json()["profile"]["agentId"]
+
+    def _signed_headers(self, private_key, agent_id: str, body: str, nonce: str) -> dict:
+        timestamp = main.now_iso()
+        message = agent_auth.signing_message(
+            agent_id=agent_id, timestamp=timestamp, nonce=nonce, body=body
+        )
+        signature = base64.urlsafe_b64encode(
+            private_key.sign(message.encode("utf-8"))
+        ).rstrip(b"=").decode("ascii")
+        return {
+            "X-KovaLoop-Agent-Id": agent_id,
+            "X-KovaLoop-Timestamp": timestamp,
+            "X-KovaLoop-Nonce": nonce,
+            "X-KovaLoop-Signature": signature,
+            "Content-Type": "application/json",
+        }
+
+    def test_valid_signature_updates_description(self) -> None:
+        private_key, public_b64 = _keypair()
+        agent_id = self._create_with_key(public_b64)
+        body = '{"description":"new bio"}'
+        headers = self._signed_headers(private_key, agent_id, body, "nonce-1")
+        response = self.client.patch(f"/ledger/profiles/{agent_id}", content=body, headers=headers)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["profile"]["description"], "new bio")
+
+    def test_missing_signature_rejected(self) -> None:
+        _, public_b64 = _keypair()
+        agent_id = self._create_with_key(public_b64)
+        response = self.client.patch(
+            f"/ledger/profiles/{agent_id}",
+            json={"description": "x"},
+        )
+        self.assertEqual(response.status_code, 401)
+
+    def test_replayed_nonce_rejected(self) -> None:
+        private_key, public_b64 = _keypair()
+        agent_id = self._create_with_key(public_b64)
+        body = '{"description":"new bio"}'
+        headers = self._signed_headers(private_key, agent_id, body, "nonce-dup")
+        first = self.client.patch(f"/ledger/profiles/{agent_id}", content=body, headers=headers)
+        self.assertEqual(first.status_code, 200)
+        second = self.client.patch(f"/ledger/profiles/{agent_id}", content=body, headers=headers)
+        self.assertEqual(second.status_code, 401)
 
 
 if __name__ == "__main__":
