@@ -1,16 +1,37 @@
+import asyncio
 import unittest
 import uuid
 from pathlib import Path
+from unittest.mock import patch
 
 import pydantic
 
+import services
+from helpers import LedgerServiceTestCase
 from models import (
+    AgentAliasInput,
     AgentIdentityAlias,
     AgentProfile,
     CreateAgentProfileRequest,
 )
 from store import OffchainLedgerStore
 from utils import now_iso
+
+
+class _FakeWalletClient:
+    async def get_or_create(self, request):
+        return {
+            "circleWalletId": "circle-wallet-1",
+            "walletAddress": "0x1111111111111111111111111111111111111111",
+            "accountType": "EOA",
+            "mode": "circle",
+            "binding": {
+                "agentId": request.agentId,
+                "walletAddress": "0x1111111111111111111111111111111111111111",
+                "circleWalletId": "circle-wallet-1",
+                "accountType": "EOA",
+            },
+        }
 
 
 class TestIdentityModels(unittest.TestCase):
@@ -118,6 +139,52 @@ class TestProfileStore(unittest.TestCase):
         self.store.create_agent_profile(profile=self._profile("kloop_agent_A"), aliases=[])
         updated = self.store.update_agent_description("kloop_agent_A", "new bio")
         self.assertEqual(updated.description, "new bio")
+
+
+class TestProfileService(LedgerServiceTestCase):
+    def test_create_profile_generates_kloop_agent_id_and_wallet(self) -> None:
+        request = CreateAgentProfileRequest(
+            agentName="OntologyAgent",
+            ownerEmail="Owner@Example.com",
+            credentialPublicKey="pk",
+        )
+        with patch.object(services, "get_ledger_wallet_client", return_value=_FakeWalletClient()):
+            payload = asyncio.run(services.create_agent_profile_with_wallet(request))
+        profile = payload["profile"]
+        self.assertTrue(profile["agentId"].startswith("kloop_agent_"))
+        self.assertEqual(profile["ownerEmail"], "owner@example.com")
+        self.assertEqual(profile["aliases"], [])
+        account = services.get_store().get_agent_profile(profile["agentId"])
+        self.assertIsNotNone(account)
+        state = self.ledger_domain_state(profile["agentId"])
+        self.assertEqual(state["accounts"][0]["circleWalletId"], "circle-wallet-1")
+
+    def test_create_profile_with_alias_persists_alias(self) -> None:
+        request = CreateAgentProfileRequest(
+            agentName="OntologyAgent",
+            ownerEmail="owner@example.com",
+            credentialPublicKey="pk",
+            aliases=[AgentAliasInput(provider="eigenflux", externalId="312586087945994240")],
+        )
+        with patch.object(services, "get_ledger_wallet_client", return_value=_FakeWalletClient()):
+            payload = asyncio.run(services.create_agent_profile_with_wallet(request))
+        agent_id = payload["profile"]["agentId"]
+        self.assertEqual(
+            services.resolve_agent_alias("eigenflux", "312586087945994240")["agentId"],
+            agent_id,
+        )
+
+    def test_rotate_credential(self) -> None:
+        request = CreateAgentProfileRequest(
+            agentName="OntologyAgent",
+            ownerEmail="owner@example.com",
+            credentialPublicKey="pk",
+        )
+        with patch.object(services, "get_ledger_wallet_client", return_value=_FakeWalletClient()):
+            payload = asyncio.run(services.create_agent_profile_with_wallet(request))
+        agent_id = payload["profile"]["agentId"]
+        rotated = services.rotate_agent_credential(agent_id, "pk2")
+        self.assertEqual(rotated["credentialPublicKey"], "pk2")
 
 
 if __name__ == "__main__":
