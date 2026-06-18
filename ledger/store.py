@@ -13,6 +13,8 @@ from pydantic import BaseModel
 
 from config import DEFAULT_ASSET, DEFAULT_CHAIN_HTTP_URL, DEFAULT_SETTLEMENT_HTTP_URL
 from models import (
+    AgentIdentityAlias,
+    AgentProfile,
     CircleWebhookEventRecord,
     ConfirmOnrampSessionRequest,
     LedgerAccount,
@@ -155,6 +157,10 @@ def _field_record_id(field_name: str) -> LedgerRecordId:
     return record_id
 
 
+def _alias_record_id(record: dict[str, Any], _position: int) -> str:
+    return f"{record.get('provider')}:{record.get('externalId')}"
+
+
 LedgerCollection = tuple[str, str, type[BaseModel], LedgerRecordId]
 
 
@@ -186,6 +192,8 @@ LEDGER_COLLECTIONS: tuple[LedgerCollection, ...] = (
         LedgerSettlementRecord,
         _field_record_id("recordId"),
     ),
+    ("agent_profiles", "agentProfiles", AgentProfile, _field_record_id("agentId")),
+    ("agent_identity_aliases", "agentIdentityAliases", AgentIdentityAlias, _alias_record_id),
 )
 
 LEGACY_LEDGER_RECORD_COLLECTIONS: tuple[tuple[str, str, LedgerRecordId], ...] = (
@@ -733,6 +741,108 @@ class OffchainLedgerStore:
 
     def ensure_account(self, agent_id: str) -> LedgerAccount:
         return self._write(lambda connection: self._get_account(connection, agent_id, create=True))
+
+    def create_agent_profile(
+        self,
+        *,
+        profile: AgentProfile,
+        aliases: list[AgentIdentityAlias],
+    ) -> AgentProfile:
+        def write(connection: sqlite3.Connection) -> AgentProfile:
+            existing = self._get_record_by_id(
+                connection, "agent_profiles", AgentProfile, profile.agentId
+            )
+            if existing is not None:
+                raise ValueError("agentId already exists")
+            for alias in aliases:
+                alias_id = f"{alias.provider}:{alias.externalId}"
+                bound = self._get_record_by_id(
+                    connection, "agent_identity_aliases", AgentIdentityAlias, alias_id
+                )
+                if bound is not None and bound.agentId != profile.agentId:
+                    raise ValueError("alias already bound to another agent")
+            saved = self._upsert_record(
+                connection, "agent_profiles", AgentProfile, profile.agentId, profile
+            )
+            for alias in aliases:
+                alias_id = f"{alias.provider}:{alias.externalId}"
+                self._upsert_record(
+                    connection,
+                    "agent_identity_aliases",
+                    AgentIdentityAlias,
+                    alias_id,
+                    alias,
+                )
+            return saved
+
+        return self._write(write)
+
+    def get_agent_profile(self, agent_id: str) -> Optional[AgentProfile]:
+        def read(connection: sqlite3.Connection) -> Optional[AgentProfile]:
+            return self._get_record_by_id(
+                connection, "agent_profiles", AgentProfile, agent_id
+            )
+
+        return self._read(read)
+
+    def list_aliases_for_agent(self, agent_id: str) -> list[AgentIdentityAlias]:
+        def read(connection: sqlite3.Connection) -> list[AgentIdentityAlias]:
+            return self._list_records(
+                connection,
+                "agent_identity_aliases",
+                AgentIdentityAlias,
+                '"agentId" = ?',
+                (agent_id,),
+            )
+
+        return self._read(read)
+
+    def get_profile_id_by_alias(self, provider: str, external_id: str) -> Optional[str]:
+        alias_id = f"{provider}:{external_id}"
+
+        def read(connection: sqlite3.Connection) -> Optional[str]:
+            alias = self._get_record_by_id(
+                connection, "agent_identity_aliases", AgentIdentityAlias, alias_id
+            )
+            return alias.agentId if alias is not None else None
+
+        return self._read(read)
+
+    def update_agent_credential(self, agent_id: str, public_key: str) -> AgentProfile:
+        def write(connection: sqlite3.Connection) -> AgentProfile:
+            profile = self._get_record_by_id(
+                connection, "agent_profiles", AgentProfile, agent_id
+            )
+            if profile is None:
+                raise LookupError("agent profile not found")
+            updated = profile.model_copy(
+                update={
+                    "credentialPublicKey": public_key,
+                    "credentialStatus": "active",
+                    "updatedAt": now_iso(),
+                }
+            )
+            return self._upsert_record(
+                connection, "agent_profiles", AgentProfile, agent_id, updated
+            )
+
+        return self._write(write)
+
+    def update_agent_description(self, agent_id: str, description: Optional[str]) -> AgentProfile:
+        def write(connection: sqlite3.Connection) -> AgentProfile:
+            profile = self._get_record_by_id(
+                connection, "agent_profiles", AgentProfile, agent_id
+            )
+            if profile is None:
+                raise LookupError("agent profile not found")
+            updated = profile.model_copy(
+                update={"description": description, "updatedAt": now_iso()}
+            )
+            return self._upsert_record(
+                connection, "agent_profiles", AgentProfile, agent_id, updated
+            )
+
+        return self._write(write)
 
     def bind_account_wallet(
         self,
