@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from payment_router import PaymentIntent, route_payment_intent
+import agent_auth
 import services
 
 from auth import (
@@ -46,6 +47,8 @@ from dashboard import (
 )
 from models import *
 from services import (
+    assemble_profile_payload,
+    create_agent_profile_with_wallet,
     get_chain_recorder,
     get_coinbase_onramp_client,
     get_ledger_settlement_client,
@@ -53,6 +56,8 @@ from services import (
     get_or_create_agent_wallet,
     get_store,
     http_error,
+    resolve_agent_alias,
+    rotate_agent_credential,
     enriched_account_payloads,
     ledger_chain_payload,
     ledger_state_with_circle_balances,
@@ -504,6 +509,68 @@ def create_waitlist_application(
     )
     saved = get_store().append_waitlist_application(application)
     return {"ok": True, "applicationId": saved.applicationId}
+
+
+@app.post("/ledger/profiles")
+async def create_agent_profile(
+    request: CreateAgentProfileRequest,
+    session_cookie: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+) -> dict[str, Any]:
+    if request.aliases:
+        session_user = verify_auth_session(session_cookie)
+        session_email = normalize_email((session_user or {}).get("email"))
+        if session_email is None:
+            raise HTTPException(
+                status_code=401, detail="Dashboard authentication required to attach an alias"
+            )
+        if not secrets.compare_digest(
+            session_email, normalize_email(request.ownerEmail) or ""
+        ):
+            raise HTTPException(
+                status_code=403, detail="ownerEmail must match authenticated dashboard user"
+            )
+    try:
+        return await create_agent_profile_with_wallet(request)
+    except Exception as error:
+        raise http_error(error) from error
+
+
+@app.get("/ledger/profiles/resolve")
+def resolve_profile_alias(provider: str, externalId: str) -> dict[str, Any]:
+    try:
+        return {"profile": resolve_agent_alias(provider, externalId)}
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+
+
+@app.get("/ledger/profiles/{agent_id}")
+def get_agent_profile(agent_id: str) -> dict[str, Any]:
+    profile = get_store().get_agent_profile(agent_id)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="agent profile not found")
+    return {"profile": assemble_profile_payload(profile)}
+
+
+@app.post("/ledger/profiles/{agent_id}/credentials/rotate")
+def rotate_profile_credential(
+    agent_id: str,
+    request: RotateAgentCredentialRequest,
+    session_cookie: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+) -> dict[str, Any]:
+    profile = get_store().get_agent_profile(agent_id)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="agent profile not found")
+    session_user = verify_auth_session(session_cookie)
+    session_email = normalize_email((session_user or {}).get("email"))
+    if session_email is None:
+        raise HTTPException(status_code=401, detail="Dashboard authentication required")
+    if not secrets.compare_digest(session_email, normalize_email(profile.ownerEmail) or ""):
+        raise HTTPException(
+            status_code=403, detail="dashboard user is not authorized for this agent"
+        )
+    if not agent_auth.public_key_is_valid(request.credentialPublicKey):
+        raise HTTPException(status_code=400, detail="credentialPublicKey is not a valid key")
+    return {"profile": rotate_agent_credential(agent_id, request.credentialPublicKey)}
 
 
 @app.post("/ledger/claims/link")

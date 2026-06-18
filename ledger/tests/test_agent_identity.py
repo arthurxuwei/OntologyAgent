@@ -1,11 +1,14 @@
 import asyncio
+import base64
 import unittest
 import uuid
 from pathlib import Path
 from unittest.mock import patch
 
 import pydantic
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+import agent_auth
 import services
 from helpers import LedgerServiceTestCase
 from models import (
@@ -16,6 +19,16 @@ from models import (
 )
 from store import OffchainLedgerStore
 from utils import now_iso
+
+
+def _keypair():
+    private_key = Ed25519PrivateKey.generate()
+    public_b64 = (
+        base64.urlsafe_b64encode(private_key.public_key().public_bytes_raw())
+        .rstrip(b"=")
+        .decode("ascii")
+    )
+    return private_key, public_b64
 
 
 class _FakeWalletClient:
@@ -185,6 +198,74 @@ class TestProfileService(LedgerServiceTestCase):
         agent_id = payload["profile"]["agentId"]
         rotated = services.rotate_agent_credential(agent_id, "pk2")
         self.assertEqual(rotated["credentialPublicKey"], "pk2")
+
+
+class TestProfileEndpoints(LedgerServiceTestCase):
+    def _create(self, owner="owner@example.com", aliases=None, headers=None):
+        body = {
+            "agentName": "OntologyAgent",
+            "ownerEmail": owner,
+            "credentialPublicKey": "pk",
+        }
+        if aliases is not None:
+            body["aliases"] = aliases
+        with patch.object(services, "get_ledger_wallet_client", return_value=_FakeWalletClient()):
+            return self.client.post("/ledger/profiles", json=body, headers=headers or {})
+
+    def test_create_profile_endpoint_returns_canonical_id(self) -> None:
+        response = self._create()
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body["profile"]["agentId"].startswith("kloop_agent_"))
+        self.assertNotIn("credentialPublicKey", body["profile"])
+
+    def test_get_profile_endpoint(self) -> None:
+        agent_id = self._create().json()["profile"]["agentId"]
+        response = self.client.get(f"/ledger/profiles/{agent_id}")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["profile"]["agentId"], agent_id)
+
+    def test_get_missing_profile_returns_404(self) -> None:
+        self.assertEqual(self.client.get("/ledger/profiles/nope").status_code, 404)
+
+    def test_alias_create_requires_dashboard_auth(self) -> None:
+        unauth = self._create(
+            aliases=[{"provider": "eigenflux", "externalId": "312586087945994240"}]
+        )
+        self.assertEqual(unauth.status_code, 401)
+        authed = self._create(
+            owner="owner@example.com",
+            aliases=[{"provider": "eigenflux", "externalId": "312586087945994240"}],
+            headers=self.dashboard_auth_headers("owner@example.com"),
+        )
+        self.assertEqual(authed.status_code, 200)
+
+    def test_resolve_alias_endpoint(self) -> None:
+        self._create(
+            aliases=[{"provider": "eigenflux", "externalId": "312586087945994240"}],
+            headers=self.dashboard_auth_headers("owner@example.com"),
+        )
+        response = self.client.get(
+            "/ledger/profiles/resolve?provider=eigenflux&externalId=312586087945994240"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["profile"]["agentId"].startswith("kloop_agent_"))
+
+    def test_rotate_requires_matching_owner(self) -> None:
+        _, new_public_b64 = _keypair()
+        agent_id = self._create(owner="owner@example.com").json()["profile"]["agentId"]
+        wrong = self.client.post(
+            f"/ledger/profiles/{agent_id}/credentials/rotate",
+            json={"credentialPublicKey": new_public_b64},
+            headers=self.dashboard_auth_headers("intruder@example.com"),
+        )
+        self.assertEqual(wrong.status_code, 403)
+        ok = self.client.post(
+            f"/ledger/profiles/{agent_id}/credentials/rotate",
+            json={"credentialPublicKey": new_public_b64},
+            headers=self.dashboard_auth_headers("owner@example.com"),
+        )
+        self.assertEqual(ok.status_code, 200)
 
 
 if __name__ == "__main__":
