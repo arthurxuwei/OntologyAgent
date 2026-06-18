@@ -149,6 +149,21 @@ class TestProfileService(LedgerServiceTestCase):
         rotated = services.rotate_agent_credential(agent_id, "pk2")
         self.assertEqual(rotated["credentialPublicKey"], "pk2")
 
+    def test_create_profile_carries_eigenflux_object(self) -> None:
+        request = CreateAgentProfileRequest(
+            agentName="OntologyAgent",
+            ownerEmail="owner@example.com",
+            credentialPublicKey="pk",
+            eigenflux={"id": "312586087945994240", "name": "Old", "bio": "b"},
+        )
+        with patch.object(services, "get_ledger_wallet_client", return_value=_FakeWalletClient()):
+            payload = asyncio.run(services.create_agent_profile_with_wallet(request))
+        profile = payload["profile"]
+        self.assertEqual(profile["eigenflux"]["id"], "312586087945994240")
+        self.assertEqual(profile["eigenflux"]["name"], "Old")
+        stored = services.get_store().get_agent_profile(profile["agentId"])
+        self.assertEqual(stored.eigenflux["bio"], "b")
+
 
 class TestProfileEndpoints(LedgerServiceTestCase):
     def _create(self, owner="owner@example.com", headers=None):

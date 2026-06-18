@@ -186,6 +186,7 @@ class AgentProfile(BaseModel):
     agentName: str
     ownerEmail: str
     description: Optional[str] = None
+    eigenflux: Optional[dict[str, Any]] = None
     credentialPublicKey: str
     credentialStatus: Literal["active", "revoked"] = "active"
     createdAt: str
@@ -253,6 +254,7 @@ class CreateAgentProfileRequest(BaseModel):
     agentName: str = Field(min_length=1)
     ownerEmail: str = Field(min_length=1)
     description: Optional[str] = None
+    eigenflux: Optional[dict[str, Any]] = None
     credentialPublicKey: str = Field(min_length=1)
 
 

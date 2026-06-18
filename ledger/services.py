@@ -475,6 +475,7 @@ async def create_agent_profile_with_wallet(
         agentName=request.agentName,
         ownerEmail=owner_email,
         description=request.description,
+        eigenflux=request.eigenflux,
         credentialPublicKey=request.credentialPublicKey,
         createdAt=stamp,
         updatedAt=stamp,
