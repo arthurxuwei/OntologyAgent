@@ -595,25 +595,12 @@ async def create_claim_link(request: ClaimLinkRequest) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="email is required")
 
     agent_id = request.agentId
-
-    try:
-        payload = await get_or_create_agent_wallet(
-            AgentWalletRequest(
-                agentName=request.agentName,
-                agentId=agent_id,
-                email=owner_email,
-                agentDescription=request.agentDescription,
-            )
+    account_model = get_store().get_account(agent_id)
+    if account_model is None:
+        raise HTTPException(
+            status_code=404, detail="profile not found — create a profile first"
         )
-    except Exception as error:
-        raise http_error(error) from error
-
-    account = payload.get("account")
-    wallet = payload.get("wallet")
-    if not isinstance(account, dict):
-        raise HTTPException(status_code=502, detail="claim link response missing account")
-    if not isinstance(wallet, dict):
-        wallet = {}
+    account = account_model.model_dump()
 
     claim_code = claim_code_for_account(account, owner_email)
     response = ClaimLinkResponse(
@@ -624,18 +611,12 @@ async def create_claim_link(request: ClaimLinkRequest) -> dict[str, Any]:
         claimUrl=dashboard_url({"claimCode": claim_code, "agentId": agent_id}),
         agentUrl=dashboard_url({"agentId": agent_id}),
         walletAddress=(
-            str(account.get("walletAddress") or wallet.get("walletAddress"))
-            if account.get("walletAddress") or wallet.get("walletAddress")
-            else None
+            str(account.get("walletAddress")) if account.get("walletAddress") else None
         ),
         circleWalletId=(
-            str(account.get("circleWalletId") or wallet.get("circleWalletId"))
-            if account.get("circleWalletId") or wallet.get("circleWalletId")
-            else None
+            str(account.get("circleWalletId")) if account.get("circleWalletId") else None
         ),
-        accountType=normalize_wallet_account_type(
-            account.get("accountType") or wallet.get("accountType")
-        ),
+        accountType=normalize_wallet_account_type(account.get("accountType")),
     )
     return response.model_dump()
 

@@ -872,32 +872,16 @@ class TestDashboardClaims(LedgerServiceTestCase):
         self.assertTrue(candidate["claimCode"].startswith("clm_"))
         self.assertNotEqual(candidate["claimCode"], "agent_beta")
 
-    def test_claim_link_endpoint_creates_wallet_and_returns_urls(self) -> None:
-        class FakeWalletClient:
-            async def get_or_create(self, request):
-                return {
-                    "circleWalletId": "circle-wallet-1",
-                    "walletAddress": "0x1111111111111111111111111111111111111111",
-                    "accountType": "EOA",
-                    "mode": "circle",
-                    "binding": {
-                        "agentName": request.agentName,
-                        "agentId": request.agentId,
-                        "walletAddress": "0x1111111111111111111111111111111111111111",
-                        "circleWalletId": "circle-wallet-1",
-                        "circleWalletSetId": "circle-wallet-set",
-                        "blockchain": "BASE-SEPOLIA",
-                        "mode": "circle",
-                        "accountType": "EOA",
-                        "updatedAt": main.now_iso(),
-                    },
-                }
-
-        with patch.dict(os.environ, {"PUBLIC_BASE_URL": "https://ledger.example.test"}), patch.object(
-            services,
-            "get_ledger_wallet_client",
-            return_value=FakeWalletClient(),
-        ):
+    def test_claim_link_endpoint_returns_existing_wallet_and_urls(self) -> None:
+        main.get_store().bind_account_wallet(
+            agent_id="312586087945994240",
+            agent_name="OpenClaw OntologyAgent",
+            email="owner@example.com",
+            wallet_address="0x1111111111111111111111111111111111111111",
+            circle_wallet_id="circle-wallet-1",
+            account_type="EOA",
+        )
+        with patch.dict(os.environ, {"PUBLIC_BASE_URL": "https://ledger.example.test"}):
             response = self.client.post(
                 "/ledger/claims/link",
                 json={
@@ -924,16 +908,15 @@ class TestDashboardClaims(LedgerServiceTestCase):
         self.assertEqual(payload["circleWalletId"], "circle-wallet-1")
         self.assertEqual(payload["accountType"], "EOA")
 
-    def test_claim_link_endpoint_persists_claimable_account_without_wallet_ids(self) -> None:
-        class FakeWalletClient:
-            async def get_or_create(self, request):
-                return {"mode": "mock"}
-
-        with patch.dict(os.environ, {"PUBLIC_BASE_URL": "   "}), patch.object(
-            services,
-            "get_ledger_wallet_client",
-            return_value=FakeWalletClient(),
-        ):
+    def test_claim_link_endpoint_returns_claimable_account_without_wallet_ids(self) -> None:
+        main.get_store().bind_account_wallet(
+            agent_id="312586087945994240",
+            agent_name="OpenClaw OntologyAgent",
+            email="owner@example.com",
+            wallet_address=None,
+            circle_wallet_id=None,
+        )
+        with patch.dict(os.environ, {"PUBLIC_BASE_URL": "   "}):
             response = self.client.post(
                 "/ledger/claims/link",
                 json={
@@ -953,11 +936,8 @@ class TestDashboardClaims(LedgerServiceTestCase):
             payload["agentUrl"],
             "https://ledger.kovaloop.ai/dashboard?agentId=312586087945994240",
         )
-
-        account = main.get_store().load().accounts[0]
-        self.assertEqual(account.agentId, "312586087945994240")
-        self.assertEqual(account.agentName, "OpenClaw OntologyAgent")
-        self.assertEqual(account.email, "owner@example.com")
+        self.assertIsNone(payload["walletAddress"])
+        self.assertIsNone(payload["circleWalletId"])
 
         claimable = self.client.get("/ledger/claims/candidates").json()
         self.assertEqual(len(claimable["candidates"]), 1)
@@ -1055,41 +1035,6 @@ class TestDashboardClaims(LedgerServiceTestCase):
         claimed = main.get_store().load().accounts[0]
         self.assertEqual(claimed.dashboardClaimedByEmail, "dashboard-user@example.com")
 
-    def test_claim_link_endpoint_rejects_non_eoa_wallets(self) -> None:
-        class FakeWalletClient:
-            async def get_or_create(self, request):
-                return {
-                    "circleWalletId": "circle-wallet-sca",
-                    "walletAddress": "0x1111111111111111111111111111111111111111",
-                    "accountType": "SCA",
-                    "mode": "circle",
-                    "binding": {
-                        "agentName": request.agentName,
-                        "agentId": request.agentId,
-                        "walletAddress": "0x1111111111111111111111111111111111111111",
-                        "circleWalletId": "circle-wallet-sca",
-                        "circleWalletSetId": "circle-wallet-set",
-                        "blockchain": "BASE-SEPOLIA",
-                        "mode": "circle",
-                        "accountType": "SCA",
-                        "updatedAt": main.now_iso(),
-                    },
-                }
-
-        with patch.object(services, "get_ledger_wallet_client", return_value=FakeWalletClient()):
-            response = self.client.post(
-                "/ledger/claims/link",
-                json={
-                    "agentId": "312586087945994240",
-                    "agentName": "OpenClaw OntologyAgent",
-                    "email": "owner@example.com",
-                },
-            )
-
-        self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.json()["detail"], "claim wallet must be an EOA Circle wallet")
-        self.assertEqual(self.ledger_domain_state()["accounts"], [])
-
     def test_claim_link_endpoint_requires_profile_identity(self) -> None:
         response = self.client.post(
             "/ledger/claims/link",
@@ -1101,6 +1046,31 @@ class TestDashboardClaims(LedgerServiceTestCase):
         )
 
         self.assertEqual(response.status_code, 422)
+
+    def test_claim_link_uses_existing_account_and_404s_when_missing(self) -> None:
+        missing = self.client.post(
+            "/ledger/claims/link",
+            json={"agentId": "kloop_agent_NONE", "agentName": "A", "email": "o@example.com"},
+        )
+        self.assertEqual(missing.status_code, 404)
+
+        main.get_store().bind_account_wallet(
+            agent_id="kloop_agent_SEED",
+            agent_name="OntologyAgent",
+            email="o@example.com",
+            wallet_address="0x1111111111111111111111111111111111111111",
+            circle_wallet_id="circle-wallet-1",
+            account_type="EOA",
+        )
+        ok = self.client.post(
+            "/ledger/claims/link",
+            json={"agentId": "kloop_agent_SEED", "agentName": "OntologyAgent", "email": "o@example.com"},
+        )
+        self.assertEqual(ok.status_code, 200)
+        body = ok.json()
+        self.assertEqual(body["circleWalletId"], "circle-wallet-1")
+        self.assertEqual(body["walletAddress"], "0x1111111111111111111111111111111111111111")
+        self.assertTrue(body["claimCode"].startswith("clm_"))
 
     def test_claim_link_endpoint_requires_email_via_route_logic(self) -> None:
         response = self.client.post(
