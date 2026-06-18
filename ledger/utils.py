@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import time
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Optional
@@ -164,3 +165,22 @@ def normalize_evm_address(value: Any) -> str:
     except ValueError as error:
         raise ValueError("destinationAddress must be a 0x-prefixed EVM address") from error
     return text
+
+
+_ULID_CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+
+
+def generate_ulid() -> str:
+    """Return a 26-char Crockford base32 ULID (48-bit time + 80-bit randomness)."""
+    timestamp_ms = int(time.time() * 1000)
+    randomness = int.from_bytes(os.urandom(10), "big")
+    value = (timestamp_ms << 80) | randomness
+    chars = []
+    for _ in range(26):
+        chars.append(_ULID_CROCKFORD[value & 0x1F])
+        value >>= 5
+    return "".join(reversed(chars))
+
+
+def generate_agent_id() -> str:
+    return f"kloop_agent_{generate_ulid()}"
