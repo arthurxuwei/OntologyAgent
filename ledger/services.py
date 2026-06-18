@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -340,73 +341,93 @@ async def ledger_state_with_circle_balances(agent_id: Optional[str] = None) -> d
     return state
 
 
+def _circle_balance_concurrency() -> int:
+    try:
+        value = int(os.getenv("LEDGER_CIRCLE_BALANCE_CONCURRENCY", "8"))
+    except ValueError:
+        return 8
+    return max(1, value)
+
+
+CIRCLE_BALANCE_CONCURRENCY = _circle_balance_concurrency()
+
+
 async def enrich_accounts_with_circle_balances(accounts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if not isinstance(accounts, list):
         return accounts
 
     wallet_client = get_ledger_wallet_client()
-    for account in accounts:
+    semaphore = asyncio.Semaphore(CIRCLE_BALANCE_CONCURRENCY)
+
+    async def enrich_one(account: Any) -> None:
         if not isinstance(account, dict):
-            continue
+            return
         wallet_address = account.get("walletAddress")
         circle_wallet_id = account.get("circleWalletId")
         if not isinstance(wallet_address, str) and not isinstance(circle_wallet_id, str):
-            continue
-        try:
-            status = await wallet_client.status(
-                wallet_address=wallet_address if isinstance(wallet_address, str) else None,
-                circle_wallet_id=circle_wallet_id if isinstance(circle_wallet_id, str) else None,
-            )
-        except Exception as error:
-            account["circleBalanceError"] = str(error)
-            continue
-        account_type = normalize_wallet_account_type(status.get("accountType"))
-        if account_type is not None:
-            account["accountType"] = account_type
-        balances = status.get("balances")
-        if isinstance(balances, dict):
-            usdc_balance = balances.get(DEFAULT_ASSET)
-            if not isinstance(usdc_balance, str):
-                usdc_balance = "0"
-            account["circleUsdcBalance"] = usdc_balance
-            circle_available_atomic = decimal_usdc_to_atomic_string(usdc_balance)
-            if circle_available_atomic is not None:
-                account["circleAvailableAtomic"] = circle_available_atomic
-        gateway_balance = status.get("gatewayBalance")
-        if isinstance(gateway_balance, dict):
-            formatted_available = gateway_balance.get("formattedAvailable")
-            formatted_total = gateway_balance.get("formattedTotal")
-            formatted_withdrawing = gateway_balance.get("formattedWithdrawing")
-            formatted_withdrawable = gateway_balance.get("formattedWithdrawable")
-            formatted_pending_deposits = gateway_balance.get("formattedPendingDeposits")
-            formatted_pending_batch = gateway_balance.get("formattedPendingBatch")
-            if isinstance(formatted_available, str):
-                account["gatewayUsdcAvailable"] = formatted_available
-            if isinstance(formatted_total, str):
-                account["gatewayUsdcTotal"] = formatted_total
-            if isinstance(formatted_withdrawing, str):
-                account["gatewayUsdcWithdrawing"] = formatted_withdrawing
-            if isinstance(formatted_withdrawable, str):
-                account["gatewayUsdcWithdrawable"] = formatted_withdrawable
-            if isinstance(formatted_pending_deposits, str):
-                account["gatewayUsdcPendingDeposits"] = formatted_pending_deposits
-            if isinstance(formatted_pending_batch, str):
-                account["gatewayUsdcPendingBatch"] = formatted_pending_batch
-            for source_key, target_key in {
-                "availableAtomic": "gatewayAvailableAtomic",
-                "totalAtomic": "gatewayTotalAtomic",
-                "withdrawingAtomic": "gatewayWithdrawingAtomic",
-                "withdrawableAtomic": "gatewayWithdrawableAtomic",
-                "pendingDepositsAtomic": "gatewayPendingDepositsAtomic",
-                "pendingBatchAtomic": "gatewayPendingBatchAtomic",
-            }.items():
-                value = gateway_balance.get(source_key)
-                if isinstance(value, str):
-                    account[target_key] = value
-        gateway_balance_error = status.get("gatewayBalanceError")
-        if isinstance(gateway_balance_error, str):
-            account["gatewayBalanceError"] = gateway_balance_error
+            return
+        async with semaphore:
+            try:
+                status = await wallet_client.status(
+                    wallet_address=wallet_address if isinstance(wallet_address, str) else None,
+                    circle_wallet_id=circle_wallet_id if isinstance(circle_wallet_id, str) else None,
+                )
+            except Exception as error:
+                account["circleBalanceError"] = str(error)
+                return
+        apply_circle_status_to_account(account, status)
+
+    await asyncio.gather(*(enrich_one(account) for account in accounts))
     return accounts
+
+
+def apply_circle_status_to_account(account: dict[str, Any], status: dict[str, Any]) -> None:
+    account_type = normalize_wallet_account_type(status.get("accountType"))
+    if account_type is not None:
+        account["accountType"] = account_type
+    balances = status.get("balances")
+    if isinstance(balances, dict):
+        usdc_balance = balances.get(DEFAULT_ASSET)
+        if not isinstance(usdc_balance, str):
+            usdc_balance = "0"
+        account["circleUsdcBalance"] = usdc_balance
+        circle_available_atomic = decimal_usdc_to_atomic_string(usdc_balance)
+        if circle_available_atomic is not None:
+            account["circleAvailableAtomic"] = circle_available_atomic
+    gateway_balance = status.get("gatewayBalance")
+    if isinstance(gateway_balance, dict):
+        formatted_available = gateway_balance.get("formattedAvailable")
+        formatted_total = gateway_balance.get("formattedTotal")
+        formatted_withdrawing = gateway_balance.get("formattedWithdrawing")
+        formatted_withdrawable = gateway_balance.get("formattedWithdrawable")
+        formatted_pending_deposits = gateway_balance.get("formattedPendingDeposits")
+        formatted_pending_batch = gateway_balance.get("formattedPendingBatch")
+        if isinstance(formatted_available, str):
+            account["gatewayUsdcAvailable"] = formatted_available
+        if isinstance(formatted_total, str):
+            account["gatewayUsdcTotal"] = formatted_total
+        if isinstance(formatted_withdrawing, str):
+            account["gatewayUsdcWithdrawing"] = formatted_withdrawing
+        if isinstance(formatted_withdrawable, str):
+            account["gatewayUsdcWithdrawable"] = formatted_withdrawable
+        if isinstance(formatted_pending_deposits, str):
+            account["gatewayUsdcPendingDeposits"] = formatted_pending_deposits
+        if isinstance(formatted_pending_batch, str):
+            account["gatewayUsdcPendingBatch"] = formatted_pending_batch
+        for source_key, target_key in {
+            "availableAtomic": "gatewayAvailableAtomic",
+            "totalAtomic": "gatewayTotalAtomic",
+            "withdrawingAtomic": "gatewayWithdrawingAtomic",
+            "withdrawableAtomic": "gatewayWithdrawableAtomic",
+            "pendingDepositsAtomic": "gatewayPendingDepositsAtomic",
+            "pendingBatchAtomic": "gatewayPendingBatchAtomic",
+        }.items():
+            value = gateway_balance.get(source_key)
+            if isinstance(value, str):
+                account[target_key] = value
+    gateway_balance_error = status.get("gatewayBalanceError")
+    if isinstance(gateway_balance_error, str):
+        account["gatewayBalanceError"] = gateway_balance_error
 
 
 async def enriched_account_payloads(accounts: list[Any]) -> list[dict[str, Any]]:
