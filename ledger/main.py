@@ -56,7 +56,6 @@ from services import (
     get_or_create_agent_wallet,
     get_store,
     http_error,
-    resolve_agent_alias,
     rotate_agent_credential,
     enriched_account_payloads,
     ledger_chain_payload,
@@ -514,33 +513,11 @@ def create_waitlist_application(
 @app.post("/ledger/profiles")
 async def create_agent_profile(
     request: CreateAgentProfileRequest,
-    session_cookie: str | None = Cookie(default=None, alias=SESSION_COOKIE),
 ) -> dict[str, Any]:
-    if request.aliases:
-        session_user = verify_auth_session(session_cookie)
-        session_email = normalize_email((session_user or {}).get("email"))
-        if session_email is None:
-            raise HTTPException(
-                status_code=401, detail="Dashboard authentication required to attach an alias"
-            )
-        if not secrets.compare_digest(
-            session_email, normalize_email(request.ownerEmail) or ""
-        ):
-            raise HTTPException(
-                status_code=403, detail="ownerEmail must match authenticated dashboard user"
-            )
     try:
         return await create_agent_profile_with_wallet(request)
     except Exception as error:
         raise http_error(error) from error
-
-
-@app.get("/ledger/profiles/resolve")
-def resolve_profile_alias(provider: str, externalId: str) -> dict[str, Any]:
-    try:
-        return {"profile": resolve_agent_alias(provider, externalId)}
-    except LookupError as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
 
 
 @app.get("/ledger/profiles/{agent_id}")
@@ -617,16 +594,7 @@ async def create_claim_link(request: ClaimLinkRequest) -> dict[str, Any]:
     if owner_email is None:
         raise HTTPException(status_code=400, detail="email is required")
 
-    agent_id = request.agentId or None
-    if agent_id is None and request.alias is not None:
-        resolved = get_store().get_profile_id_by_alias(
-            request.alias.provider, request.alias.externalId
-        )
-        if resolved is None:
-            raise HTTPException(status_code=404, detail="alias not found")
-        agent_id = resolved
-    if agent_id is None:
-        raise HTTPException(status_code=400, detail="agentId or alias is required")
+    agent_id = request.agentId
 
     try:
         payload = await get_or_create_agent_wallet(

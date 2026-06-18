@@ -13,8 +13,6 @@ import main
 import services
 from helpers import LedgerServiceTestCase
 from models import (
-    AgentAliasInput,
-    AgentIdentityAlias,
     AgentProfile,
     CreateAgentProfileRequest,
 )
@@ -62,15 +60,6 @@ class TestIdentityModels(unittest.TestCase):
         self.assertEqual(profile.credentialStatus, "active")
         self.assertIsNone(profile.description)
 
-    def test_alias_record_requires_fields(self) -> None:
-        alias = AgentIdentityAlias(
-            provider="eigenflux",
-            externalId="312586087945994240",
-            agentId="kloop_agent_X",
-            createdAt="2026-06-14T00:00:00Z",
-        )
-        self.assertEqual(alias.provider, "eigenflux")
-
     def test_create_request_rejects_unknown_field(self) -> None:
         with self.assertRaises(pydantic.ValidationError):
             CreateAgentProfileRequest(
@@ -100,18 +89,8 @@ class TestProfileStore(unittest.TestCase):
             updatedAt=stamp,
         )
 
-    def _alias(self, agent_id: str, external_id: str = "312586087945994240") -> AgentIdentityAlias:
-        return AgentIdentityAlias(
-            provider="eigenflux",
-            externalId=external_id,
-            agentId=agent_id,
-            createdAt=now_iso(),
-        )
-
     def test_create_and_get_profile(self) -> None:
-        saved = self.store.create_agent_profile(
-            profile=self._profile("kloop_agent_A"), aliases=[]
-        )
+        saved = self.store.create_agent_profile(profile=self._profile("kloop_agent_A"))
         self.assertEqual(saved.agentId, "kloop_agent_A")
         fetched = self.store.get_agent_profile("kloop_agent_A")
         self.assertIsNotNone(fetched)
@@ -120,27 +99,13 @@ class TestProfileStore(unittest.TestCase):
     def test_get_missing_profile_returns_none(self) -> None:
         self.assertIsNone(self.store.get_agent_profile("nope"))
 
-    def test_alias_resolves_to_canonical_id(self) -> None:
-        self.store.create_agent_profile(
-            profile=self._profile("kloop_agent_A"),
-            aliases=[self._alias("kloop_agent_A")],
-        )
-        resolved = self.store.get_profile_id_by_alias("eigenflux", "312586087945994240")
-        self.assertEqual(resolved, "kloop_agent_A")
-
-    def test_duplicate_alias_rejected(self) -> None:
-        self.store.create_agent_profile(
-            profile=self._profile("kloop_agent_A"),
-            aliases=[self._alias("kloop_agent_A")],
-        )
+    def test_duplicate_agent_id_rejected(self) -> None:
+        self.store.create_agent_profile(profile=self._profile("kloop_agent_A"))
         with self.assertRaises(ValueError):
-            self.store.create_agent_profile(
-                profile=self._profile("kloop_agent_B"),
-                aliases=[self._alias("kloop_agent_B")],
-            )
+            self.store.create_agent_profile(profile=self._profile("kloop_agent_A"))
 
     def test_rotate_credential_updates_key(self) -> None:
-        self.store.create_agent_profile(profile=self._profile("kloop_agent_A"), aliases=[])
+        self.store.create_agent_profile(profile=self._profile("kloop_agent_A"))
         updated = self.store.update_agent_credential("kloop_agent_A", "pk2")
         self.assertEqual(updated.credentialPublicKey, "pk2")
         self.assertEqual(self.store.get_agent_profile("kloop_agent_A").credentialPublicKey, "pk2")
@@ -150,7 +115,7 @@ class TestProfileStore(unittest.TestCase):
             self.store.update_agent_credential("nope", "pk2")
 
     def test_update_description(self) -> None:
-        self.store.create_agent_profile(profile=self._profile("kloop_agent_A"), aliases=[])
+        self.store.create_agent_profile(profile=self._profile("kloop_agent_A"))
         updated = self.store.update_agent_description("kloop_agent_A", "new bio")
         self.assertEqual(updated.description, "new bio")
 
@@ -167,26 +132,10 @@ class TestProfileService(LedgerServiceTestCase):
         profile = payload["profile"]
         self.assertTrue(profile["agentId"].startswith("kloop_agent_"))
         self.assertEqual(profile["ownerEmail"], "owner@example.com")
-        self.assertEqual(profile["aliases"], [])
         account = services.get_store().get_agent_profile(profile["agentId"])
         self.assertIsNotNone(account)
         state = self.ledger_domain_state(profile["agentId"])
         self.assertEqual(state["accounts"][0]["circleWalletId"], "circle-wallet-1")
-
-    def test_create_profile_with_alias_persists_alias(self) -> None:
-        request = CreateAgentProfileRequest(
-            agentName="OntologyAgent",
-            ownerEmail="owner@example.com",
-            credentialPublicKey="pk",
-            aliases=[AgentAliasInput(provider="eigenflux", externalId="312586087945994240")],
-        )
-        with patch.object(services, "get_ledger_wallet_client", return_value=_FakeWalletClient()):
-            payload = asyncio.run(services.create_agent_profile_with_wallet(request))
-        agent_id = payload["profile"]["agentId"]
-        self.assertEqual(
-            services.resolve_agent_alias("eigenflux", "312586087945994240")["agentId"],
-            agent_id,
-        )
 
     def test_rotate_credential(self) -> None:
         request = CreateAgentProfileRequest(
@@ -202,14 +151,12 @@ class TestProfileService(LedgerServiceTestCase):
 
 
 class TestProfileEndpoints(LedgerServiceTestCase):
-    def _create(self, owner="owner@example.com", aliases=None, headers=None):
+    def _create(self, owner="owner@example.com", headers=None):
         body = {
             "agentName": "OntologyAgent",
             "ownerEmail": owner,
             "credentialPublicKey": "pk",
         }
-        if aliases is not None:
-            body["aliases"] = aliases
         with patch.object(services, "get_ledger_wallet_client", return_value=_FakeWalletClient()):
             return self.client.post("/ledger/profiles", json=body, headers=headers or {})
 
@@ -228,29 +175,6 @@ class TestProfileEndpoints(LedgerServiceTestCase):
 
     def test_get_missing_profile_returns_404(self) -> None:
         self.assertEqual(self.client.get("/ledger/profiles/nope").status_code, 404)
-
-    def test_alias_create_requires_dashboard_auth(self) -> None:
-        unauth = self._create(
-            aliases=[{"provider": "eigenflux", "externalId": "312586087945994240"}]
-        )
-        self.assertEqual(unauth.status_code, 401)
-        authed = self._create(
-            owner="owner@example.com",
-            aliases=[{"provider": "eigenflux", "externalId": "312586087945994240"}],
-            headers=self.dashboard_auth_headers("owner@example.com"),
-        )
-        self.assertEqual(authed.status_code, 200)
-
-    def test_resolve_alias_endpoint(self) -> None:
-        self._create(
-            aliases=[{"provider": "eigenflux", "externalId": "312586087945994240"}],
-            headers=self.dashboard_auth_headers("owner@example.com"),
-        )
-        response = self.client.get(
-            "/ledger/profiles/resolve?provider=eigenflux&externalId=312586087945994240"
-        )
-        self.assertEqual(response.status_code, 200)
-        self.assertTrue(response.json()["profile"]["agentId"].startswith("kloop_agent_"))
 
     def test_rotate_requires_matching_owner(self) -> None:
         _, new_public_b64 = _keypair()
@@ -331,31 +255,6 @@ class TestAgentAuthenticatedPatch(LedgerServiceTestCase):
         self.assertEqual(second.status_code, 401)
 
 
-class TestClaimLinkAlias(LedgerServiceTestCase):
-    def test_claim_link_resolves_alias_to_canonical_id(self) -> None:
-        with patch.object(services, "get_ledger_wallet_client", return_value=_FakeWalletClient()):
-            created = self.client.post(
-                "/ledger/profiles",
-                json={
-                    "agentName": "OntologyAgent",
-                    "ownerEmail": "owner@example.com",
-                    "credentialPublicKey": "pk",
-                    "aliases": [{"provider": "eigenflux", "externalId": "312586087945994240"}],
-                },
-                headers=self.dashboard_auth_headers("owner@example.com"),
-            )
-            agent_id = created.json()["profile"]["agentId"]
-
-            response = self.client.post(
-                "/ledger/claims/link",
-                json={
-                    "agentName": "OntologyAgent",
-                    "email": "owner@example.com",
-                    "alias": {"provider": "eigenflux", "externalId": "312586087945994240"},
-                },
-            )
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["agentId"], agent_id)
 
 
 if __name__ == "__main__":

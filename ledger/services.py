@@ -31,7 +31,6 @@ from config import (
     DEFAULT_WALLET_HTTP_URL,
 )
 from models import (
-    AgentIdentityAlias,
     AgentProfile,
     AgentWalletRequest,
     CreateAgentProfileRequest,
@@ -448,13 +447,9 @@ async def enriched_account_payloads(accounts: list[Any]) -> list[dict[str, Any]]
 
 
 def assemble_profile_payload(profile: AgentProfile) -> dict[str, Any]:
-    aliases = get_store().list_aliases_for_agent(profile.agentId)
     data = profile.model_dump()
     data.pop("credentialPublicKey", None)
     data.pop("credentialStatus", None)
-    data["aliases"] = [
-        {"provider": alias.provider, "externalId": alias.externalId} for alias in aliases
-    ]
     return data
 
 
@@ -484,16 +479,7 @@ async def create_agent_profile_with_wallet(
         createdAt=stamp,
         updatedAt=stamp,
     )
-    aliases = [
-        AgentIdentityAlias(
-            provider=alias.provider,
-            externalId=alias.externalId,
-            agentId=agent_id,
-            createdAt=stamp,
-        )
-        for alias in request.aliases
-    ]
-    saved = get_store().create_agent_profile(profile=profile, aliases=aliases)
+    saved = get_store().create_agent_profile(profile=profile)
 
     # MVP: eagerly provision the agent's Circle wallet at profile creation.
     await get_or_create_agent_wallet(
@@ -505,16 +491,6 @@ async def create_agent_profile_with_wallet(
         )
     )
     return {"profile": assemble_profile_payload(saved)}
-
-
-def resolve_agent_alias(provider: str, external_id: str) -> dict[str, Any]:
-    agent_id = get_store().get_profile_id_by_alias(provider, external_id)
-    if agent_id is None:
-        raise LookupError("alias not found")
-    profile = get_store().get_agent_profile(agent_id)
-    if profile is None:
-        raise LookupError("alias not found")
-    return assemble_profile_payload(profile)
 
 
 def rotate_agent_credential(agent_id: str, public_key: str) -> dict[str, Any]:
