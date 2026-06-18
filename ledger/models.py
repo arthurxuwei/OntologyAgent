@@ -184,7 +184,7 @@ class AgentProfile(BaseModel):
     schemaVersion: int = 1
     agentId: str
     agentName: str
-    ownerEmail: str
+    ownerEmail: Optional[str] = None
     description: Optional[str] = None
     eigenflux: Optional[dict[str, Any]] = None
     credentialPublicKey: str
@@ -252,7 +252,7 @@ class CreateAgentProfileRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     agentName: str = Field(min_length=1)
-    ownerEmail: str = Field(min_length=1)
+    ownerEmail: Optional[str] = None
     description: Optional[str] = None
     eigenflux: Optional[dict[str, Any]] = None
     credentialPublicKey: str = Field(min_length=1)

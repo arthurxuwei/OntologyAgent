@@ -262,9 +262,11 @@ async def settle_withdrawal(
     return get_store().add_settlement_record(record)
 
 
-async def get_or_create_agent_wallet(request: AgentWalletRequest) -> dict[str, Any]:
+async def get_or_create_agent_wallet(
+    request: AgentWalletRequest, *, allow_missing_email: bool = False
+) -> dict[str, Any]:
     owner_email = normalize_email(request.email)
-    if owner_email is None:
+    if owner_email is None and not allow_missing_email:
         raise ValueError("email is required")
     request = request.model_copy(update={"email": owner_email})
 
@@ -464,9 +466,7 @@ def _generate_unique_agent_id() -> str:
 async def create_agent_profile_with_wallet(
     request: CreateAgentProfileRequest,
 ) -> dict[str, Any]:
-    owner_email = normalize_email(request.ownerEmail)
-    if owner_email is None:
-        raise ValueError("ownerEmail is required")
+    owner_email = normalize_email(request.ownerEmail)  # may be None until claimed
 
     agent_id = _generate_unique_agent_id()
     stamp = now_iso()
@@ -482,14 +482,16 @@ async def create_agent_profile_with_wallet(
     )
     saved = get_store().create_agent_profile(profile=profile)
 
-    # MVP: eagerly provision the agent's Circle wallet at profile creation.
+    # MVP: eagerly provision the agent's Circle wallet at profile creation —
+    # the single wallet-creation site. ownerEmail may be absent until claimed.
     await get_or_create_agent_wallet(
         AgentWalletRequest(
             agentName=saved.agentName,
             agentId=saved.agentId,
             email=owner_email,
             agentDescription=saved.description,
-        )
+        ),
+        allow_missing_email=True,
     )
     return {"profile": assemble_profile_payload(saved)}
 

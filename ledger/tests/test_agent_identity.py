@@ -149,6 +149,18 @@ class TestProfileService(LedgerServiceTestCase):
         rotated = services.rotate_agent_credential(agent_id, "pk2")
         self.assertEqual(rotated["credentialPublicKey"], "pk2")
 
+    def test_create_profile_without_owner_email_still_creates_wallet(self) -> None:
+        request = CreateAgentProfileRequest(
+            agentName="OntologyAgent",
+            credentialPublicKey="pk",
+        )
+        with patch.object(services, "get_ledger_wallet_client", return_value=_FakeWalletClient()):
+            payload = asyncio.run(services.create_agent_profile_with_wallet(request))
+        profile = payload["profile"]
+        self.assertIsNone(profile["ownerEmail"])
+        state = self.ledger_domain_state(profile["agentId"])
+        self.assertEqual(state["accounts"][0]["circleWalletId"], "circle-wallet-1")
+
     def test_create_profile_carries_eigenflux_object(self) -> None:
         request = CreateAgentProfileRequest(
             agentName="OntologyAgent",
