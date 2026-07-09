@@ -5,7 +5,7 @@
 //
 //   - No `selfCredit` block on each agent (MVP has no credit story).
 //   - No `counterparties` block (no credit lookup view).
-//   - `settings.limits.perTradeCap` seeded at 0.01 USDC. SettingsView lets
+//   - `settings.limits.perTradeCap` seeded at 10 USDC. SettingsView lets
 //     the user edit it; the edited value is persisted per-agent in
 //     localStorage (kovaloop_mvp_dash_caps) and overrides this seed at read
 //     time. Funding's withdraw min (5 USDC) is independent.
@@ -42,7 +42,7 @@
     balance: { available: 0, lifetimeIn: 0, lifetimeOut: 0 },
     transactions: [],
     settings: {
-      limits: { perTradeCap: 0.01 },
+      limits: { perTradeCap: 10 },
     },
   };
 
@@ -53,7 +53,7 @@
       { id: 'onramp_8k1', counterparty: 'Coinbase Onramp', amount: 10.00, direction: 'in',  role: 'deposit', status: 'onramp', timestamp: '2 hr ago' },
     ],
     settings: {
-      limits: { perTradeCap: 0.01 },
+      limits: { perTradeCap: 10 },
     },
   };
 
@@ -73,7 +73,7 @@
       { id: 'onramp_init', counterparty: 'Coinbase Onramp',       amount: 10.00, direction: 'in',  role: 'deposit',    status: 'onramp',   timestamp: '14 days ago' },
     ],
     settings: {
-      limits: { perTradeCap: 0.01 },
+      limits: { perTradeCap: 10 },
     },
   };
 
@@ -91,7 +91,7 @@
       { id: 'r_3X4M', counterparty: 'agentA', amount: 0.001, direction: 'in', role: 'payee', status: 'released', timestamp: '6 days ago' },
     ],
     settings: {
-      limits: { perTradeCap: 0.01 },
+      limits: { perTradeCap: 10 },
     },
   };
 
@@ -104,7 +104,7 @@
       agent: { ...meta, claimedDaysAgo: 0 },
       balance: { available: 0, lifetimeIn: 0, lifetimeOut: 0 },
       transactions: [],
-      settings: { limits: { perTradeCap: 0.01 } },
+      settings: { limits: { perTradeCap: 10 } },
     };
   }
 

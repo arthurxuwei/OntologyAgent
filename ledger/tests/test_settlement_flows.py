@@ -250,7 +250,7 @@ class TestSettlementFlows(LedgerServiceTestCase):
                 json={
                     "fromAgentId": "agent_sender",
                     "toAgentId": "agent_receiver",
-                    "amountAtomic": "10001",
+                    "amountAtomic": "10000001",
                     "reason": "direct payment",
                 },
             )
@@ -258,7 +258,7 @@ class TestSettlementFlows(LedgerServiceTestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(
             response.json()["detail"],
-            "single transfer limit exceeded: max 0.01 USDC",
+            "single transfer limit exceeded: max 10 USDC",
         )
         self.assertEqual(fake_settlement.calls, [])
         self.assertEqual(main.get_store().load().entries, [])

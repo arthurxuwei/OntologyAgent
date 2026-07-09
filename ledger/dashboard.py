@@ -288,7 +288,7 @@ def empty_dashboard_agent(account: dict[str, Any]) -> dict[str, Any]:
             "lifetimeOut": 0.0,
         },
         "transactions": [],
-        "settings": {"limits": {"perTradeCap": 0.01}},
+        "settings": {"limits": {"perTradeCap": 10}},
     }
 
 
@@ -401,7 +401,7 @@ def build_dashboard_data(
                 )
                 for entry in visible_agent_entries
             ],
-            "settings": {"limits": {"perTradeCap": 0.01}},
+            "settings": {"limits": {"perTradeCap": 10}},
         }
 
     return {
