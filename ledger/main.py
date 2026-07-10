@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from payment_router import PaymentIntent, route_payment_intent
+import agent_auth
 import services
 
 from auth import (
@@ -46,6 +47,8 @@ from dashboard import (
 )
 from models import *
 from services import (
+    assemble_profile_payload,
+    create_agent_profile_with_wallet,
     get_chain_recorder,
     get_coinbase_onramp_client,
     get_ledger_settlement_client,
@@ -53,6 +56,7 @@ from services import (
     get_or_create_agent_wallet,
     get_store,
     http_error,
+    rotate_agent_credential,
     enriched_account_payloads,
     ledger_chain_payload,
     ledger_state_with_circle_balances,
@@ -506,52 +510,111 @@ def create_waitlist_application(
     return {"ok": True, "applicationId": saved.applicationId}
 
 
-@app.post("/ledger/claims/link")
-async def create_claim_link(request: ClaimLinkRequest) -> dict[str, Any]:
-    owner_email = normalize_email(request.email)
-    if owner_email is None:
-        raise HTTPException(status_code=400, detail="email is required")
-
+@app.post("/ledger/profiles")
+async def create_agent_profile(
+    request: CreateAgentProfileRequest,
+) -> dict[str, Any]:
     try:
-        payload = await get_or_create_agent_wallet(
-            AgentWalletRequest(
-                agentName=request.agentName,
-                agentId=request.agentId,
-                email=owner_email,
-                agentDescription=request.agentDescription,
-            )
-        )
+        return await create_agent_profile_with_wallet(request)
     except Exception as error:
         raise http_error(error) from error
 
-    account = payload.get("account")
-    wallet = payload.get("wallet")
-    if not isinstance(account, dict):
-        raise HTTPException(status_code=502, detail="claim link response missing account")
-    if not isinstance(wallet, dict):
-        wallet = {}
 
-    claim_code = claim_code_for_account(account, owner_email)
+@app.get("/ledger/profiles/{agent_id}")
+def get_agent_profile(agent_id: str) -> dict[str, Any]:
+    profile = get_store().get_agent_profile(agent_id)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="agent profile not found")
+    return {"profile": assemble_profile_payload(profile)}
+
+
+@app.post("/ledger/profiles/{agent_id}/credentials/rotate")
+def rotate_profile_credential(
+    agent_id: str,
+    request: RotateAgentCredentialRequest,
+    session_cookie: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+) -> dict[str, Any]:
+    profile = get_store().get_agent_profile(agent_id)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="agent profile not found")
+    session_user = verify_auth_session(session_cookie)
+    session_email = normalize_email((session_user or {}).get("email"))
+    if session_email is None:
+        raise HTTPException(status_code=401, detail="Dashboard authentication required")
+    if not secrets.compare_digest(session_email, normalize_email(profile.ownerEmail) or ""):
+        raise HTTPException(
+            status_code=403, detail="dashboard user is not authorized for this agent"
+        )
+    if not agent_auth.public_key_is_valid(request.credentialPublicKey):
+        raise HTTPException(status_code=400, detail="credentialPublicKey is not a valid key")
+    return {"profile": rotate_agent_credential(agent_id, request.credentialPublicKey)}
+
+
+async def require_agent_signature(request: Request, agent_id: str) -> AgentProfile:
+    profile = get_store().get_agent_profile(agent_id)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="agent profile not found")
+    header_agent_id = request.headers.get("X-KovaLoop-Agent-Id")
+    timestamp = request.headers.get("X-KovaLoop-Timestamp")
+    nonce = request.headers.get("X-KovaLoop-Nonce")
+    signature = request.headers.get("X-KovaLoop-Signature")
+    if not (header_agent_id and timestamp and nonce and signature):
+        raise HTTPException(status_code=401, detail="agent signature headers required")
+    if not secrets.compare_digest(header_agent_id, agent_id):
+        raise HTTPException(status_code=401, detail="agent id mismatch")
+    body = (await request.body()).decode("utf-8")
+    if not agent_auth.check_timestamp_and_nonce(timestamp, nonce):
+        raise HTTPException(status_code=401, detail="stale or replayed request")
+    if not agent_auth.verify_agent_signature(
+        public_key_b64=profile.credentialPublicKey,
+        agent_id=agent_id,
+        timestamp=timestamp,
+        nonce=nonce,
+        body=body,
+        signature_b64=signature,
+    ):
+        raise HTTPException(status_code=401, detail="invalid agent signature")
+    return profile
+
+
+@app.patch("/ledger/profiles/{agent_id}")
+async def update_agent_profile(agent_id: str, request: Request) -> dict[str, Any]:
+    profile = await require_agent_signature(request, agent_id)
+    try:
+        parsed = UpdateAgentProfileRequest.model_validate_json(await request.body())
+    except Exception as error:
+        raise HTTPException(status_code=400, detail="invalid request body") from error
+    updated = get_store().update_agent_description(profile.agentId, parsed.description)
+    return {"profile": assemble_profile_payload(updated)}
+
+
+@app.post("/ledger/claims/link")
+async def create_claim_link(request: ClaimLinkRequest) -> dict[str, Any]:
+    agent_id = request.agentId
+    account_model = get_store().get_account(agent_id)
+    if account_model is None:
+        raise HTTPException(
+            status_code=404, detail="profile not found — create a profile first"
+        )
+    account = account_model.model_dump()
+
+    # The claim code is keyed on the canonical agentId; the runtime supplies no
+    # email. Ownership is bound by the web OAuth login at claim time.
+    claim_code = claim_code_for_account(account)
     response = ClaimLinkResponse(
-        agentId=str(account.get("agentId") or request.agentId),
+        agentId=str(account.get("agentId") or agent_id),
         agentName=str(account.get("agentName") or request.agentName),
-        ownerEmail=owner_email,
+        ownerEmail=normalize_email(account.get("email")) or "",
         claimCode=claim_code,
-        claimUrl=dashboard_url({"claimCode": claim_code, "agentId": request.agentId}),
-        agentUrl=dashboard_url({"agentId": request.agentId}),
+        claimUrl=dashboard_url({"claimCode": claim_code, "agentId": agent_id}),
+        agentUrl=dashboard_url({"agentId": agent_id}),
         walletAddress=(
-            str(account.get("walletAddress") or wallet.get("walletAddress"))
-            if account.get("walletAddress") or wallet.get("walletAddress")
-            else None
+            str(account.get("walletAddress")) if account.get("walletAddress") else None
         ),
         circleWalletId=(
-            str(account.get("circleWalletId") or wallet.get("circleWalletId"))
-            if account.get("circleWalletId") or wallet.get("circleWalletId")
-            else None
+            str(account.get("circleWalletId")) if account.get("circleWalletId") else None
         ),
-        accountType=normalize_wallet_account_type(
-            account.get("accountType") or wallet.get("accountType")
-        ),
+        accountType=normalize_wallet_account_type(account.get("accountType")),
     )
     return response.model_dump()
 
@@ -653,11 +716,10 @@ async def ledger_claim_candidates() -> dict[str, Any]:
     accounts = await enriched_account_payloads(get_store().list_accounts(claimable=True))
     candidates = []
     for account in accounts:
-        account_email = normalize_email(account.get("email"))
         candidates.append(
             {
                 "account": account,
-                "claimCode": claim_code_for_account(account, account_email or ""),
+                "claimCode": claim_code_for_account(account),
             }
         )
     return {"candidates": candidates}
@@ -676,15 +738,13 @@ async def ledger_claim(
     account = account_model.model_dump() if account_model is not None else None
     if account is None:
         raise HTTPException(status_code=404, detail="agent account not found")
-    account_email = normalize_email(account.get("email"))
-    if account_email is None:
-        raise HTTPException(status_code=400, detail="agent account email is required")
-    expected_code = claim_code_for_account(account, account_email)
+    account_email = normalize_email(account.get("email")) or ""
+    expected_code = claim_code_for_account(account)
     if not secrets.compare_digest(expected_code, request.claimCode.strip()):
         raise HTTPException(status_code=400, detail="invalid claim code")
     claimed = get_store().claim_dashboard_account(
         agent_id=request.agentId,
-        email=account_email,
+        email=account_email or owner_email,
         dashboard_email=owner_email,
     )
     return {

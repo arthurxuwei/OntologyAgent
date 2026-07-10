@@ -1,0 +1,288 @@
+import asyncio
+import base64
+import unittest
+import uuid
+from pathlib import Path
+from unittest.mock import patch
+
+import pydantic
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+import agent_auth
+import main
+import services
+from helpers import LedgerServiceTestCase
+from models import (
+    AgentProfile,
+    CreateAgentProfileRequest,
+)
+from store import OffchainLedgerStore
+from utils import now_iso
+
+
+def _keypair():
+    private_key = Ed25519PrivateKey.generate()
+    public_b64 = (
+        base64.urlsafe_b64encode(private_key.public_key().public_bytes_raw())
+        .rstrip(b"=")
+        .decode("ascii")
+    )
+    return private_key, public_b64
+
+
+class _FakeWalletClient:
+    async def get_or_create(self, request):
+        return {
+            "circleWalletId": "circle-wallet-1",
+            "walletAddress": "0x1111111111111111111111111111111111111111",
+            "accountType": "EOA",
+            "mode": "circle",
+            "binding": {
+                "agentId": request.agentId,
+                "walletAddress": "0x1111111111111111111111111111111111111111",
+                "circleWalletId": "circle-wallet-1",
+                "accountType": "EOA",
+            },
+        }
+
+
+class TestIdentityModels(unittest.TestCase):
+    def test_agent_profile_defaults(self) -> None:
+        profile = AgentProfile(
+            agentId="kloop_agent_X",
+            agentName="OntologyAgent",
+            ownerEmail="owner@example.com",
+            credentialPublicKey="pk",
+            createdAt="2026-06-14T00:00:00Z",
+            updatedAt="2026-06-14T00:00:00Z",
+        )
+        self.assertEqual(profile.schemaVersion, 1)
+        self.assertEqual(profile.credentialStatus, "active")
+        self.assertIsNone(profile.description)
+
+    def test_create_request_rejects_unknown_field(self) -> None:
+        with self.assertRaises(pydantic.ValidationError):
+            CreateAgentProfileRequest(
+                agentName="A",
+                ownerEmail="o@example.com",
+                credentialPublicKey="pk",
+                bogus="x",
+            )
+
+
+class TestProfileStore(unittest.TestCase):
+    def setUp(self) -> None:
+        temp_root = Path(__file__).resolve().parents[2] / ".codex-tmp"
+        temp_root.mkdir(exist_ok=True)
+        self.temp_dir = temp_root / f"profile-store-{uuid.uuid4().hex}"
+        self.temp_dir.mkdir()
+        self.store = OffchainLedgerStore(str(self.temp_dir / "ledger.sqlite3"))
+
+    def _profile(self, agent_id: str, email: str = "owner@example.com") -> AgentProfile:
+        stamp = now_iso()
+        return AgentProfile(
+            agentId=agent_id,
+            agentName="OntologyAgent",
+            ownerEmail=email,
+            credentialPublicKey="pk",
+            createdAt=stamp,
+            updatedAt=stamp,
+        )
+
+    def test_create_and_get_profile(self) -> None:
+        saved = self.store.create_agent_profile(profile=self._profile("kloop_agent_A"))
+        self.assertEqual(saved.agentId, "kloop_agent_A")
+        fetched = self.store.get_agent_profile("kloop_agent_A")
+        self.assertIsNotNone(fetched)
+        self.assertEqual(fetched.ownerEmail, "owner@example.com")
+
+    def test_get_missing_profile_returns_none(self) -> None:
+        self.assertIsNone(self.store.get_agent_profile("nope"))
+
+    def test_duplicate_agent_id_rejected(self) -> None:
+        self.store.create_agent_profile(profile=self._profile("kloop_agent_A"))
+        with self.assertRaises(ValueError):
+            self.store.create_agent_profile(profile=self._profile("kloop_agent_A"))
+
+    def test_rotate_credential_updates_key(self) -> None:
+        self.store.create_agent_profile(profile=self._profile("kloop_agent_A"))
+        updated = self.store.update_agent_credential("kloop_agent_A", "pk2")
+        self.assertEqual(updated.credentialPublicKey, "pk2")
+        self.assertEqual(self.store.get_agent_profile("kloop_agent_A").credentialPublicKey, "pk2")
+
+    def test_rotate_missing_profile_raises(self) -> None:
+        with self.assertRaises(LookupError):
+            self.store.update_agent_credential("nope", "pk2")
+
+    def test_update_description(self) -> None:
+        self.store.create_agent_profile(profile=self._profile("kloop_agent_A"))
+        updated = self.store.update_agent_description("kloop_agent_A", "new bio")
+        self.assertEqual(updated.description, "new bio")
+
+
+class TestProfileService(LedgerServiceTestCase):
+    def test_create_profile_generates_kloop_agent_id_and_wallet(self) -> None:
+        request = CreateAgentProfileRequest(
+            agentName="OntologyAgent",
+            ownerEmail="Owner@Example.com",
+            credentialPublicKey="pk",
+        )
+        with patch.object(services, "get_ledger_wallet_client", return_value=_FakeWalletClient()):
+            payload = asyncio.run(services.create_agent_profile_with_wallet(request))
+        profile = payload["profile"]
+        self.assertTrue(profile["agentId"].startswith("kloop_agent_"))
+        self.assertEqual(profile["ownerEmail"], "owner@example.com")
+        account = services.get_store().get_agent_profile(profile["agentId"])
+        self.assertIsNotNone(account)
+        state = self.ledger_domain_state(profile["agentId"])
+        self.assertEqual(state["accounts"][0]["circleWalletId"], "circle-wallet-1")
+
+    def test_rotate_credential(self) -> None:
+        request = CreateAgentProfileRequest(
+            agentName="OntologyAgent",
+            ownerEmail="owner@example.com",
+            credentialPublicKey="pk",
+        )
+        with patch.object(services, "get_ledger_wallet_client", return_value=_FakeWalletClient()):
+            payload = asyncio.run(services.create_agent_profile_with_wallet(request))
+        agent_id = payload["profile"]["agentId"]
+        rotated = services.rotate_agent_credential(agent_id, "pk2")
+        self.assertEqual(rotated["credentialPublicKey"], "pk2")
+
+    def test_create_profile_without_owner_email_still_creates_wallet(self) -> None:
+        request = CreateAgentProfileRequest(
+            agentName="OntologyAgent",
+            credentialPublicKey="pk",
+        )
+        with patch.object(services, "get_ledger_wallet_client", return_value=_FakeWalletClient()):
+            payload = asyncio.run(services.create_agent_profile_with_wallet(request))
+        profile = payload["profile"]
+        self.assertIsNone(profile["ownerEmail"])
+        state = self.ledger_domain_state(profile["agentId"])
+        self.assertEqual(state["accounts"][0]["circleWalletId"], "circle-wallet-1")
+
+    def test_create_profile_carries_eigenflux_object(self) -> None:
+        request = CreateAgentProfileRequest(
+            agentName="OntologyAgent",
+            ownerEmail="owner@example.com",
+            credentialPublicKey="pk",
+            eigenflux={"id": "312586087945994240", "name": "Old", "bio": "b"},
+        )
+        with patch.object(services, "get_ledger_wallet_client", return_value=_FakeWalletClient()):
+            payload = asyncio.run(services.create_agent_profile_with_wallet(request))
+        profile = payload["profile"]
+        self.assertEqual(profile["eigenflux"]["id"], "312586087945994240")
+        self.assertEqual(profile["eigenflux"]["name"], "Old")
+        stored = services.get_store().get_agent_profile(profile["agentId"])
+        self.assertEqual(stored.eigenflux["bio"], "b")
+
+
+class TestProfileEndpoints(LedgerServiceTestCase):
+    def _create(self, owner="owner@example.com", headers=None):
+        body = {
+            "agentName": "OntologyAgent",
+            "ownerEmail": owner,
+            "credentialPublicKey": "pk",
+        }
+        with patch.object(services, "get_ledger_wallet_client", return_value=_FakeWalletClient()):
+            return self.client.post("/ledger/profiles", json=body, headers=headers or {})
+
+    def test_create_profile_endpoint_returns_canonical_id(self) -> None:
+        response = self._create()
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body["profile"]["agentId"].startswith("kloop_agent_"))
+        self.assertNotIn("credentialPublicKey", body["profile"])
+
+    def test_get_profile_endpoint(self) -> None:
+        agent_id = self._create().json()["profile"]["agentId"]
+        response = self.client.get(f"/ledger/profiles/{agent_id}")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["profile"]["agentId"], agent_id)
+
+    def test_get_missing_profile_returns_404(self) -> None:
+        self.assertEqual(self.client.get("/ledger/profiles/nope").status_code, 404)
+
+    def test_rotate_requires_matching_owner(self) -> None:
+        _, new_public_b64 = _keypair()
+        agent_id = self._create(owner="owner@example.com").json()["profile"]["agentId"]
+        wrong = self.client.post(
+            f"/ledger/profiles/{agent_id}/credentials/rotate",
+            json={"credentialPublicKey": new_public_b64},
+            headers=self.dashboard_auth_headers("intruder@example.com"),
+        )
+        self.assertEqual(wrong.status_code, 403)
+        ok = self.client.post(
+            f"/ledger/profiles/{agent_id}/credentials/rotate",
+            json={"credentialPublicKey": new_public_b64},
+            headers=self.dashboard_auth_headers("owner@example.com"),
+        )
+        self.assertEqual(ok.status_code, 200)
+
+
+class TestAgentAuthenticatedPatch(LedgerServiceTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        agent_auth.reset_nonce_cache()
+
+    def _create_with_key(self, public_b64: str) -> str:
+        with patch.object(services, "get_ledger_wallet_client", return_value=_FakeWalletClient()):
+            response = self.client.post(
+                "/ledger/profiles",
+                json={
+                    "agentName": "OntologyAgent",
+                    "ownerEmail": "owner@example.com",
+                    "credentialPublicKey": public_b64,
+                },
+            )
+        return response.json()["profile"]["agentId"]
+
+    def _signed_headers(self, private_key, agent_id: str, body: str, nonce: str) -> dict:
+        timestamp = main.now_iso()
+        message = agent_auth.signing_message(
+            agent_id=agent_id, timestamp=timestamp, nonce=nonce, body=body
+        )
+        signature = base64.urlsafe_b64encode(
+            private_key.sign(message.encode("utf-8"))
+        ).rstrip(b"=").decode("ascii")
+        return {
+            "X-KovaLoop-Agent-Id": agent_id,
+            "X-KovaLoop-Timestamp": timestamp,
+            "X-KovaLoop-Nonce": nonce,
+            "X-KovaLoop-Signature": signature,
+            "Content-Type": "application/json",
+        }
+
+    def test_valid_signature_updates_description(self) -> None:
+        private_key, public_b64 = _keypair()
+        agent_id = self._create_with_key(public_b64)
+        body = '{"description":"new bio"}'
+        headers = self._signed_headers(private_key, agent_id, body, "nonce-1")
+        response = self.client.patch(f"/ledger/profiles/{agent_id}", content=body, headers=headers)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["profile"]["description"], "new bio")
+
+    def test_missing_signature_rejected(self) -> None:
+        _, public_b64 = _keypair()
+        agent_id = self._create_with_key(public_b64)
+        response = self.client.patch(
+            f"/ledger/profiles/{agent_id}",
+            json={"description": "x"},
+        )
+        self.assertEqual(response.status_code, 401)
+
+    def test_replayed_nonce_rejected(self) -> None:
+        private_key, public_b64 = _keypair()
+        agent_id = self._create_with_key(public_b64)
+        body = '{"description":"new bio"}'
+        headers = self._signed_headers(private_key, agent_id, body, "nonce-dup")
+        first = self.client.patch(f"/ledger/profiles/{agent_id}", content=body, headers=headers)
+        self.assertEqual(first.status_code, 200)
+        second = self.client.patch(f"/ledger/profiles/{agent_id}", content=body, headers=headers)
+        self.assertEqual(second.status_code, 401)
+
+
+
+
+if __name__ == "__main__":
+    unittest.main()

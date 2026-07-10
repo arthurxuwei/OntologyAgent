@@ -539,7 +539,7 @@ def build_claimable_agents(
                 "agentId": agent_id,
                 "agentName": str(account.get("agentName") or agent_id),
                 "ownerEmail": account_email,
-                "claimCode": claim_code_for_account(account, account_email or ""),
+                "claimCode": claim_code_for_account(account),
                 "walletAddress": str(wallet_address),
                 "displayWalletAddress": short_address(wallet_address),
                 "circleWalletId": account.get("circleWalletId"),

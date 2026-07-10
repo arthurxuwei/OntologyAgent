@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 from config import DEFAULT_ASSET, DEFAULT_CHAIN_HTTP_URL, DEFAULT_SETTLEMENT_HTTP_URL
 from models import (
+    AgentProfile,
     CircleWebhookEventRecord,
     ConfirmOnrampSessionRequest,
     LedgerAccount,
@@ -186,6 +187,7 @@ LEDGER_COLLECTIONS: tuple[LedgerCollection, ...] = (
         LedgerSettlementRecord,
         _field_record_id("recordId"),
     ),
+    ("agent_profiles", "agentProfiles", AgentProfile, _field_record_id("agentId")),
 )
 
 LEGACY_LEDGER_RECORD_COLLECTIONS: tuple[tuple[str, str, LedgerRecordId], ...] = (
@@ -733,6 +735,63 @@ class OffchainLedgerStore:
 
     def ensure_account(self, agent_id: str) -> LedgerAccount:
         return self._write(lambda connection: self._get_account(connection, agent_id, create=True))
+
+    def create_agent_profile(self, *, profile: AgentProfile) -> AgentProfile:
+        def write(connection: sqlite3.Connection) -> AgentProfile:
+            existing = self._get_record_by_id(
+                connection, "agent_profiles", AgentProfile, profile.agentId
+            )
+            if existing is not None:
+                raise ValueError("agentId already exists")
+            return self._upsert_record(
+                connection, "agent_profiles", AgentProfile, profile.agentId, profile
+            )
+
+        return self._write(write)
+
+    def get_agent_profile(self, agent_id: str) -> Optional[AgentProfile]:
+        def read(connection: sqlite3.Connection) -> Optional[AgentProfile]:
+            return self._get_record_by_id(
+                connection, "agent_profiles", AgentProfile, agent_id
+            )
+
+        return self._read(read)
+
+    def update_agent_credential(self, agent_id: str, public_key: str) -> AgentProfile:
+        def write(connection: sqlite3.Connection) -> AgentProfile:
+            profile = self._get_record_by_id(
+                connection, "agent_profiles", AgentProfile, agent_id
+            )
+            if profile is None:
+                raise LookupError("agent profile not found")
+            updated = profile.model_copy(
+                update={
+                    "credentialPublicKey": public_key,
+                    "credentialStatus": "active",
+                    "updatedAt": now_iso(),
+                }
+            )
+            return self._upsert_record(
+                connection, "agent_profiles", AgentProfile, agent_id, updated
+            )
+
+        return self._write(write)
+
+    def update_agent_description(self, agent_id: str, description: Optional[str]) -> AgentProfile:
+        def write(connection: sqlite3.Connection) -> AgentProfile:
+            profile = self._get_record_by_id(
+                connection, "agent_profiles", AgentProfile, agent_id
+            )
+            if profile is None:
+                raise LookupError("agent profile not found")
+            updated = profile.model_copy(
+                update={"description": description, "updatedAt": now_iso()}
+            )
+            return self._upsert_record(
+                connection, "agent_profiles", AgentProfile, agent_id, updated
+            )
+
+        return self._write(write)
 
     def bind_account_wallet(
         self,

@@ -178,6 +178,21 @@ class WaitlistApplication(BaseModel):
     createdAt: str
 
 
+class AgentProfile(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schemaVersion: int = 1
+    agentId: str
+    agentName: str
+    ownerEmail: Optional[str] = None
+    description: Optional[str] = None
+    eigenflux: Optional[dict[str, Any]] = None
+    credentialPublicKey: str
+    credentialStatus: Literal["active", "revoked"] = "active"
+    createdAt: str
+    updatedAt: str
+
+
 class LedgerState(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -188,6 +203,7 @@ class LedgerState(BaseModel):
     circleWebhookEvents: list[CircleWebhookEventRecord] = Field(default_factory=list)
     chainRecords: list[LedgerChainRecord] = Field(default_factory=list)
     settlementRecords: list[LedgerSettlementRecord] = Field(default_factory=list)
+    agentProfiles: list[AgentProfile] = Field(default_factory=list)
 
 
 class CreditRequest(BaseModel):
@@ -214,7 +230,6 @@ class ClaimLinkRequest(BaseModel):
 
     agentId: str = Field(min_length=1)
     agentName: str = Field(min_length=1)
-    email: str
     agentDescription: Optional[str] = None
 
 
@@ -230,6 +245,28 @@ class ClaimLinkResponse(BaseModel):
     walletAddress: Optional[str] = None
     circleWalletId: Optional[str] = None
     accountType: Optional[str] = None
+
+
+class CreateAgentProfileRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    agentName: str = Field(min_length=1)
+    ownerEmail: Optional[str] = None
+    description: Optional[str] = None
+    eigenflux: Optional[dict[str, Any]] = None
+    credentialPublicKey: str = Field(min_length=1)
+
+
+class RotateAgentCredentialRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    credentialPublicKey: str = Field(min_length=1)
+
+
+class UpdateAgentProfileRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    description: Optional[str] = None
 
 
 class DashboardClaimRequest(BaseModel):
