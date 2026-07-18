@@ -8,9 +8,7 @@ services:
     ports:
       - "8092:8092"
     environment:
-      LEDGER_DB_PATH: ${LEDGER_DB_PATH:-/app/data/offchain_ledger.sqlite3}
-      LEDGER_STATE_PATH: ${LEDGER_STATE_PATH:-/app/data/offchain_ledger.json}
-      LEDGER_DATABASE_URL: ${LEDGER_DATABASE_URL:-}
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
       ADMIN_TOKEN: ${ADMIN_TOKEN:-}
       COINBASE_ONRAMP_MOCK: ${COINBASE_ONRAMP_MOCK:-false}
       COINBASE_ONRAMP_API_BASE_URL: ${COINBASE_ONRAMP_API_BASE_URL:-https://api.developer.coinbase.com}
@@ -39,8 +37,6 @@ services:
       CHAIN_PROFILE: ${CHAIN_PROFILE:-base-sepolia}
       CIRCLE_USDC_TOKEN_ID: ${CIRCLE_USDC_TOKEN_ID:-}
       X402_USDC_ASSET_ADDRESS: ${X402_USDC_ASSET_ADDRESS:-}
-    volumes:
-      - ./ledger/data:/app/data
     restart: unless-stopped
 
   circle:
