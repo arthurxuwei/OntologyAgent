@@ -230,11 +230,10 @@ jobs:
             if [ -n "${CIRCLE_WALLET_SET_ID}" ]; then printf 'CIRCLE_WALLET_SET_ID=%s\n' "${CIRCLE_WALLET_SET_ID}"; fi
             if [ -n "${CIRCLE_USDC_TOKEN_ID}" ]; then printf 'CIRCLE_USDC_TOKEN_ID=%s\n' "${CIRCLE_USDC_TOKEN_ID}"; fi
           } | ssh -i ~/.ssh/lighthouse_key "${remote}" 'cat > /opt/kovaloop/.env.deploy'
-          if ssh -i ~/.ssh/lighthouse_key "${remote}" 'test -f /opt/kovaloop/.postgres-migrated'; then
-            test -n "${SUPABASE_CONNECTION_URL}"
-            printf 'LEDGER_DATABASE_URL=%s\n' "${SUPABASE_CONNECTION_URL}" \
-              | ssh -i ~/.ssh/lighthouse_key "${remote}" 'umask 077; cat > /opt/kovaloop/.env.database'
-          fi
+          test -n "${SUPABASE_CONNECTION_URL}"
+          printf 'DATABASE_URL=%s\n' "${SUPABASE_CONNECTION_URL}" \
+            | ssh -i ~/.ssh/lighthouse_key "${remote}" 'umask 077; cat > /opt/kovaloop/.env.database'
+          ssh -i ~/.ssh/lighthouse_key "${remote}" 'grep -q "^DATABASE_URL=." /opt/kovaloop/.env.database'
 
       - name: Pull and restart services
         env:

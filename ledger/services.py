@@ -45,13 +45,21 @@ logger = logging.getLogger("kovaloop.ledger")
 
 @lru_cache(maxsize=1)
 def get_store() -> OffchainLedgerStore:
-    database_url = os.getenv("LEDGER_DATABASE_URL", "").strip()
-    if database_url:
-        return PostgresLedgerStore(database_url)
-    return OffchainLedgerStore(
-        os.getenv("LEDGER_DB_PATH", DEFAULT_LEDGER_DB_PATH),
-        legacy_json_path=os.getenv("LEDGER_STATE_PATH", DEFAULT_LEDGER_STATE_PATH),
-    )
+    if os.getenv("LEDGER_SQLITE_TEST_MODE", "false").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        return OffchainLedgerStore(
+            os.getenv("LEDGER_DB_PATH", DEFAULT_LEDGER_DB_PATH),
+            legacy_json_path=os.getenv("LEDGER_STATE_PATH", DEFAULT_LEDGER_STATE_PATH),
+        )
+
+    database_url = os.getenv("DATABASE_URL", "").strip()
+    if not database_url:
+        raise RuntimeError("DATABASE_URL is required for the ledger service")
+    return PostgresLedgerStore(database_url)
 
 
 @lru_cache(maxsize=1)
