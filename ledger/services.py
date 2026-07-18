@@ -31,6 +31,7 @@ from config import (
     DEFAULT_WALLET_HTTP_URL,
 )
 from models import AgentWalletRequest, LedgerChainRecord, LedgerEntry, LedgerSettlementRecord
+from postgres_store import PostgresLedgerStore
 from store import OffchainLedgerStore
 from utils import (
     decimal_usdc_to_atomic_string,
@@ -44,6 +45,9 @@ logger = logging.getLogger("kovaloop.ledger")
 
 @lru_cache(maxsize=1)
 def get_store() -> OffchainLedgerStore:
+    database_url = os.getenv("LEDGER_DATABASE_URL", "").strip()
+    if database_url:
+        return PostgresLedgerStore(database_url)
     return OffchainLedgerStore(
         os.getenv("LEDGER_DB_PATH", DEFAULT_LEDGER_DB_PATH),
         legacy_json_path=os.getenv("LEDGER_STATE_PATH", DEFAULT_LEDGER_STATE_PATH),

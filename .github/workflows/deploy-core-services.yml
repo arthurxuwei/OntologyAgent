@@ -27,6 +27,19 @@ jobs:
   test-ledger:
     name: Test ledger
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: kovaloop_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d kovaloop_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -44,6 +57,8 @@ jobs:
 
       - name: Run ledger tests
         working-directory: ledger
+        env:
+          TEST_POSTGRES_URL: postgresql://postgres:postgres@127.0.0.1:5432/kovaloop_test
         run: python -m unittest discover -s tests
 
   test-chain:
@@ -156,7 +171,8 @@ jobs:
               sudo cp -a /opt/chief/data/. /opt/kovaloop/data/
               sudo chown -R "$USER:$USER" /opt/kovaloop/data
             fi
-            touch /opt/kovaloop/.env
+            touch /opt/kovaloop/.env /opt/kovaloop/.env.database
+            chmod 600 /opt/kovaloop/.env.database
           '
           scp -i ~/.ssh/lighthouse_key docker-compose.core.yml "${remote}:/opt/kovaloop/docker-compose.core.yml"
           scp -i ~/.ssh/lighthouse_key docker-compose.website.yml "${remote}:/opt/kovaloop/docker-compose.website.yml"
@@ -187,6 +203,7 @@ jobs:
           CIRCLE_ENTITY_SECRET: ${{ secrets.CIRCLE_ENTITY_SECRET }}
           CIRCLE_WALLET_SET_ID: ${{ secrets.CIRCLE_WALLET_SET_ID }}
           CIRCLE_USDC_TOKEN_ID: ${{ secrets.CIRCLE_USDC_TOKEN_ID }}
+          SUPABASE_CONNECTION_URL: ${{ secrets.SUPABASE_CONNECTION_URL }}
         run: |
           remote="${LIGHTHOUSE_USER}@${LIGHTHOUSE_HOST}"
           if [ -z "${GITHUB_CLIENT_ID}" ] && [ -n "${LEGACY_GITHUB_CLIENT_ID}" ]; then GITHUB_CLIENT_ID="${LEGACY_GITHUB_CLIENT_ID}"; fi
@@ -213,6 +230,11 @@ jobs:
             if [ -n "${CIRCLE_WALLET_SET_ID}" ]; then printf 'CIRCLE_WALLET_SET_ID=%s\n' "${CIRCLE_WALLET_SET_ID}"; fi
             if [ -n "${CIRCLE_USDC_TOKEN_ID}" ]; then printf 'CIRCLE_USDC_TOKEN_ID=%s\n' "${CIRCLE_USDC_TOKEN_ID}"; fi
           } | ssh -i ~/.ssh/lighthouse_key "${remote}" 'cat > /opt/kovaloop/.env.deploy'
+          if ssh -i ~/.ssh/lighthouse_key "${remote}" 'test -f /opt/kovaloop/.postgres-migrated'; then
+            test -n "${SUPABASE_CONNECTION_URL}"
+            printf 'LEDGER_DATABASE_URL=%s\n' "${SUPABASE_CONNECTION_URL}" \
+              | ssh -i ~/.ssh/lighthouse_key "${remote}" 'umask 077; cat > /opt/kovaloop/.env.database'
+          fi
 
       - name: Pull and restart services
         env:
@@ -234,7 +256,7 @@ jobs:
             fi
             echo "Stopping existing services"
             sudo docker rm -f chief-ledger chief-circle chief-cloudflared 2>/dev/null || true
-            sudo docker compose --env-file .env --env-file .env.deploy ${compose_files} down --remove-orphans
+            sudo docker compose --env-file .env --env-file .env.deploy --env-file .env.database ${compose_files} down --remove-orphans
             echo "Pruning stopped containers"
             sudo docker container prune -f
             echo "Pruning old images"
@@ -243,8 +265,8 @@ jobs:
             sudo docker builder prune -af
             sudo docker system df
             echo "Pulling images"
-            sudo docker compose --env-file .env --env-file .env.deploy ${compose_files} pull
+            sudo docker compose --env-file .env --env-file .env.deploy --env-file .env.database ${compose_files} pull
             echo "Starting services"
-            sudo docker compose --env-file .env --env-file .env.deploy ${compose_files} up -d --remove-orphans
-            sudo docker compose --env-file .env --env-file .env.deploy ${compose_files} ps
+            sudo docker compose --env-file .env --env-file .env.deploy --env-file .env.database ${compose_files} up -d --remove-orphans
+            sudo docker compose --env-file .env --env-file .env.deploy --env-file .env.database ${compose_files} ps
           '

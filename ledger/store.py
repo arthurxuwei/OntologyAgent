@@ -317,8 +317,9 @@ class OffchainLedgerStore:
                     result = operation(connection)
                     connection.execute(
                         """
-                        INSERT OR REPLACE INTO ledger_meta(key, value)
+                        INSERT INTO ledger_meta(key, value)
                         VALUES ('updated_at', ?)
+                        ON CONFLICT(key) DO UPDATE SET value = excluded.value
                         """,
                         (now_iso(),),
                     )
@@ -558,15 +559,15 @@ class OffchainLedgerStore:
                 clauses.append('LOWER("email") = ?')
                 params.append(normalized_owner)
             if normalized_claimed_by is not None:
-                clauses.append('LOWER(COALESCE("dashboardClaimedByEmail", "email", "")) = ?')
+                clauses.append("LOWER(COALESCE(\"dashboardClaimedByEmail\", \"email\", '')) = ?")
                 params.append(normalized_claimed_by)
                 clauses.append('"dashboardClaimedAt" IS NOT NULL')
             if claimable:
                 clauses.append('"dashboardClaimedAt" IS NULL')
                 clauses.append(
                     '('
-                    'COALESCE("walletAddress", "circleWalletId", "") = "" '
-                    'OR UPPER(COALESCE("accountType", "")) IN ("", "EOA")'
+                    "COALESCE(\"walletAddress\", \"circleWalletId\", '') = '' "
+                    "OR UPPER(COALESCE(\"accountType\", '')) IN ('', 'EOA')"
                     ')'
                 )
             return self._list_records(
@@ -1513,8 +1514,9 @@ class OffchainLedgerStore:
         )
         connection.execute(
             """
-            INSERT OR REPLACE INTO ledger_meta(key, value)
+            INSERT INTO ledger_meta(key, value)
             VALUES ('schema_version', '2')
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
             """
         )
         for table_name, _state_field, model_type, _record_id in LEDGER_COLLECTIONS:
@@ -1638,8 +1640,9 @@ class OffchainLedgerStore:
                 connection.execute("DROP TABLE IF EXISTS ledger_records")
                 connection.execute(
                     """
-                    INSERT OR REPLACE INTO ledger_meta(key, value)
+                    INSERT INTO ledger_meta(key, value)
                     VALUES ('legacy_records_imported', ?)
+                    ON CONFLICT(key) DO UPDATE SET value = excluded.value
                     """,
                     (now_iso(),),
                 )
@@ -1669,8 +1672,9 @@ class OffchainLedgerStore:
             self._replace_state(connection, state)
             connection.execute(
                 """
-                INSERT OR REPLACE INTO ledger_meta(key, value)
+                INSERT INTO ledger_meta(key, value)
                 VALUES ('legacy_json_imported', ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
                 """,
                 (self.legacy_json_path,),
             )
@@ -1691,8 +1695,9 @@ class OffchainLedgerStore:
             connection.execute("DROP TABLE ledger_records")
             connection.execute(
                 """
-                INSERT OR REPLACE INTO ledger_meta(key, value)
+                INSERT INTO ledger_meta(key, value)
                 VALUES ('legacy_records_imported', ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
                 """,
                 (now_iso(),),
             )
@@ -1739,8 +1744,9 @@ class OffchainLedgerStore:
             connection.execute("DROP TABLE ledger_records")
         connection.execute(
             """
-            INSERT OR REPLACE INTO ledger_meta(key, value)
+            INSERT INTO ledger_meta(key, value)
             VALUES ('updated_at', ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
             """,
             (now_iso(),),
         )

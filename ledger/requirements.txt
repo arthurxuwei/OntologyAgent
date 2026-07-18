@@ -5,3 +5,4 @@ cffi==2.0.0
 cryptography==47.0.0
 PyJWT==2.12.1
 sse-starlette==3.0.3
+psycopg[binary]==3.3.4
