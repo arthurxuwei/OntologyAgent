@@ -1,0 +1,103 @@
+name: Migrate ledger to Supabase Postgres
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lighthouse-core-migration
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    name: Migrate and cut over ledger
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: lighthouse-core
+    steps:
+      - name: Configure SSH
+        env:
+          LIGHTHOUSE_HOST: ${{ secrets.LIGHTHOUSE_HOST }}
+          LIGHTHOUSE_SSH_KEY: ${{ secrets.LIGHTHOUSE_SSH_KEY }}
+        run: |
+          test -n "${LIGHTHOUSE_HOST}"
+          test -n "${LIGHTHOUSE_SSH_KEY}"
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "${LIGHTHOUSE_SSH_KEY}" > ~/.ssh/lighthouse_key
+          chmod 600 ~/.ssh/lighthouse_key
+          ssh-keyscan -H "${LIGHTHOUSE_HOST}" >> ~/.ssh/known_hosts
+
+      - name: Prepare database connection
+        env:
+          SUPABASE_CONNECTION_URL: ${{ secrets.SUPABASE_CONNECTION_URL }}
+        run: |
+          test -n "${SUPABASE_CONNECTION_URL}"
+          umask 077
+          {
+            printf 'SUPABASE_CONNECTION_URL=%s\n' "${SUPABASE_CONNECTION_URL}"
+            printf 'LEDGER_DATABASE_URL=%s\n' "${SUPABASE_CONNECTION_URL}"
+          } > "${RUNNER_TEMP}/ledger-database.env"
+
+      - name: Migrate SQLite and cut over
+        env:
+          LIGHTHOUSE_HOST: ${{ secrets.LIGHTHOUSE_HOST }}
+          LIGHTHOUSE_USER: ${{ secrets.LIGHTHOUSE_USER }}
+        run: |
+          test -n "${LIGHTHOUSE_USER}"
+          remote="${LIGHTHOUSE_USER}@${LIGHTHOUSE_HOST}"
+          ssh_opts=(-o ServerAliveInterval=30 -o ServerAliveCountMax=20 -i ~/.ssh/lighthouse_key)
+          scp "${ssh_opts[@]}" "${RUNNER_TEMP}/ledger-database.env" "${remote}:/opt/kovaloop/.env.database.next"
+          ssh "${ssh_opts[@]}" "${remote}" '
+            set -euo pipefail
+            cd /opt/kovaloop
+            if [ -e .postgres-migrated ]; then
+              rm -f .env.database.next
+              echo "PostgreSQL migration marker already exists"
+              exit 1
+            fi
+            chmod 600 .env.database.next
+            tunnel_was_running=false
+            if sudo docker ps --format={{.Names}} | grep -qx kovaloop-cloudflared; then
+              tunnel_was_running=true
+            fi
+
+            rollback() {
+              exit_code=$?
+              if [ "${exit_code}" -ne 0 ]; then
+                set +e
+                rm -f .env.database.next .env.database .postgres-migrated
+                touch .env.database
+                sudo docker compose --env-file .env --env-file .env.deploy --env-file .env.database -f docker-compose.core.yml up -d ledger
+                if [ "${tunnel_was_running}" = true ]; then sudo docker start kovaloop-cloudflared; fi
+              fi
+              exit "${exit_code}"
+            }
+            trap rollback EXIT
+
+            image="$(sudo docker inspect kovaloop-ledger --format={{.Config.Image}})"
+            test -n "${image}"
+            if [ "${tunnel_was_running}" = true ]; then sudo docker stop kovaloop-cloudflared; fi
+            sudo docker stop kovaloop-ledger
+
+            sudo docker run --rm \
+              --env-file .env.database.next \
+              -e LEDGER_DB_PATH=/app/data/offchain_ledger.sqlite3 \
+              -v /opt/kovaloop/data/ledger:/app/data \
+              "${image}" \
+              python /app/migrate_sqlite_to_postgres.py
+
+            mv .env.database.next .env.database
+            touch .postgres-migrated
+            sudo docker compose --env-file .env --env-file .env.deploy --env-file .env.database -f docker-compose.core.yml up -d ledger
+            for attempt in $(seq 1 30); do
+              if curl --fail --silent http://127.0.0.1:8092/health >/dev/null; then break; fi
+              if [ "${attempt}" -eq 30 ]; then exit 1; fi
+              sleep 2
+            done
+            sudo docker exec kovaloop-ledger python -c "from postgres_store import PostgresLedgerStore; from services import get_store; assert isinstance(get_store(), PostgresLedgerStore)"
+            sudo docker exec --env-file .env.database kovaloop-ledger python /app/migrate_sqlite_to_postgres.py
+            if [ "${tunnel_was_running}" = true ]; then sudo docker start kovaloop-cloudflared; fi
+            trap - EXIT
+          '
